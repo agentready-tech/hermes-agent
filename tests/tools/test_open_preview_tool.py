@@ -80,3 +80,14 @@ def test_file_uri_directory_is_an_error(tmp_path):
     assert "error" in result
     assert "director" in result["error"].lower()
     assert emitted == []
+
+
+def test_missing_path_still_emits(tmp_path):
+    """Reject only existing directories — a missing path is the renderer's call."""
+    emitted = _capture_emits()
+    missing = tmp_path / "no-such-folder"
+
+    result = json.loads(op.open_preview_tool(str(missing)))
+
+    assert result["success"] is True
+    assert emitted == [("preview.open", {"url": str(missing), "label": ""})]

@@ -61,6 +61,9 @@ def _is_existing_directory(target: str) -> bool:
     try:
         return path.is_dir()
     except OSError:
+        # Stat failed (permissions, broken reparse, etc.). Do not treat that
+        # as "this is a directory" — reject only when we positively observe
+        # an existing directory. The renderer still sees the original target.
         return False
 
 
