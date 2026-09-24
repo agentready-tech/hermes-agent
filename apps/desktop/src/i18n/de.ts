@@ -2784,6 +2784,9 @@ export const deOverrides = {
       emptyHint: 'Durchsuchen Sie unten den Katalog und installieren Sie ein geprüftes Plugin mit einem Klick.',
       loadFailed: 'Agent-Plugins konnten nicht geladen werden',
       toggleFailed: name => `${name} konnte nicht umgeschaltet werden`,
+      toolsetOn: (name: string, profile: string) => `${name}-Agent-Tools für ${profile} aktiviert`,
+      toolsetOff: (name: string, profile: string) => `${name}-Agent-Tools für ${profile} deaktiviert`,
+      toolsetToggleFailed: (name: string) => `Die ${name}-Agent-Tools konnten nicht umgeschaltet werden`,
       legacyBackend:
         'Dieses Backend ist älter als schlüsseladressierte Plugin-Schalter — aktualisieren Sie Hermes, um es hier zu verwalten.',
       portableBadge: 'tragbar',

@@ -2775,6 +2775,9 @@ export const esOverrides = {
       emptyHint: 'Explora el catálogo de abajo e instala un plugin revisado con un clic.',
       loadFailed: 'No se pudieron cargar los plugins del agente',
       toggleFailed: (name: string) => `No se pudo cambiar ${name}`,
+      toolsetOn: (name: string, profile: string) => `Herramientas de agente de ${name} activadas para ${profile}`,
+      toolsetOff: (name: string, profile: string) => `Herramientas de agente de ${name} desactivadas para ${profile}`,
+      toolsetToggleFailed: (name: string) => `No se pudieron cambiar las herramientas de agente de ${name}`,
       legacyBackend:
         'Este backend es anterior a los interruptores de plugins por clave: actualiza Hermes para gestionarlo aquí.',
       portableBadge: 'portátil',

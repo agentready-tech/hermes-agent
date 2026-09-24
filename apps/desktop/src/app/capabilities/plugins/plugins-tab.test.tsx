@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { $pluginRecords } from '@/contrib/plugins-store'
+import { queryClient } from '@/lib/query-client'
 import { $agentPlugins, $agentPluginsStatus } from '@/store/agent-plugins'
 import { $confirmRequest, settleConfirm } from '@/store/confirm'
 import { $paneHeightOverride, setPaneHeightOverride } from '@/store/panes'
@@ -33,6 +34,15 @@ vi.mock('@/contrib/runtime-loader', async importOriginal => ({
   uninstallDiskPlugin: (id: string) => uninstallDiskPlugin(id)
 }))
 
+// #96969: a Desktop switch whose feature also ships an agent toolset must
+// reach the same PUT /api/tools/toolsets/{name} the Toolsets tab uses.
+const setToolsetEnabled = vi.fn(async () => ({ enabled: true, name: 'kanban', ok: true }))
+
+vi.mock('@/api/toolsets', async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  setToolsetEnabled: (...args: unknown[]) => setToolsetEnabled(...(args as Parameters<typeof setToolsetEnabled>))
+}))
+
 describe('PluginsTab', () => {
   beforeEach(() => {
     $pluginRecords.set({})
@@ -40,6 +50,7 @@ describe('PluginsTab', () => {
     $agentPluginsStatus.set('ready')
     closePluginInstallRequest()
     requestGateway.mockClear()
+    setToolsetEnabled.mockClear()
   })
 
   afterEach(() => {
@@ -278,6 +289,56 @@ describe('PluginsTab', () => {
         expect.objectContaining({ action: 'toggle', key: 'image_gen/legacy', enable: true })
       )
     )
+  })
+
+  // #96969: the Desktop Kanban switch enabled only this app's UI panel; the
+  // agent-side kanban toolset stayed off, so the board existed but the agent
+  // had no kanban tools. The switch must flip both, scoped to the profile the
+  // page shows (the toolset is per-profile config), and refresh the Toolsets
+  // tab's cache so its row repaints.
+  it('enables the kanban agent toolset when the Desktop panel is switched on', async () => {
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
+    // Panel currently off: clicking the switch turns it on.
+    $pluginRecords.set({
+      kanban: { id: 'kanban', name: 'Kanban', kind: 'bundled', status: 'disabled' }
+    })
+
+    render(<PluginsTab profile="workbot" scopeLabel="workbot" />)
+
+    screen.getByRole('switch', { name: 'Desktop: Kanban' }).click()
+
+    await waitFor(() => {
+      expect(setToolsetEnabled).toHaveBeenCalledWith('kanban', true, 'workbot')
+    })
+    expect(invalidate).toHaveBeenCalledWith(expect.objectContaining({ queryKey: ['toolsets-list'] }))
+    invalidate.mockRestore()
+  })
+
+  it('disables the kanban agent toolset when the Desktop panel is switched off', async () => {
+    // Panel currently on: clicking the switch turns it off.
+    $pluginRecords.set({
+      kanban: { id: 'kanban', name: 'Kanban', kind: 'bundled', status: 'loaded' }
+    })
+
+    render(<PluginsTab profile="workbot" scopeLabel="workbot" />)
+
+    screen.getByRole('switch', { name: 'Desktop: Kanban' }).click()
+
+    await waitFor(() => {
+      expect(setToolsetEnabled).toHaveBeenCalledWith('kanban', false, 'workbot')
+    })
+  })
+
+  it('leaves toolsets alone for desktop plugins with no agent toolset', () => {
+    $pluginRecords.set({
+      media: { id: 'media', name: 'Media Studio', kind: 'disk', status: 'loaded' }
+    })
+
+    render(<PluginsTab profile="workbot" scopeLabel="workbot" />)
+
+    screen.getByRole('switch', { name: 'Desktop: Media Studio' }).click()
+
+    expect(setToolsetEnabled).not.toHaveBeenCalled()
   })
 
   it('renders keyless rows read-only (no name-addressed toggle RPC)', () => {
