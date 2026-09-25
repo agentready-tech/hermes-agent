@@ -37,8 +37,8 @@ import { explicitOpenBlocksZone, PREVIEW_TILE_PREFIX } from '@/store/preview-exp
 import { canOpenBrowserWindow } from '@/store/windows'
 
 import { paneMirror } from './pane-mirror'
-import { forgetPreviewConsole } from './right-rail/preview-console-store'
 import { PreviewTilePane } from './right-rail/preview'
+import { forgetPreviewConsole } from './right-rail/preview-console-store'
 
 /** The target behind a tile id, or null once its tab is gone. */
 function targetFor(tabId: string): PreviewTarget | null {
@@ -228,7 +228,12 @@ export function watchPreviewTiles(): void {
 
     // Do not copy this zone over an explicit open that lives in a different
     // group. A focus change after that open lifts the guard.
-    if (explicitOpenBlocksZone(groupId, $previewTabs.get().map(tab => tab.id))) {
+    if (
+      explicitOpenBlocksZone(
+        groupId,
+        $previewTabs.get().map(tab => tab.id)
+      )
+    ) {
       return
     }
 

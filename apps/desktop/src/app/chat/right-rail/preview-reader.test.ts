@@ -1,15 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import { group, split } from '@/components/pane-shell/tree/model'
-import {
-  $layoutTree,
-  noteActiveTreeGroup,
-  noteHoveredTreeGroup
-} from '@/components/pane-shell/tree/store'
+import { $layoutTree, noteActiveTreeGroup, noteHoveredTreeGroup } from '@/components/pane-shell/tree/store'
 import { $rightRailActiveTabId, selectRightRailTab } from '@/store/layout'
 import { $previewTabs, closeRightRail, openPreview, type PreviewTarget } from '@/store/preview'
 
 import { watchPreviewTiles } from '../preview-tile'
+
 import { PREVIEW_READ_MAX_CHARS, readActivePreview, registerPreviewPageReader } from './preview-reader'
 
 function urlTarget(url: string): PreviewTarget {
