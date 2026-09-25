@@ -765,6 +765,13 @@ class GatewayBusySessionMixin:
             logger.debug("Failed to send busy-ack: %s", e)
 
     async def _handle_active_session_busy_message(self, event: MessageEvent, session_key: str) -> bool:
+        from agentready_runtime.adapters.hermes import enabled
+        if enabled():
+            from agentready_runtime.adapters.gateway import busy_event
+            return await busy_event(self, self._agentready_native_handle_active_session_busy_message, event=event, session_key=session_key)
+        return await self._agentready_native_handle_active_session_busy_message(event=event, session_key=session_key)
+
+    async def _agentready_native_handle_active_session_busy_message(self, event: MessageEvent, session_key: str) -> bool:
         # Gateway wakes have no external user identity. Admit them before auth/drain/approval
         # handling, without merging their text into an already queued human message.
         if event.internal and event.allow_gateway_control:

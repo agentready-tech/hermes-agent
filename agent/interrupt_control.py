@@ -244,6 +244,12 @@ class InterruptControlMixin:
     def steer(self, text: str) -> bool:
         """Queue user text for delivery as its own user row after the current tool batch finishes (no
         interrupt); multiple calls concatenate with newlines. Returns False for empty text."""
+        from agentready_runtime.adapters.hermes import enabled
+        if enabled():
+            from agentready_runtime.adapters.state import belongs_to_home_lineage
+            if belongs_to_home_lineage(getattr(self, "session_id", None)):
+                from agentready_runtime.adapters.turns import steer
+                return steer(self, text)
         if not text or not text.strip():
             return False
         cleaned = text.strip()

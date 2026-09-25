@@ -3809,6 +3809,28 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         self, turns_to_summarize: List[Dict[str, Any]], focus_topic: Optional[str] = None,
         memory_context: str = "", bypass_cooldown: bool = False,
     ) -> Optional[str]:
+        from agentready_runtime.adapters.hermes import enabled
+        if enabled():
+            from agentready_runtime.adapters.compaction import generate_summary
+            return generate_summary(
+                self,
+                self._agentready_native_generate_summary,
+                turns_to_summarize=turns_to_summarize,
+                focus_topic=focus_topic,
+                memory_context=memory_context,
+                bypass_cooldown=bypass_cooldown,
+            )
+        return self._agentready_native_generate_summary(
+            turns_to_summarize=turns_to_summarize,
+            focus_topic=focus_topic,
+            memory_context=memory_context,
+            bypass_cooldown=bypass_cooldown,
+        )
+
+    def _agentready_native_generate_summary(
+        self, turns_to_summarize: List[Dict[str, Any]], focus_topic: Optional[str] = None,
+        memory_context: str = "", bypass_cooldown: bool = False,
+    ) -> Optional[str]:
         """Structured summary of the turns (iterative update when a previous summary exists); None if all attempts fail."""
         prompt_started_at = time.monotonic()
         if self._compression_cancelled():

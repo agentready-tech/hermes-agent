@@ -247,6 +247,31 @@ def _ac_try_correction(rid, session: dict, agent: Any, method: str, plain_text: 
 
 def _handle_busy_submit(rid, sid: str, session: dict, text: Any, transport: Any, queued: bool = False,
                         turn_author: dict | None = None) -> dict | None:
+    from agentready_runtime.adapters.hermes import enabled
+    if enabled():
+        from agentready_runtime.adapters.tui import busy_submit
+        return busy_submit(
+            _agentready_native_handle_busy_submit,
+            rid=rid,
+            sid=sid,
+            session=session,
+            text=text,
+            transport=transport,
+            queued=queued,
+            turn_author=turn_author,
+        )
+    return _agentready_native_handle_busy_submit(
+        rid=rid,
+        sid=sid,
+        session=session,
+        text=text,
+        transport=transport,
+        queued=queued,
+        turn_author=turn_author,
+    )
+
+def _agentready_native_handle_busy_submit(rid, sid: str, session: dict, text: Any, transport: Any, queued: bool = False,
+                        turn_author: dict | None = None) -> dict | None:
     """Apply ``display.busy_input_mode`` to a mid-turn prompt instead of rejecting it (rejection made clients busy-retry
     and drop sends): ``interrupt`` (default) → redirect, falling back to hard interrupt + queue; ``queue`` → queue only;
     ``steer`` → inject after the current atomic action. ``queued=True`` (client queue drain) forces queue mode: a "run

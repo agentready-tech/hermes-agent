@@ -630,6 +630,10 @@ def write_json(obj: dict) -> bool:
     session's transport (async events reach the owner even from threads with no contextvar binding);
     (2) the context-bound transport (:func:`dispatch`); (3) module stdio (tests monkey-patch ``_real_stdout``).
     Every event frame gets a per-session monotonic ``seq`` + replay-ring entry so ``session.events.since`` can resume."""
+    from agentready_runtime.adapters.hermes import enabled
+    if enabled():
+        from agentready_runtime.adapters.tui import stamp_event
+        stamp_event(obj)
     from tui_gateway.event_replay import _stamp_event
     from tui_gateway.hosted_room_member_activity import project_room_member_activity
     _stamp_event(obj)

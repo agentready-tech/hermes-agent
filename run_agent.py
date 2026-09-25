@@ -1357,6 +1357,11 @@ class AIAgent(
             from hermes_cli.mem_trim import trim_memory
             trim_memory(reason="large tool result")
 
+        from agentready_runtime.adapters.hermes import enabled
+        if enabled():
+            from agentready_runtime.adapters.turns import after_tool_group
+            after_tool_group(self, messages)
+
     def _dispatch_delegate_task(self, function_args: dict) -> str:
         """Single call site for delegate_task dispatch; new DELEGATE_TASK_SCHEMA fields are added only here."""
         from tools.delegate_tool import _strip_model_hidden_task_fields, delegate_task as _delegate_task

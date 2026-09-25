@@ -2145,6 +2145,10 @@ class GatewayTurnMixin:
 
     async def _handle_message_with_agent(self, event, source, _quick_key: str, run_generation: int):
         """Inner handler that runs under the _running_agents sentinel guard."""
+        from agentready_runtime.adapters.hermes import enabled
+        if enabled():
+            from agentready_runtime.adapters.gateway import prepare_event
+            prepare_event(event, source)
         _msg_start_time = time.time()
         _platform_name = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
         logger.info(
