@@ -1403,6 +1403,18 @@ class GatewayShutdownMixin:
         settled_multiplex = is_multiplex_active()
         multiplex = False
         if not on_default and not settled_multiplex:
+            # Second settled source: the live host gateway's OWN published record
+            # (its settled served set). Only when NO settled identity exists may the
+            # raw config re-read stand — it reads the UNSET flag as False, which is
+            # wrong exactly when this process IS the default-on host (#120305).
+            try:
+                from gateway import host_rendezvous as hr
+                record = hr.read_record(hr.ROLE_GATEWAY)
+                if record is not None and hr.liveness_is_proven(record) and len(record.profiles) > 1:
+                    multiplex = True
+            except Exception:
+                multiplex = False
+        if not on_default and not settled_multiplex and not multiplex:
             try:
                 from gateway.config import load_gateway_config
                 multiplex = bool(load_gateway_config().multiplex_profiles)

@@ -9,6 +9,7 @@ and a duplicate refusal must say which claim came from the environment.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Sequence
 
 import pytest
 
@@ -146,6 +147,85 @@ class TestHostGatewaySpawnEnv:
 
         assert env.get("HERMES_HOME") == str(default_home)
         assert env.get("TELEGRAM_BOT_TOKEN") != _WORKER_TOKEN
+
+
+class TestSettledHostRecordDecidesRestart:
+    """An updater process (no settled flag of its own) replaying a host gateway's
+    captured argv / spawning a restart watcher must take the identity from the
+    live host record the gateway published — its SETTLED served set — and never
+    from ambient coordinates (current HERMES_HOME / raw config re-read). #120305, #93943."""
+
+    @staticmethod
+    def _publish_live_host_record(monkeypatch, tmp_path, *, home: Path, profiles: Sequence[str]) -> None:
+        """Publish a proven-live host record in an isolated lock dir."""
+        from gateway import host_rendezvous as hr
+        lock_dir = tmp_path / "locks"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("HERMES_GATEWAY_LOCK_DIR", str(lock_dir))
+        record = hr.publish_record(
+            hr.ROLE_GATEWAY, profiles=tuple(profiles), home=str(home),
+        )
+        assert record is not None, "fixture must publish a host record"
+        # Make the recorded PID provably live: it must match this process's own
+        # incarnation so liveness_is_proven() positively answers.
+        published = hr.read_record(hr.ROLE_GATEWAY)
+        assert published is not None
+        monkeypatch.setattr(
+            hr, "_pid_incarnation_matches", lambda pid, create_time: True,
+        )
+
+    def test_selectorless_replay_of_a_live_host_is_host_even_from_named_home(
+        self, tmp_path, monkeypatch,
+    ):
+        """The updater sits on the named profile's home; the host record proves hostness."""
+        from hermes_cli.gateway import _restart_argv_is_host_gateway
+
+        default_home, worker_home = _two_homes(tmp_path)
+        self._publish_live_host_record(
+            monkeypatch, tmp_path, home=worker_home, profiles=("default", "worker"),
+        )
+        _inherit_worker_env(monkeypatch, worker_home)
+
+        assert _restart_argv_is_host_gateway(
+            ["python", "-m", "hermes_cli.main", "gateway", "run"]
+        ), "a live host multiplexer's selector-less argv must replay as the host"
+
+    def test_replay_stays_profile_scoped_without_a_live_host_record(
+        self, tmp_path, monkeypatch,
+    ):
+        """No live host record + a named-profile home => the argv is that profile's."""
+        from hermes_cli.gateway import _restart_argv_is_host_gateway
+
+        _default_home, worker_home = _two_homes(tmp_path)
+        (worker_home / "config.yaml").write_text("gateway: {}\n", encoding="utf-8")
+        _inherit_worker_env(monkeypatch, worker_home)
+        monkeypatch.setenv("HERMES_GATEWAY_LOCK_DIR", str(tmp_path / "empty-locks"))
+
+        assert not _restart_argv_is_host_gateway(
+            ["python", "-m", "hermes_cli.main", "gateway", "run"]
+        ), "without settled proof a named-home process must not mint host authority"
+
+    def test_restart_watcher_uses_the_live_host_record_when_no_flag_is_set(
+        self, tmp_path, monkeypatch,
+    ):
+        """An unset raw config + no settled flag + a live host record => host env."""
+        from gateway.run_shutdown import GatewayShutdownMixin
+
+        default_home, worker_home = _two_homes(tmp_path)
+        (worker_home / "config.yaml").write_text("gateway: {}\n", encoding="utf-8")
+        self._publish_live_host_record(
+            monkeypatch, tmp_path, home=worker_home, profiles=("default", "worker"),
+        )
+        _inherit_worker_env(monkeypatch, worker_home)
+
+        env = GatewayShutdownMixin._restart_watcher_env()
+
+        assert env.get("HERMES_HOME") == str(default_home), (
+            "the live host record's settled identity must select the default root"
+        )
+        assert env.get("TELEGRAM_BOT_TOKEN") != _WORKER_TOKEN, (
+            "the named profile's credential must not be donated to the host watcher"
+        )
 
 
 class TestDuplicateRefusalNamesEnvClaim:

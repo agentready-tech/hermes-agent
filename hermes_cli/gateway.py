@@ -980,9 +980,15 @@ def launch_detached_profile_gateway_restart(profile: str, old_pid: int) -> bool:
 def _restart_argv_is_host_gateway(argv: list[str]) -> bool:
     """True when *argv* relaunches the host multiplexer, not a named profile's own gateway.
 
-    ``--profile <name>`` (other than default) is that profile. No selector is the host
-    only when this process is already the default root — a worker ``gateway run`` has
-    no selector and must not be retargeted.
+    ``--profile <name>`` (other than default) is that profile. A selector-less argv is
+    decided by ALREADY-SETTLED identity, never ambient coordinates alone (#93943):
+
+    1. this process's own settled multiplex verdict (``is_multiplex_active`` — set by
+       boot after ``resolve_multiplex_mode``; the gateway replaying its own restart);
+    2. the live host gateway's published rendezvous record (proof the RUNNING owner
+       settled multiplex — the update/fleet process replaying a foreign gateway's
+       captured argv has no settled flag of its own);
+    3. only then the compatibility default-root comparison.
     """
     if not argv or "gateway" not in argv:
         return False
@@ -999,6 +1005,19 @@ def _restart_argv_is_host_gateway(argv: list[str]) -> bool:
         from agent.secret_scope import is_multiplex_active
         if is_multiplex_active():
             return True
+    except Exception:
+        pass
+    # The publishing gateway's SETTLED served set, not this process's ambient home:
+    # a host launched from a named profile must be replayed as the host even though
+    # the replaying process (the updater) sits on the named profile's home.
+    try:
+        from gateway import host_rendezvous as hr
+        record = hr.read_record(hr.ROLE_GATEWAY)
+        if record is not None and hr.liveness_is_proven(record) and len(record.profiles) > 1:
+            return True
+    except Exception:
+        pass
+    try:
         from hermes_constants import get_default_hermes_root, get_hermes_home
         return get_hermes_home().resolve() == get_default_hermes_root().resolve()
     except Exception:
