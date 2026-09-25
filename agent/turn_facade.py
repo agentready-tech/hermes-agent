@@ -31,6 +31,41 @@ class TurnFacadeMixin:
         title_user_message: Optional[str]=None,
         prelude: Optional[Generator]=None,
     ) -> dict[str, Any]:
+        from agentready_runtime.adapters.hermes import enabled
+        kwargs = {
+            "user_message": user_message,
+            "system_message": system_message,
+            "conversation_history": conversation_history,
+            "task_id": task_id,
+            "stream_callback": stream_callback,
+            "persist_user_message": persist_user_message,
+            "persist_user_timestamp": persist_user_timestamp,
+            "persist_user_display_kind": persist_user_display_kind,
+            "persist_user_display_metadata": persist_user_display_metadata,
+            "persist_user_platform_id": persist_user_platform_id,
+            "moa_config": moa_config,
+            "turn_author": turn_author,
+            "relay_metadata": relay_metadata,
+            "title_user_message": title_user_message,
+            "prelude": prelude,
+        }
+        if enabled():
+            from agentready_runtime.adapters.turns import run_conversation
+            return run_conversation(self, self._agentready_native_run_conversation, **kwargs)
+        return self._agentready_native_run_conversation(**kwargs)
+
+    def _agentready_native_run_conversation(
+        self, user_message: Any, system_message: str | None=None,
+        conversation_history: list[dict[str, Any]] | None=None, task_id: str | None=None,
+        stream_callback: Optional[callable]=None, persist_user_message: Optional[Any]=None,
+        persist_user_timestamp: Optional[float]=None, persist_user_display_kind: Optional[str]=None,
+        persist_user_display_metadata: Optional[dict[str, Any]]=None,
+        persist_user_platform_id: Optional[str]=None, moa_config: Optional[dict[str, Any]]=None,
+        turn_author: Optional[dict[str, Any]] = None,
+        relay_metadata: Optional[dict[str, Any]] = None,
+        title_user_message: Optional[str]=None,
+        prelude: Optional[Generator]=None,
+    ) -> dict[str, Any]:
         """Forwarder — see ``agent.conversation_loop.run_conversation``."""
         # A review shares this session_id for cache parity: fence review startup or interrupt
         # an admitted request and await its exit before opening live-turn instrumentation.

@@ -639,6 +639,8 @@ exclude-newer = "3 days"
 
 [tool.setuptools.packages.find]
 include = [
+  "agentready_runtime",
+  "agentready_runtime.*",
   "agent",
   "agent.*",
   "tools",
