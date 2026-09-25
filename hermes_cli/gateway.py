@@ -996,6 +996,9 @@ def _restart_argv_is_host_gateway(argv: list[str]) -> bool:
     if any(part.startswith("--profile=") and not part.endswith("=default") for part in argv):
         return False
     try:
+        from agent.secret_scope import is_multiplex_active
+        if is_multiplex_active():
+            return True
         from hermes_constants import get_default_hermes_root, get_hermes_home
         return get_hermes_home().resolve() == get_default_hermes_root().resolve()
     except Exception:

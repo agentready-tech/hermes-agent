@@ -1396,14 +1396,19 @@ class GatewayShutdownMixin:
             on_default = home.resolve() == get_default_hermes_root().resolve()
         except Exception:
             on_default = False
+        # ``resolve_multiplex_mode`` settles the default-on/unset decision before
+        # restart. Carry that runtime identity instead of re-reading raw config:
+        # ``None`` is the normal pre-resolution value for a named launcher.
+        from agent.secret_scope import is_multiplex_active
+        settled_multiplex = is_multiplex_active()
         multiplex = False
-        if not on_default:
+        if not on_default and not settled_multiplex:
             try:
                 from gateway.config import load_gateway_config
                 multiplex = bool(load_gateway_config().multiplex_profiles)
             except Exception:
                 multiplex = False
-        if on_default or multiplex:
+        if on_default or settled_multiplex or multiplex:
             watcher_env = host_gateway_child_env()
         else:
             watcher_env = served_profile_child_env(
