@@ -14,6 +14,13 @@ def test_managed_gate_is_home_scoped_and_native_mode_is_unchanged(
     from agent.context_compressor import ContextCompressor
     from hermes_constants import get_hermes_home
 
+    from gateway.status import looks_like_gateway_command_line
+
+    assert looks_like_gateway_command_line("/opt/hermes/.venv/bin/python -m agentready_runtime gateway run --no-supervise")
+    assert not looks_like_gateway_command_line("python -m agentready_runtime gateway status")
+    assert not looks_like_gateway_command_line("python -m agentready_runtime serve")
+    assert not looks_like_gateway_command_line("python -m unrelated agentready_runtime gateway run")
+    assert not looks_like_gateway_command_line("echo python -m agentready_runtime gateway run")
     home = Path(get_hermes_home())
     assert not hermes.enabled()
     sentinel = object()
