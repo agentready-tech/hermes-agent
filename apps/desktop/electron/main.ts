@@ -76,7 +76,7 @@ import {
   createBackendShutdownCoordinator
 } from './backend-ownership'
 import { canImportHermesCli, PROBE_TIMEOUT_MS, shouldTrustHermesOverride, verifyHermesCli } from './backend-probes'
-import { waitForDashboardPortAnnouncement } from './backend-ready'
+import { resolvePortAnnounceTimeoutMs, waitForDashboardPortAnnouncement } from './backend-ready'
 import { recycleOwnedBackend } from './backend-recycle'
 import { isPidAliveWindows, waitForBackendRelease } from './backend-release-gate'
 import { createBackendServeSupportResolver } from './backend-serve-support'
@@ -17346,7 +17346,10 @@ ipcMain.on('hermes:feature-flags', (event: IpcMainEvent): void => {
       canary: resolveUpdaterChannelFromStamp() === 'canary'
     }),
     guestOnboarding: GUEST_ONBOARDING,
-    skipIntro: SKIP_INTRO
+    skipIntro: SKIP_INTRO,
+    // The renderer sizes its boot wait from this, so an announce override
+    // stretches both sides instead of only main's.
+    portAnnounceTimeoutMs: resolvePortAnnounceTimeoutMs(process.env)
   }
 })
 
