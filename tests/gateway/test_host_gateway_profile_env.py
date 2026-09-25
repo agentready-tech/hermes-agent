@@ -111,6 +111,30 @@ class TestProfileEnvIsNotThePrimaryClaim:
 
 
 class TestHostGatewaySpawnEnv:
+    def test_restart_watcher_uses_settled_default_on_when_config_is_unset(self, tmp_path, monkeypatch):
+        """A resolved default-on decision survives restart even when raw config is unset."""
+        from agent.secret_scope import set_multiplex_active
+        from gateway.run_shutdown import GatewayShutdownMixin
+
+        default_home, worker_home = _two_homes(tmp_path)
+        (worker_home / "config.yaml").write_text("gateway: {}\n", encoding="utf-8")
+        _inherit_worker_env(monkeypatch, worker_home)
+        set_multiplex_active(True)
+        env = GatewayShutdownMixin._restart_watcher_env()
+        assert env.get("HERMES_HOME") == str(default_home)
+        assert env.get("TELEGRAM_BOT_TOKEN") != _WORKER_TOKEN
+
+    def test_restart_watcher_keeps_standalone_named_profile_isolated(self, tmp_path, monkeypatch):
+        """A standalone named gateway remains profile-scoped when multiplex is not settled."""
+        from gateway.run_shutdown import GatewayShutdownMixin
+
+        _default_home, worker_home = _two_homes(tmp_path)
+        (worker_home / "config.yaml").write_text("gateway: {}\n", encoding="utf-8")
+        _inherit_worker_env(monkeypatch, worker_home)
+        env = GatewayShutdownMixin._restart_watcher_env()
+        assert env.get("HERMES_HOME") == str(worker_home)
+        assert env.get("TELEGRAM_BOT_TOKEN") == _WORKER_TOKEN
+
     def test_restart_watcher_does_not_inherit_profile_token(self, tmp_path, monkeypatch):
         """The detached restart child is built with served_profile_child_env, not os.environ.copy()."""
         from gateway.run_shutdown import GatewayShutdownMixin
