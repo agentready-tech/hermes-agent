@@ -528,7 +528,12 @@ def _gateway_command_subcommand(command: str | None) -> str | None:
     if any(b in ("hermes-gateway", "hermes-gateway.exe") for b in basenames):
         return "run"
     joined = " ".join(tokens)
-    if "hermes_cli.main" not in joined and "hermes_cli/main.py" not in joined and not any(
+    managed_entrypoint = (
+        len(tokens) >= 3
+        and re.fullmatch(r"python(?:\d+(?:\.\d+)*)?(?:\.exe)?", basenames[0]) is not None
+        and tokens[1:3] == ["-m", "agentready_runtime"]
+    )
+    if not managed_entrypoint and "hermes_cli.main" not in joined and "hermes_cli/main.py" not in joined and not any(
         b in ("hermes", "hermes.exe") for b in basenames
     ):
         return None
