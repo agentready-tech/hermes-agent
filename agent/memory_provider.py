@@ -143,7 +143,9 @@ class MemoryProvider(ABC):
         """OpenAI function-calling schemas ({"name", "description", "parameters"}); [] if none."""
 
     def handle_tool_call(self, tool_name: str, args: dict[str, Any], **kwargs) -> str:
-        """Handle one of this provider's tools; must return a JSON string."""
+        """Handle a tool; return JSON. Explicit optional keyword parameters
+        messages and session_id opt into read-only runtime evidence.
+        Old narrow signatures and generic **kwargs providers receive no new transcript."""
         raise NotImplementedError(f"Provider {self.name} does not handle tool {tool_name}")
 
     def shutdown(self) -> None:
