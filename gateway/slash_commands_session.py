@@ -154,10 +154,6 @@ class GatewaySessionCommandsMixin:
 
     async def _handle_reset_command(self, event: MessageEvent) -> Union[str, EphemeralReply]:
         """Handle /new or /reset command."""
-        from agentready_runtime.adapters.hermes import enabled
-        if enabled():
-            from agentready_runtime.sessions import CONTINUOUS_SESSION_NOTICE
-            return CONTINUOUS_SESSION_NOTICE
         source = event.source
         session_key = self._session_key_for_source(source)
         self._invalidate_session_run_generation(session_key, reason="session_reset")
@@ -865,10 +861,6 @@ class GatewaySessionCommandsMixin:
 
     async def _handle_resume_command(self, event: MessageEvent) -> str:
         """Handle /resume command — list or switch to a previous session."""
-        from agentready_runtime.adapters.hermes import enabled
-        if enabled():
-            from agentready_runtime.sessions import CONTINUOUS_SESSION_NOTICE
-            return CONTINUOUS_SESSION_NOTICE
         if not self._session_db:
             return self._session_db_unavailable_reply()
         source = await asyncio.to_thread(self._normalize_source_for_session_key, event.source)
@@ -1009,10 +1001,6 @@ class GatewaySessionCommandsMixin:
         to the clone and leave this chat on the original session; ``--here`` (and every platform
         without threads) switches the current chat onto the clone instead (#66023).
         """
-        from agentready_runtime.adapters.hermes import enabled
-        if enabled():
-            from agentready_runtime.sessions import CONTINUOUS_SESSION_NOTICE
-            return CONTINUOUS_SESSION_NOTICE
         import json as _json
         import uuid as _uuid
         from datetime import datetime as _dt
