@@ -2,7 +2,7 @@
 
 Upstream baseline: NousResearch/hermes-agent `v2026.9.24` / `0.21.5`,
 commit `f97608f178d1ffeca59860195ab7da295f7c8e5f`.
-Managed runtime: `0.10.0`.
+Managed runtime: `0.10.1`.
 
 Run managed processes with `python -m agentready_runtime serve ...` or
 `python -m agentready_runtime gateway run ...`. `--ensure-home` initializes the
@@ -31,6 +31,22 @@ The Unix inbox is not a durable operation journal and does not promise exactly-o
 external effects. A future coordinator can replace the execution adapter while
 retaining policy modules and their behavior tests; storage and recovery migration
 remain a separate design decision.
+
+## Failed-compaction recovery
+
+Managed compaction has a bounded emergency path when semantic summarization fails,
+times out, or leaves a request above the model window. A fresh fenced attempt
+archives the complete source transcript, then commits a compact retrieval handoff
+and the latest user event through Hermes' existing in-place transaction. The full
+history remains in SQLite and the workspace archive; no session is rotated. Large
+current events are referenced verbatim in the archive rather than clipped.
+
+The emergency path makes no LLM request. It budgets the system prompt, tool schemas
+and output reservation, retains the current complete tail when it fits, and directs
+the model to verify archived outcomes before repeating external actions. Explicit
+cancellation never starts recovery. Archive/commit failure preserves the original
+context and reports failure; it never installs a pointer to an unwritten archive.
+Gateway's upstream compression-exhaustion reset is disabled for the managed home.
 
 ## Build and verify
 

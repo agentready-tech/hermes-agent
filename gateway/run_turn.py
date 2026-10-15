@@ -1767,6 +1767,13 @@ class GatewayTurnMixin:
         replaying the oversized context forever. Never on a lock-contended defer — that is the
         OPPOSITE case (a concurrent path holds the lock and is shrinking it). Returns
         ``(response, session_entry)``."""
+        from agentready_runtime.adapters.hermes import enabled
+        from agentready_runtime.sessions import HOME_SESSION_KEY
+
+        if enabled() and session_key == HOME_SESSION_KEY:
+            # Recovery compacts the managed home in place. Even an unrecoverable
+            # storage/model error must not rotate the shared session behind it.
+            return response, session_entry
         # When compression is exhausted, the session is permanently too large to process. (#9893) Never wipe
         # the session for that — retry-next-message semantics apply (#69870 lock-skip consumer; salvaged
         # from #49874).
