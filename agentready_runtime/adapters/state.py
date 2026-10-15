@@ -8,13 +8,23 @@ from agentready_runtime.sessions import (
 from agentready_runtime.adapters.hermes import managed_home
 
 
+# Native branches, resets and delegated workers are independent conversations,
+# even when their parent later becomes an ancestor of a compression continuation.
+_CONTINUATION_CHILD = """
+    COALESCE(child.source, '') NOT IN ('tool', 'subagent', 'cron')
+    AND json_extract(child.model_config, '$._branched_from') IS NULL
+    AND json_extract(child.model_config, '$._delegate_from') IS NULL
+    AND json_extract(child.model_config, '$._reset_from') IS NULL
+"""
+
+
 def state_db_path():
     return managed_home() / "state.db"
 
 
 def find_home_tip(connection):
     row = connection.execute(
-        """WITH RECURSIVE lineage(id, depth, visited) AS (
+        f"""WITH RECURSIVE lineage(id, depth, visited) AS (
                SELECT id, 0, ',' || id || ',' FROM sessions WHERE id = ?
                UNION ALL
                SELECT child.id, lineage.depth + 1, lineage.visited || child.id || ','
@@ -22,6 +32,7 @@ def find_home_tip(connection):
                JOIN sessions parent ON child.parent_session_id = parent.id
                JOIN lineage ON parent.id = lineage.id
                WHERE parent.end_reason = 'compression'
+                 AND {_CONTINUATION_CHILD}
                  AND instr(lineage.visited, ',' || child.id || ',') = 0
            )
            SELECT lineage.id
@@ -108,14 +119,19 @@ def belongs_to_home_lineage(session_id):
     try:
         with sqlite3.connect(state_db_path()) as connection:
             row = connection.execute(
-                """WITH RECURSIVE ancestors(id, parent_session_id) AS (
-                       SELECT id, parent_session_id FROM sessions WHERE id = ?
+                f"""WITH RECURSIVE lineage(id, visited) AS (
+                       SELECT id, ',' || id || ',' FROM sessions WHERE id = ?
                        UNION ALL
-                       SELECT sessions.id, sessions.parent_session_id
-                       FROM sessions JOIN ancestors ON sessions.id = ancestors.parent_session_id
+                       SELECT child.id, lineage.visited || child.id || ','
+                       FROM sessions child
+                       JOIN sessions parent ON child.parent_session_id = parent.id
+                       JOIN lineage ON parent.id = lineage.id
+                       WHERE parent.end_reason = 'compression'
+                         AND {_CONTINUATION_CHILD}
+                         AND instr(lineage.visited, ',' || child.id || ',') = 0
                    )
-                   SELECT 1 FROM ancestors WHERE id = ? LIMIT 1""",
-                (value, HOME_SESSION_ID),
+                   SELECT 1 FROM lineage WHERE id = ? LIMIT 1""",
+                (HOME_SESSION_ID, value),
             ).fetchone()
             return row is not None
     except Exception:

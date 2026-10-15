@@ -2,7 +2,7 @@
 
 Upstream baseline: NousResearch/hermes-agent `v2026.9.24` / `0.21.5`,
 commit `f97608f178d1ffeca59860195ab7da295f7c8e5f`.
-Managed runtime: `0.10.1`.
+Managed runtime: `0.11.0`.
 
 Run managed processes with `python -m agentready_runtime serve ...` or
 `python -m agentready_runtime gateway run ...`. `--ensure-home` initializes the
@@ -31,6 +31,13 @@ The Unix inbox is not a durable operation journal and does not promise exactly-o
 external effects. A future coordinator can replace the execution adapter while
 retaining policy modules and their behavior tests; storage and recovery migration
 remain a separate design decision.
+
+## Native capabilities and independent sessions
+
+AgentReady does not prohibit manual `/new`, `/reset`, `/resume` or `/branch`.
+The managed home is the default business-event conversation; native branches,
+resets and delegated children retain their own session IDs and execution loops.
+Only actual compression continuations belong to the managed home lineage.
 
 ## Failed-compaction recovery
 
