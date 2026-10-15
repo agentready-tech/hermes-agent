@@ -3890,7 +3890,7 @@ def _run_summary_phase(
     agent: Any, messages: list, *, lease: _CompressionLease, in_place: bool, checkpoint_required: bool,
     approx_tokens: Optional[int], focus_topic: Optional[str], force: bool, bypass_cooldown: bool,
     commit_fence: Optional[CompressionCommitFence], hard_cancel_event: Any, system_message: str,
-    attempt: _Attempt,
+    attempt: _Attempt, managed_recovery: bool = False,
 ) -> _SummaryPhase:
     """Adopt a grown durable parent, gather memory context and run the summarizer.
     A hard cancel restores the compressor snapshot + live list, records a stall backoff while the lease is
@@ -3922,6 +3922,10 @@ def _run_summary_phase(
             agent, approx_tokens=approx_tokens, focus_topic=focus_topic, force=force, memory_context=memory_context,
             bypass_cooldown=bypass_cooldown,
         )
+        if managed_recovery:
+            from functools import partial
+            from agentready_runtime.adapters.recovery import prepare_recovery
+            compress_fn, compress_kwargs = partial(prepare_recovery, agent), {}
         messages_before_compression = copy.deepcopy(messages)
         _activity_heartbeat = _CompressionActivityHeartbeat(
             agent, commit_fence=commit_fence, emit_client_status=lease.status_emitted,
@@ -4104,6 +4108,7 @@ def compress_context(
     commit_fence: Optional[CompressionCommitFence] = None, verbatim_tail: Optional[list] = None,
     trigger: Optional[str] = None, snapshot_is_current: Optional[Callable[[], bool]] = None,
     overflow_reason: Optional[str] = None,
+    managed_recovery: bool = False,
 ) -> tuple[list, str]:
     """Compress conversation context and split the session in SQLite.
     ``force`` (manual /compress) clears the summary-failure cooldown; ``bypass_cooldown`` (provider-proven
@@ -4179,7 +4184,7 @@ def compress_context(
     # _compression_warning so status replay still surfaces the warning. Marked checked
     # only after the probe completes (transient failures are swallowed inside). A hard
     # rejection propagates; retire the announced phase first so the client is not left compacting.
-    if not getattr(agent, "_compression_feasibility_checked", False):
+    if not managed_recovery and not getattr(agent, "_compression_feasibility_checked", False):
         try:
             check_compression_model_feasibility(agent)
         except Exception:
@@ -4246,6 +4251,7 @@ def compress_context(
         agent, messages, lease=lease, in_place=in_place, checkpoint_required=checkpoint_required,
         approx_tokens=approx_tokens, focus_topic=focus_topic, force=force, bypass_cooldown=bypass_cooldown,
         commit_fence=commit_fence, hard_cancel_event=_hard_cancel_event, system_message=system_message, attempt=attempt,
+        managed_recovery=managed_recovery,
     )
     if phase.abort_prompt is not None:
         return phase.messages, phase.abort_prompt
@@ -4296,7 +4302,7 @@ def compress_context(
         # separately: the head's last assistant is an OLD reply the user explicitly asked to
         # fold, not the just-delivered one (which lives in the verbatim tail), so the guard
         # must not undo the compression it was asked for.
-        reinserted_reply = None if verbatim_tail else _ensure_compressed_keeps_last_assistant_reply(
+        reinserted_reply = None if verbatim_tail or managed_recovery else _ensure_compressed_keeps_last_assistant_reply(
             messages, compressed, session_id=agent.session_id,
         )
         if reinserted_reply is not None:
@@ -4307,6 +4313,13 @@ def compress_context(
         _fold_todo_snapshot(agent, compressed)
         compressed_user_turn_outcome = _ensure_compressed_has_user_turn(messages, compressed)
         new_system_prompt = _rebuild_system_prompt_at_boundary(agent, system_message)
+        carried_messages = [reinserted_reply] if reinserted_reply is not None else None
+        if managed_recovery:
+            from agent.context_compressor import COMPRESSED_SUMMARY_METADATA_KEY
+            # Recovery can retain a non-contiguous current event while offloading
+            # its large tool/reply tail. Rewind only byte-identical durable twins.
+            carried_messages = [message for message in compressed
+                                if message.get("role") != "system" and not message.get(COMPRESSED_SUMMARY_METADATA_KEY)]
         commit = _commit_compaction(
             agent, messages, compressed, in_place=in_place, lease=lease, new_system_prompt=new_system_prompt,
             system_message=system_message, compressed_user_turn_outcome=compressed_user_turn_outcome,
@@ -4315,8 +4328,8 @@ def compress_context(
             # The reinserted copy keeps the original's _row_id/timestamp (production flush stamps
             # both); carry exactly that one row so the commit rewinds the durable original instead
             # of archiving it compacted=1 next to a fresh twin (display would show it twice). The
-            # todo fold / user-anchor rows above keep their own class and are not carried.
-            carried_messages=[reinserted_reply] if reinserted_reply is not None else None,
+            # todo fold / user-anchor rows added above are NOT carried: they keep their own class.
+            carried_messages=carried_messages,
         )
         if commit.refused_prompt is not None:
             _restore_messages_snapshot(messages, messages_before_compression)

@@ -218,11 +218,21 @@ def _rebind_caller_session_context(agent) -> None:
 class CompressionFacadeMixin:
     """``_compress_context`` (see module docstring)."""
 
-    def _compress_context(
+    def _compress_context(self, messages: list, system_message: str, **kwargs) -> tuple:
+        from agentready_runtime.adapters.hermes import enabled
+
+        if enabled():
+            from agentready_runtime.adapters.recovery import compress_with_recovery
+            return compress_with_recovery(
+                self, self._agentready_native_compress_context, messages, system_message, **kwargs)
+        return self._agentready_native_compress_context(messages, system_message, **kwargs)
+
+    def _agentready_native_compress_context(
         self, messages: list, system_message: str, *, approx_tokens: int | None = None, task_id: str = "default",
         focus_topic: str | None = None, force: bool = False, bypass_cooldown: bool = False,
         defer_context_engine_notification: bool = False, commit_fence=None, verbatim_tail: list | None = None,
         trigger: str | None = None, snapshot_is_current=None, overflow_reason: str | None = None,
+        managed_recovery: bool = False,
     ) -> tuple:
         """Forwarder — see ``agent.conversation_compression.compress_context``.
         ``force=True`` (manual /compress) bypasses the summary-failure cooldown; ``bypass_cooldown=True``
@@ -284,6 +294,7 @@ class CompressionFacadeMixin:
                     defer_context_engine_notification=(defer_context_engine_notification), commit_fence=fence,
                     verbatim_tail=verbatim_tail, trigger=trigger, snapshot_is_current=snapshot_is_current,
                     overflow_reason=overflow_reason,
+                    **({"managed_recovery": True} if managed_recovery else {}),
                 )
 
             # Callers that already own a progress-aware wait (gateway session
