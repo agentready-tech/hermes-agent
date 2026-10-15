@@ -5,6 +5,7 @@ import re
 import sqlite3
 import threading
 from pathlib import Path
+from .history import FactHistory
 
 from . import holographic as hrr
 
@@ -86,7 +87,7 @@ def _clamp_trust(value: float) -> float:
     return max(0.0, min(1.0, value))
 
 
-class MemoryStore:
+class MemoryStore(FactHistory):
     """SQLite-backed fact store with entity resolution and trust scoring.
 
     Process-wide shared connection registry: SQLite allows one writer at a time and several providers
@@ -111,8 +112,7 @@ class MemoryStore:
         with MemoryStore._shared_guard:
             entry = MemoryStore._shared.get(self._key)
             if entry is None:
-                # Autocommit: a write that raises mid-method can't leave a dangling transaction (and its
-                # write lock) open; the explicit commit() calls in _write are then harmless no-ops.
+                # Isolated writes autocommit; _mutation owns multi-table commits and rollback.
                 conn = sqlite3.connect(self._key, check_same_thread=False, timeout=10.0, isolation_level=None)
                 conn.row_factory = sqlite3.Row
                 entry = MemoryStore._shared[self._key] = {"conn": conn, "lock": threading.RLock(), "refs": 0, "ready": False}
@@ -127,44 +127,65 @@ class MemoryStore:
         """Create schema, enable WAL via the shared fallback helper (NFS/SMB/FUSE degrade gracefully), add hrr_vector to pre-HRR DBs."""
         from hermes_state_wal import apply_wal_with_fallback
         apply_wal_with_fallback(self._conn, db_label="memory_store.db (holographic)")
+        had_fts = self._conn.execute("SELECT 1 FROM sqlite_master WHERE name='facts_fts'").fetchone()
         self._conn.executescript(_SCHEMA)
+        if not had_fts:
+            self._conn.execute("INSERT INTO facts_fts(facts_fts) VALUES ('rebuild')")
         if "hrr_vector" not in {row[1] for row in self._conn.execute("PRAGMA table_info(facts)").fetchall()}:
             from hermes_cli.sqlite_util import add_column_if_missing
             add_column_if_missing(self._conn, "facts", "hrr_vector", "hrr_vector BLOB")
         self._conn.commit()
+        self._init_history()
 
     def _one(self, sql: str, params=()):
         return self._conn.execute(sql, params).fetchone()
 
     def _write(self, sql: str, params=()) -> sqlite3.Cursor:
         cur = self._conn.execute(sql, params)
-        self._conn.commit()
         return cur
 
-    def add_fact(self, content: str, category: str = "general", tags: str = "") -> int:
-        """Insert a fact and return its fact_id; on duplicate content (UNIQUE) return the existing fact_id untouched.
-        Links extracted entities and rebuilds the category bank."""
-        with self._lock:
+    def add_fact(self, content: str, category: str = "general", tags: str = "", *, sources=None, key=None) -> int:
+        """Insert a fact, attach evidence to a duplicate, or revise the same stable key.
+        Entity/vector updates and revision history commit together."""
+        with self._mutation():
             content = content.strip()
             if not content:
                 raise ValueError("content must not be empty")
+            if key:
+                existing = self._one("SELECT fact_id FROM fact_keys WHERE key=?", (key,))
+                if existing:
+                    self.update_fact(existing[0], content=content, category=category, tags=tags, sources=sources)
+                    return int(existing[0])
             try:
                 fact_id: int = self._write("INSERT INTO facts (content, category, tags, trust_score) VALUES (?, ?, ?, ?)",
                                            (content, category, tags, self.default_trust)).lastrowid  # type: ignore[assignment]
             except sqlite3.IntegrityError:
-                return int(self._one("SELECT fact_id FROM facts WHERE content = ?", (content,))["fact_id"])
+                fact_id = int(self._one("SELECT fact_id FROM facts WHERE content = ?", (content,))["fact_id"])
+                self._attach_sources(fact_id, sources)
+                if key:
+                    self._conn.execute("INSERT OR IGNORE INTO fact_keys VALUES (?,?)", (key, fact_id))
+                return fact_id
             self._link_entities(fact_id, content)
             self._compute_hrr_vector(fact_id, content)
             self._rebuild_bank(category)
+            self._record_version(fact_id, sources)
+            if key:
+                self._conn.execute("INSERT INTO fact_keys VALUES (?,?)", (key, fact_id))
             return fact_id
 
     def update_fact(self, fact_id: int, content: str | None = None, trust_delta: float | None = None,
-                    tags: str | None = None, category: str | None = None) -> bool:
+                    tags: str | None = None, category: str | None = None, *, sources=None,
+                    expected_version=None) -> bool:
         """Partially update a fact (trust clamped to [0, 1]). Returns True if the row existed."""
-        with self._lock:
-            row = self._one("SELECT fact_id, trust_score FROM facts WHERE fact_id = ?", (fact_id,))
+        with self._mutation():
+            row = self._one("SELECT * FROM facts WHERE fact_id = ?", (fact_id,))
             if row is None:
                 return False
+            revision = self._current_version(fact_id)
+            if expected_version is not None and revision["version_id"] != expected_version:
+                raise ValueError("Fact changed while consolidation was running")
+            if content is not None and not content.strip():
+                raise ValueError("content must not be empty")
             changes = {col: val for col, val in {
                 "content": content.strip() if content is not None else None, "tags": tags, "category": category,
                 "trust_score": _clamp_trust(row["trust_score"] + trust_delta) if trust_delta is not None else None,
@@ -176,16 +197,25 @@ class MemoryStore:
                 self._link_entities(fact_id, content)
                 self._compute_hrr_vector(fact_id, content)
             self._rebuild_bank(category or self._one("SELECT category FROM facts WHERE fact_id = ?", (fact_id,))["category"])
+            if category is not None and category != row["category"]:
+                self._rebuild_bank(row["category"])
+            if any(value != row[col] for col, value in changes.items() if col != "trust_score"):
+                self._record_version(fact_id, sources)
+            else:
+                self._attach_sources(fact_id, sources)
             return True
 
     def remove_fact(self, fact_id: int) -> bool:
         """Delete a fact and its entity links. Returns True if the row existed."""
-        with self._lock:
+        with self._mutation():
             row = self._one("SELECT fact_id, category FROM facts WHERE fact_id = ?", (fact_id,))
             if row is None:
                 return False
             self._conn.execute("DELETE FROM fact_entities WHERE fact_id = ?", (fact_id,))
             self._write("DELETE FROM facts WHERE fact_id = ?", (fact_id,))
+            self._conn.execute("DELETE FROM fact_keys WHERE fact_id=?", (fact_id,))
+            self._forget_fact_sources(fact_id)
+            self._conn.execute("DELETE FROM fact_versions WHERE fact_id=?", (fact_id,))
             self._rebuild_bank(row["category"])
             return True
 

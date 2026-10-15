@@ -500,15 +500,16 @@ Local SQLite fact store with FTS5 full-text search, trust scoring, and HRR (Holo
 | **Best for** | Local-only memory with advanced retrieval, no external dependencies |
 | **Requires** | Nothing (SQLite is always available). NumPy optional for HRR algebra. |
 | **Data storage** | Local SQLite |
-| **Cost** | Free |
+| **Cost** | Local storage/search are free; enabled consolidation uses the configured auxiliary model |
 
-**Tools:** `fact_store` (9 actions: add, search, probe, related, reason, contradict, update, remove, list), `fact_feedback` (helpful/unhelpful rating that trains trust scores)
+**Tools:** `fact_store` (add, search, probe, related, reason, contradict, update, remove, list, history, explain), `fact_feedback` (helpful/unhelpful rating that trains trust scores)
 
 **Setup:**
 ```bash
 hermes memory setup    # select "holographic"
 # Or manually:
 hermes config set memory.provider holographic
+hermes config set plugins.hermes-memory-store.consolidation_enabled true
 ```
 
 **Config:** `config.yaml` under `plugins.hermes-memory-store`
@@ -517,6 +518,7 @@ hermes config set memory.provider holographic
 |-----|---------|-------------|
 | `db_path` | `$HERMES_HOME/memory_store.db` | SQLite database path |
 | `auto_extract` | `false` | Auto-extract facts at session end |
+| `consolidation_enabled` | `true` in new setup | Bounded background consolidation after primary-agent turns; absent in older configurations means off |
 | `default_trust` | `0.5` | Default trust score (0.0–1.0) |
 
 **Unique capabilities:**
@@ -524,6 +526,8 @@ hermes config set memory.provider holographic
 - `reason` — compositional AND queries across multiple entities
 - `contradict` — automated detection of conflicting facts
 - Trust scoring with asymmetric feedback (+0.05 helpful / -0.10 unhelpful)
+- Source evidence and correction history: recall uses current facts; `history` and `explain` recover their provenance.
+- Durable consolidation queue, atomic revisions, and stale-result rejection. Configuration and recovery behavior are documented in `plugins/memory/holographic/README.md` in the source tree.
 
 ---
 

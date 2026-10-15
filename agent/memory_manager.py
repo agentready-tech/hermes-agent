@@ -646,6 +646,15 @@ class MemoryManager:
         if provider is None:
             return tool_error(f"No memory provider handles tool '{tool_name}'")
         try:
+            # Runtime evidence is additive; old providers with narrow signatures still work.
+            params = _signature_params(provider.handle_tool_call)
+            if params is not None:
+                # Conversation evidence is opt-in, not silently exposed to every
+                # installed provider that happens to accept **kwargs.
+                kwargs = {key: value for key, value in kwargs.items()
+                          if key not in ("messages", "session_id") or key in params}
+            if params is not None and not _has_var_kwargs(params):
+                kwargs = {key: value for key, value in kwargs.items() if key in params}
             return provider.handle_tool_call(tool_name, args, **kwargs)
         except Exception as e:
             logger.error("Memory provider '%s' handle_tool_call(%s) failed: %s", provider.name, tool_name, e)
