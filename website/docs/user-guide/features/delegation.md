@@ -17,8 +17,9 @@ schedules the event or inserts it into the session's queue. Missing handlers, mi
 session routes, and full queues leave the completion pending for retry; these admission
 refusals do not consume the durable delivery-attempt budget. A successful admission suppresses
 repeat delivery within the running gateway, but is not proof that a model turn or outbound
-reply completed. Crash/restart delivery remains at least once, subject to the existing replay
-age limit; actual transport failures retain their bounded retry policy.
+reply completed. Crash/restart delivery remains at least once. Ordinary task results have
+a replay age limit; persistent project results and durable recovery notices do not expire
+solely because of an outage. Actual transport failures retain their bounded retry policy.
 
 An unavailable API-server route stays pending without repeated missing-route warnings.
 Malformed messaging routes still produce diagnostics. On the API server, an async delegation
@@ -30,6 +31,60 @@ Setting background process notifications to `off` still drains pattern-watch eve
 Background terminal processes belong to the agent that starts them. Closing a child during delegation teardown terminates its remaining processes, including work started in earlier turns, without stopping processes owned by the parent or sibling agents. Sharing a terminal environment does not transfer process ownership.
 
 A child should wait for its builds, tests, and other bounded background commands before returning its final summary. Start a CI watcher or server in the parent session if it must continue after the child finishes; returning a process ID does not transfer ownership to the parent.
+
+## Persistent projects
+
+For a long-running task, the main agent creates its own project child on demand by
+adding a stable `project` key. There is no pre-created roster or required worker profile:
+
+```python
+delegate_task(tasks=[{
+    "project": "supplier-order-42",
+    "goal": "Manage the delivery analysis for order 42",
+    "context": "Supplier contact, original email references, requirements and relevant files"
+}])
+delegate_task(action="list", query="supplier order 42")
+delegate_task(action="send", subagent_id="project-...",
+              message="New supplier email: delivery moves to Monday. Revise the analysis.",
+              event_id="mail:provider-message-id")
+delegate_task(action="read", subagent_id="project-...")
+```
+
+The returned `subagent_id` and native `session_id` remain stable between tasks and
+processes. Reusing a project key finds the existing child. New messages enter its
+SQLite inbox and run serially against its previous native conversation. The
+optional `event_id` deduplicates retries of the same source event within that project.
+An identical spawn request reuses its original receipt; use `send` for subsequent work.
+Project messages return independently, so `group` applies only to ordinary tasks.
+
+The main agent is instructed to search existing projects before creating another,
+delegate substantial project work, and send later facts to the existing child.
+It supplies the new evidence and, when available, relevant memory-provider recall.
+The child's original system prefix stays unchanged; updates are new conversation
+turns. The main agent verifies reports against original sources before treating
+claims as established facts.
+
+`stop` pauses a project and interrupts its current execution; saved pending messages
+remain. A later explicit `send` resumes it. `archive` also cancels pending work and
+retires the identity, while retaining its conversation and workspace. Local isolated
+worktrees are retained and reused between project turns. Background shell processes
+still follow the normal child teardown/handoff rules.
+
+Project identities, inboxes and receipts live in the active profile's existing
+`state.db`; native `sessions`/`messages` remain the full history authority. The
+existing async completion ledger delivers results to the parent. On recovery,
+recorded final answers are delivered without running their tools again; interrupted
+work continues in the same child session and checks uncertain external outcomes.
+Completed/failed/interrupted returns are terminal for that message; a process death
+before a return leaves saved work for recovery. The core never promises exactly-once
+external effects.
+
+Managed `serve` resumes its home through the native WebSocket path after bind, even
+without a human opening chat. This also starts pending project recovery. Messaging
+gateways reuse their normal completion-recovery path. Native non-managed desktop
+sessions continue to recover on resume. A managed home's interrupted-turn marker
+survives long outages; explicit cancellation and native crash-loop attempt guards
+remain effective. Existing compression and archive recovery are unchanged.
 
 ## Single Task
 
@@ -226,7 +281,7 @@ consumers use a durable claim, so only the consumer that successfully accepts
 the synthetic turn acknowledges delivery; failed attempts release the claim for
 retry.
 
-This does not resume child execution after a crash. A delegation whose owner
+For ordinary tasks without a `project` key, this does not resume child execution after a crash. A delegation whose owner
 process disappears while it is still running is recorded as `unknown`, because
 Hermes cannot prove whether its external side effects happened. Pending and
 delivered records are bounded and profile-local.

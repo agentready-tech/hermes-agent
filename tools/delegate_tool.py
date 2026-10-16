@@ -221,6 +221,8 @@ def _build_child_agent(
     routing_cfg: Optional[dict[str, Any]] = None,
     # Legacy; accepted for wire compat but ignored (capability is depth-derived).
     role: str = "leaf",
+    session_id: Optional[str] = None,
+    subagent_id: Optional[str] = None,
 ):
     """Build (don't run) a child AIAgent on the main thread. override_* (from delegation config) replace parent
     inheritance so children can run on a different provider:model pair."""
@@ -235,7 +237,7 @@ def _build_child_agent(
 
     # One subagent_id shared by the progress callback, spawn_requested event and
     # the live registry; parent_id is set when THIS parent is itself a subagent.
-    subagent_id = f"sa-{task_index}-{_uuid.uuid4().hex[:8]}"
+    subagent_id = subagent_id or f"sa-{task_index}-{_uuid.uuid4().hex[:8]}"
     parent_subagent_id = getattr(parent_agent, "_subagent_id", None)
 
     # General delegation behavior (reasoning, compression, capabilities) stays
@@ -286,7 +288,7 @@ def _build_child_agent(
                     (lambda text: _safe_progress(child_progress_cb, "_thinking", text) if text else None)
                     if child_progress_cb else None
                 ),
-                session_db=child_session_db, parent_session_id=parent_sid, request_overrides=request_overrides,
+                session_db=child_session_db, session_id=session_id, parent_session_id=parent_sid, request_overrides=request_overrides,
                 tool_progress_callback=child_progress_cb,
                 iteration_budget=None,  # fresh budget per subagent
             )
@@ -491,6 +493,7 @@ def delegate_task(
     output_schema: Optional[dict[str, Any]] = None, images: Optional[list[str]] = None, action: Optional[str] = None,
     subagent_id: Optional[str] = None, message: Optional[str] = None, parent_agent=None,
     credentials_cfg: Optional[dict[str, Any]] = None,
+    query: str = "", event_id: Optional[str] = None,
 ) -> str:
     """Spawn child agents (single ``goal`` or ``tasks=[...]`` batch) or control running ones. ``action``
     list/steer/stop run synchronously and bypass the pause gate, depth limit and async dispatch. ``role`` is legacy
@@ -500,6 +503,23 @@ def delegate_task(
         return tool_error("delegate_task requires a parent agent context.")
 
     normalized_action = (action or "").strip().lower()
+    from tools.delegate_projects import project_action
+    if normalized_action in ("send", "read", "archive") or (normalized_action == "stop" and str(subagent_id or "").startswith("project-")):
+        try:
+            return json.dumps(project_action(parent_agent, normalized_action, subagent_id=subagent_id,
+                              message=message, event_id=event_id), ensure_ascii=False)
+        except (ValueError, TypeError) as exc:
+            return tool_error(str(exc))
+    if normalized_action == "list":
+        payload = json.loads(_handle_control_action(normalized_action, subagent_id, message, parent_agent))
+        if getattr(parent_agent, "_session_db", None) is not None:
+            try:
+                payload.update(project_action(parent_agent, "list", query=query))
+                if payload.get("projects"):
+                    payload.pop("note", None)
+            except ValueError as exc:
+                return tool_error(str(exc))
+        return json.dumps(payload, ensure_ascii=False)
     if normalized_action in _CONTROL_ACTIONS:
         return _handle_control_action(normalized_action, subagent_id, message, parent_agent)
     if normalized_action and normalized_action != "spawn":
@@ -556,6 +576,14 @@ def delegate_task(
     err = _oneshot_spawn_budget(parent_agent, len(task_list))
     if err:
         return tool_error(err)
+
+    if any("project" in task for task in task_list):
+        try:
+            project_tasks = [{**task, "images": task_images[i], "output_schema": task_schemas[i]}
+                             for i, task in enumerate(task_list)]
+            return json.dumps(project_action(parent_agent, "spawn", tasks=project_tasks), ensure_ascii=False)
+        except (ValueError, TypeError) as exc:
+            return tool_error(str(exc))
 
     overall_start = time.monotonic()
     # Live transcripts: cache/delegation/live/<id>/task-<n>.log per task, a side channel with zero effect on message
@@ -635,11 +663,18 @@ _DESCRIPTION_HEAD = (
     "wait or poll on transcripts, artifact files, or CI for a child. "
     "While children run, `action` (list/steer/stop) controls them live.\n\n"
     "USE FOR: reasoning-heavy subtasks, work that would flood your context, or independent parallel workstreams.\n"
+    "For a long-running task or project, first action='list' (optionally query its topic), then set a stable "
+    "'project' key on the task to create/reuse its persistent child conversation. You create these children "
+    "on demand; no pre-created specialists are needed. Route later requirements, external events and new "
+    "evidence to that same child with action='send', subagent_id and message. Read its history/results with "
+    "action='read'. Keep coordination and user communication in your own conversation; delegate substantial "
+    "project work and verify child claims against original sources. Persistent project inboxes and histories "
+    "survive restart; execution resumes through the existing native agent loop.\n"
     "DO NOT USE FOR (use these instead):\n"
     "- Mechanical multi-step work with no reasoning needed -> execute_code\n"
     "- A single tool call -> call the tool directly\n"
     "- Tasks needing user interaction -> subagents cannot ask questions\n"
-    "- Durable work that must survive this session -> cronjob or terminal(background=True, notify=True); /stop, /new, "
+    "- Ordinary tasks without a project key end with this process; for durable project work use a project key. /stop, /new, "
     "or process exit halts running subagents (whole tree); each returns an 'interrupted' completion with partial output.\n\n"
     "RULES:\n"
     "- Children know nothing of this conversation: pass everything needed via 'context', including any required "
@@ -725,6 +760,7 @@ DELEGATE_TASK_SCHEMA = {
                             "Background THIS child needs: file paths, error messages, constraints. Each child "
                             "sees only its own context — repeat shared background in every task that needs it.",
                         ),
+                        "project": _p("string", "Optional stable key for a long-running project/task. Creates its own persistent session automatically; reuse the key or returned subagent_id for follow-ups. Omit for a short-lived child."),
                         "output_schema": _p(
                             "object",
                             "Optional JSON Schema this child's final answer must validate against (told to the "
@@ -756,20 +792,23 @@ DELEGATE_TASK_SCHEMA = {
             # delegations always run in the background. Unadvertised; do not re-add.
             "action": _p(
                 "string",
-                "Default 'spawn'. Live control of running children: "
+                "Default 'spawn'. 'send' continues a persistent project child (subagent_id + message); "
+                "'read' returns its saved history; 'archive' retires the project but keeps history. Live control: "
                 "'list' = ids/goals/status/transcripts; 'steer' = queue "
                 "course-correction text into one child (subagent_id + "
                 "message) without stopping it; 'stop' = end one child "
                 "early (subagent_id; partial result still returns). "
                 "Control actions return immediately; goal/tasks are ignored unless spawning.",
-                enum=["spawn", "list", "steer", "stop"],
+                enum=["spawn", "list", "steer", "stop", "send", "read", "archive"],
             ),
-            "subagent_id": _p("string", "Target for action='steer'/'stop' (ids from the spawn response or action='list')."),
+            "subagent_id": _p("string", "Child ID from spawn/list; targets send/read/archive or live steer/stop. A project ID remains valid after the child finishes or Hermes restarts."),
             "message": _p(
                 "string",
-                "For action='steer': the course correction, appended to "
-                "the child's next tool result mid-run. Be directive and specific.",
+                "For 'send': a new task/update/evidence for the project's next turn. For 'steer': an urgent "
+                "course correction delivered at a safe tool boundary. Include source references and be specific.",
             ),
+            "query": _p("string", "Optional topic/key filter for action='list' persistent projects."),
+            "event_id": _p("string", "For action='send': stable source event ID, when available, to deduplicate a retried delivery to this project."),
         },
         "required": [],
     },
@@ -805,6 +844,7 @@ registry.register(
         max_iterations=args.get("max_iterations"), role=args.get("role"),
         background=_model_background_value(args, kw.get("parent_agent")), output_schema=args.get("output_schema"),
         images=args.get("images"), action=args.get("action"), subagent_id=args.get("subagent_id"), message=args.get("message"),
+        query=args.get("query", ""), event_id=args.get("event_id"),
         parent_agent=kw.get("parent_agent"),
     ),
     check_fn=check_delegate_requirements,

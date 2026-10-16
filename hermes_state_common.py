@@ -656,6 +656,49 @@ CREATE TABLE IF NOT EXISTS session_turn_leases (
     expires_at REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS agentready_inbox (
+    message_id TEXT PRIMARY KEY,
+    event_key TEXT UNIQUE,
+    content TEXT NOT NULL,
+    accepted_at REAL NOT NULL,
+    accepted_after_row_id INTEGER NOT NULL,
+    delivered_at REAL
+);
+
+CREATE TABLE IF NOT EXISTS delegated_projects (
+    subagent_id TEXT PRIMARY KEY,
+    parent_session_id TEXT NOT NULL,
+    project_key TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    goal TEXT NOT NULL,
+    context TEXT,
+    archived INTEGER NOT NULL DEFAULT 0,
+    paused INTEGER NOT NULL DEFAULT 0,
+    workspace_json TEXT NOT NULL DEFAULT '{}',
+    instruction TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    UNIQUE(parent_session_id, project_key)
+);
+CREATE TABLE IF NOT EXISTS delegated_project_messages (
+    message_id TEXT PRIMARY KEY,
+    subagent_id TEXT NOT NULL REFERENCES delegated_projects(subagent_id),
+    event_key TEXT,
+    content TEXT NOT NULL,
+    origin_json TEXT NOT NULL,
+    options_json TEXT NOT NULL DEFAULT '{}',
+    state TEXT NOT NULL DEFAULT 'pending',
+    owner_pid INTEGER,
+    owner_started_at REAL,
+    claim_token TEXT,
+    accepted_at REAL NOT NULL,
+    completed_at REAL,
+    result_json TEXT,
+    published INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(subagent_id, event_key)
+);
+CREATE INDEX IF NOT EXISTS delegated_project_inbox ON delegated_project_messages(subagent_id, state, accepted_at);
+
 CREATE TABLE IF NOT EXISTS async_delegations (
     delegation_id TEXT PRIMARY KEY,
     origin_session TEXT NOT NULL,

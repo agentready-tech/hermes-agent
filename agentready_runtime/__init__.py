@@ -1,3 +1,3 @@
 """AgentReady managed policies; engine integration lives in adapters."""
 
-VERSION = "0.11.0"
+VERSION = "0.12.0"

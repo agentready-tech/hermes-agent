@@ -2,6 +2,7 @@
 # AgentReady's release Dockerfile fetches this same source by immutable commit.
 ARG HERMES_BASE_IMAGE=nousresearch/hermes-agent:v2026.9.24
 FROM ${HERMES_BASE_IMAGE}
+ARG HERMES_GIT_SHA
 USER root
 WORKDIR /opt/hermes
 COPY agentready_runtime/ /opt/hermes/agentready_runtime/
@@ -9,5 +10,8 @@ COPY plugins/memory/holographic/ /opt/hermes/plugins/memory/holographic/
 COPY agent/ /opt/hermes/agent/
 COPY gateway/ /opt/hermes/gateway/
 COPY tui_gateway/ /opt/hermes/tui_gateway/
-COPY run_agent.py hermes_state_messages.py pyproject.toml /opt/hermes/
+COPY tools/ /opt/hermes/tools/
+COPY hermes_cli/web_server.py /opt/hermes/hermes_cli/web_server.py
+COPY run_agent.py hermes_state_messages.py hermes_state_common.py pyproject.toml /opt/hermes/
+RUN test -n "${HERMES_GIT_SHA}" && printf '%s\n' "${HERMES_GIT_SHA}" > /opt/hermes/.hermes_build_sha
 RUN uv pip install --python /opt/hermes/.venv/bin/python --no-deps -e .

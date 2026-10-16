@@ -736,7 +736,10 @@ class _ChildRun:
             return entry_dict
         from tools import subagent_worktree
         try:
-            entry_dict["worktree"] = subagent_worktree.finalize_subagent_worktree(info)
+            if isinstance(getattr(self.child, "_persistent_project_id", None), str):
+                entry_dict["worktree"] = subagent_worktree.finalize_subagent_worktree(info, prune=False)
+            else:
+                entry_dict["worktree"] = subagent_worktree.finalize_subagent_worktree(info)
         except Exception as e:
             # State is unknown: emit the SAME flagged schema the parent expects,
             # via the shared factory so the two producers never drift.
@@ -758,7 +761,18 @@ class _ChildRun:
             record_session_cwd(self.child_task_id, get_session_cwd(self.parent_task_id))
             register_container_alias(self.child_task_id, self.parent_task_id)
 
-        self.worktree_info = _create_isolated_worktree(self.parent_agent, self.parent_task_id, self.subagent_id)
+        persistent = isinstance(getattr(self.child, "_persistent_project_id", None), str)
+        persistent_cwd = getattr(self.child, "_persistent_cwd", None) if persistent else None
+        if persistent_cwd:
+            from tools.terminal_tool import record_session_cwd
+            record_session_cwd(self.child_task_id, persistent_cwd)
+        self.worktree_info = getattr(self.child, "_delegate_existing_worktree", None) if persistent else None
+        if self.worktree_info is None:
+            self.worktree_info = _create_isolated_worktree(
+                self.parent_agent, self.child_task_id if persistent_cwd else self.parent_task_id, self.subagent_id)
+        save_workspace = getattr(self.child, "_delegate_save_workspace", None) if persistent else None
+        if self.worktree_info is not None and callable(save_workspace):
+            save_workspace(self.worktree_info)
         if self.worktree_info is not None:
             with _quiet("worktree cwd seed failed: %s"):
                 from tools.terminal_tool import record_session_cwd as _rsc
@@ -855,10 +869,18 @@ class _ChildRun:
         def _run_with_thread_capture():
             worker_thread_holder["t"] = threading.current_thread()
             from agent.delegation_context import delegated_child_context
-            with delegated_child_context(str(getattr(child, "session_id", "") or "")):
-                return child.run_conversation(
-                    user_message=user_message, task_id=self.child_task_id, stream_callback=self.relay_text,
-                )
+            from agent.runtime_cwd import reset_session_cwd, set_session_cwd
+            project_cwd = (self.worktree_info or {}).get("path") or getattr(child, "_persistent_cwd", None)
+            cwd_token = set_session_cwd(project_cwd) if isinstance(getattr(child, "_persistent_project_id", None), str) and project_cwd else None
+            try:
+                with delegated_child_context(str(getattr(child, "session_id", "") or "")):
+                    return child.run_conversation(
+                        user_message=user_message, task_id=self.child_task_id, stream_callback=self.relay_text,
+                        **getattr(child, "_delegate_resume_kwargs", {}),
+                    )
+            finally:
+                if cwd_token is not None:
+                    reset_session_cwd(cwd_token)
 
         future = executor.submit(contextvars.copy_context().run, _run_with_thread_capture)
         # One wait covers both ways out: the worker finishing, or the heartbeat's stale verdict.
