@@ -37,6 +37,7 @@ def test_project_reuses_native_history_and_recovers_committed_answer(tmp_path, m
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
                     "commit", "--allow-empty", "-qm", "Initial"], check=True)
+    monkeypatch.setenv("TERMINAL_CWD", str(repo))
     (tmp_path / "config.yaml").write_text(f"compression:\n  enabled: false\nterminal:\n  cwd: {repo}\ndelegation:\n  worktree_isolation: true\n")
     seen = []
     workspaces = []
@@ -44,6 +45,7 @@ def test_project_reuses_native_history_and_recovers_committed_answer(tmp_path, m
     def model(self, payload, *args, **kwargs):
         from tools.terminal_tool import get_session_cwd
         cwd = Path(get_session_cwd(self._current_task_id))
+        assert cwd.resolve().is_relative_to((repo / ".worktrees").resolve())
         workspaces.append(cwd)
         if seen:
             assert (cwd / "evidence.txt").read_text() == "Supplier source preserved"
