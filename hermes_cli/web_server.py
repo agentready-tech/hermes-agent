@@ -1310,6 +1310,8 @@ def _on_server_started(
 
     actual_port = _read_bound_port(server, fallback=port)
     app.state.bound_port = actual_port
+    from agentready_runtime.adapters.startup import start_recovery
+    start_recovery(actual_port, _SESSION_TOKEN)
     # Published by /api/host/identity: an attaching `hermes dashboard` must never be routed to a
     # headless backend (a URL with no UI behind it).
     app.state.serves_spa = not headless

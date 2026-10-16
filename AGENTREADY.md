@@ -2,7 +2,7 @@
 
 Upstream baseline: NousResearch/hermes-agent `v2026.9.24` / `0.21.5`,
 commit `f97608f178d1ffeca59860195ab7da295f7c8e5f`.
-Managed runtime: `0.11.0`.
+Managed runtime: `0.12.0`.
 
 Run managed processes with `python -m agentready_runtime serve ...` or
 `python -m agentready_runtime gateway run ...`. `--ensure-home` initializes the
@@ -27,10 +27,21 @@ One managed process owns one home; hooks are disabled for other profile homes.
 
 Tool groups finish before queued events enter the next LLM request. Events arriving
 while a final answer is produced cause a continuation in the same owned session.
-The Unix inbox is not a durable operation journal and does not promise exactly-once
-external effects. A future coordinator can replace the execution adapter while
-retaining policy modules and their behavior tests; storage and recovery migration
-remain a separate design decision.
+The Unix inbox records accepted messages in the same `state.db` before acknowledging
+them and retires their payloads only after admission into canonical history. This
+does not promise exactly-once external effects. After bind, managed `serve` restores
+the home through its native WebSocket resume path without requiring a human client.
+
+## Persistent project delegates
+
+The main agent creates project children on demand with `delegate_task(tasks=[{
+"project": "stable-task-key", "goal": "...", "context": "..."}])`. The existing tool's
+`send`, `read`, `list`, `stop` and `archive` actions manage those identities. Children
+retain their native sessions, workspaces and evidence history; per-project SQLite
+inboxes serialize follow-ups. Native async completion delivery reports results back
+to the main conversation. Dead owners leave recoverable messages, completed native
+answers are not executed again, and explicit stops remain paused until a new send.
+No additional service or database is required.
 
 ## Native capabilities and independent sessions
 
@@ -62,9 +73,11 @@ preserving its entrypoint, built UI, interpreter and SQLite. It registers the ne
 Python package in the existing venv. AgentReady's release image downloads this fork
 by exact commit and archive checksum, adds managed Office dependencies, and is
 referenced by immutable image digest in production.
+Pass the fork revision when building the overlay: native session tool pins use this
+identity to refresh changed tool contracts after an update while keeping the session.
 
 ```sh
-docker build -f Dockerfile.agentready -t agentready-hermes:local .
+docker build --build-arg HERMES_GIT_SHA="$(git rev-parse HEAD)" -f Dockerfile.agentready -t agentready-hermes:local .
 scripts/run_tests.sh tests/agentready_runtime/
 ```
 

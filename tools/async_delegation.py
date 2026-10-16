@@ -209,6 +209,7 @@ def _persist_completion(event: Dict[str, Any], result: Dict[str, Any]) -> None:
                WHERE delegation_id=?""",
             (event.get("status", "completed"), event.get("completed_at", now), now,
              json.dumps(event), json.dumps(result), event["delegation_id"]))
+        conn.execute("UPDATE delegated_project_messages SET published=1 WHERE message_id=?", (event["delegation_id"],))
 
 
 def record_unit_child(delegation_id: str, entry: Dict[str, Any]) -> None:
@@ -266,7 +267,8 @@ def recover_abandoned_delegations() -> int:
         rows = conn.execute("""SELECT delegation_id, origin_session, origin_ui_session_id,
                       parent_session_id, dispatched_at, owner_pid,
                       owner_started_at, task_json, origin_session_id, result_json, state
-               FROM async_delegations WHERE state IN ('running','finalizing')""").fetchall()
+               FROM async_delegations WHERE state IN ('running','finalizing')
+               AND delegation_id NOT IN (SELECT message_id FROM delegated_project_messages)""").fetchall()
         for row in rows:
             delegation_id, session_key, origin_ui, parent_id, dispatched_at, pid, started, task_json, origin_sid, result_json, last_state = row
             if alive(pid, started):
@@ -319,6 +321,8 @@ def restore_undelivered_completions(target_queue) -> int:
     ownership, otherwise a brand-new session adopts a dead session's delegation results seconds after boot
     (#64484).
     """
+    from tools.delegate_project_recovery import publish_recovery_wakeups
+    publish_recovery_wakeups()
     recover_abandoned_delegations()
     now = time.time()
     with _DB_LOCK, _transaction() as conn:
@@ -335,8 +339,12 @@ def _replay_pending(conn, rows, target_queue, now: float) -> int:
     the orphan sweep skips the row until the copy is handed back (``return_completion_offer``)."""
     home, restored = hermes_home_key(get_hermes_home()), 0
     for delegation_id, payload, completed_at, dispatched_at in rows:
+        evt = json.loads(payload)
         age_basis = completed_at or dispatched_at
-        if age_basis and (now - age_basis) > _MAX_COMPLETION_REPLAY_AGE_S:
+        expired = age_basis and (now - age_basis) > _MAX_COMPLETION_REPLAY_AGE_S
+        durable = expired and ((isinstance(evt, dict) and evt.get("durable_recovery")) or conn.execute(
+            "SELECT 1 FROM delegated_project_messages WHERE message_id=?", (delegation_id,)).fetchone())
+        if expired and not durable:
             conn.execute("""UPDATE async_delegations SET delivery_state='dropped',
                           delivery_claim=NULL, delivery_claimed_at=NULL,
                           updated_at=?
@@ -345,7 +353,6 @@ def _replay_pending(conn, rows, target_queue, now: float) -> int:
                            "(cap %.1fh); terminally dropping the replay (result remains queryable).",
                            delegation_id, (now - age_basis) / 3600.0, _MAX_COMPLETION_REPLAY_AGE_S / 3600.0)
             continue
-        evt = json.loads(payload)
         if isinstance(evt, dict):
             evt["restored"] = True
         target_queue.put(evt)
@@ -370,6 +377,8 @@ def sweep_orphaned_completions(target_queue, *, now: Optional[float] = None) -> 
     alive = _owner_liveness()
     if alive is None or not _db_path().exists():
         return 0  # never create a ledger just to sweep it
+    from tools.delegate_project_recovery import publish_recovery_wakeups
+    publish_recovery_wakeups()
     recover_abandoned_delegations()
     now = time.time() if now is None else now
     home = hermes_home_key(get_hermes_home())
@@ -671,6 +680,7 @@ def _dispatch_admitted(
     progress_fn: Optional[Callable[[], tuple]], capacity_error: str, slot_key: Optional[str] = None,
     task_indexes: Optional[List[int]] = None,
     task_transcripts: Optional[Dict[str, str]] = None,
+    routing_origin: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Shared dispatch core for single (``goals is None``) and batch units. Capacity check +
     record insert happen under ONE lock hold so concurrent dispatches can't both pass the check
@@ -688,7 +698,7 @@ def _dispatch_admitted(
         "context": context, "toolsets": list(toolsets) if toolsets else None, "role": role, "model": model,
         "session_key": session_key, "origin_ui_session_id": origin_ui_session_id,
         "origin_session_id": origin_session_id, "parent_session_id": parent_session_id,
-        **_capture_routing_origin(),
+        **(_capture_routing_origin() if routing_origin is None else {k: routing_origin[k] for k in _ROUTING_KEYS if k in routing_origin}),
         "status": "running", "dispatched_at": dispatched_at, "completed_at": None,
         "interrupt_fn": interrupt_fn, **({"is_batch": True} if is_batch else {}), "progress_fn": progress_fn,
         "slot_key": slot_key or delegation_id,
@@ -753,19 +763,22 @@ def dispatch_async_delegation(
     session_key: str, parent_session_id: Optional[str] = None, runner: Callable[[], Dict[str, Any]],
     origin_ui_session_id: str = "", origin_session_id: str = "", interrupt_fn: Optional[Callable[[], None]] = None,
     max_async_children: int = _DEFAULT_MAX_ASYNC_CHILDREN, progress_fn: Optional[Callable[[], tuple]] = None,
+    delegation_id: Optional[str] = None,
+    routing_origin: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Spawn ``runner`` on the daemon executor and return a handle immediately.
     ``session_key``/``parent_session_id`` are captured on the parent thread (the worker carries
     no contextvars) and route the completion back to the spawning session.
     ``progress_fn() -> (token, in_tool)`` enables stale monitoring; omitted = unmonitored.
     Returns ``{"status": "dispatched", "delegation_id"}`` or ``{"status": "rejected", "error"}``."""
-    delegation_id = _new_delegation_id()
+    delegation_id = delegation_id or _new_delegation_id()
     handle = _dispatch(
         delegation_id=delegation_id, goal=goal, goals=None, context=context,
         toolsets=toolsets, role=role, model=model, session_key=session_key,
         parent_session_id=parent_session_id, runner=runner,
         origin_ui_session_id=origin_ui_session_id, origin_session_id=origin_session_id,
         interrupt_fn=interrupt_fn, max_async_children=max_async_children, progress_fn=progress_fn,
+        routing_origin=routing_origin,
         capacity_error=(
             f"Async delegation capacity reached ({max_async_children} running). Wait for one to finish "
             "(its result will re-enter the chat), or run this task synchronously (background=false). "

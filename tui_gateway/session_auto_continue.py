@@ -68,6 +68,12 @@ def _maybe_schedule_auto_continue(sid: str, session: dict, session_key: str) -> 
     if not marker.get("auto_continue", True):
         return None  # The mailbox owns recovery and receipt identity for imported turns.
     enabled, freshness_secs, max_attempts = _auto_continue_config()
+    from agentready_runtime.adapters.hermes import enabled as managed_enabled
+    from agentready_runtime.adapters.state import belongs_to_home_lineage
+    if managed_enabled() and belongs_to_home_lineage(session_key):
+        # A continuously owned home may be offline longer than desktop's 15-minute
+        # convenience window. Keep the native explicit-cancel and crash-loop guards.
+        freshness_secs = float("inf")
     age = time.time() - marker["started_at"]
     if not enabled or age > freshness_secs or marker["attempts"] >= max_attempts:
         clear_turn_marker(home, session_key)  # stale/disabled/crash-looping: a manual message continues

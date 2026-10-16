@@ -2,6 +2,7 @@
 
 import fcntl
 import json
+import logging
 import os
 import socket
 import threading
@@ -64,8 +65,13 @@ class ActiveHomeTurn:
     """One run owns the model; all other ingress processes feed its mailbox."""
 
     def __init__(self):
+        from agentready_runtime.adapters.inbox import HomeInbox
         self.lock = threading.Lock()
-        self.pending = []
+        self.inbox = HomeInbox()
+        self.inbox.acknowledge_recorded()
+        self.pending = self.inbox.pending()
+        self._known_inputs = {identity for identity, _ in self.pending}
+        self._taken_inputs = set()
         self.accepting = True
         self.done = threading.Event()
         self.outcome = None
@@ -99,7 +105,10 @@ class ActiveHomeTurn:
                 with self.lock:
                     accepted = self.accepting and bool(content)
                     if accepted:
-                        self.pending.append(content)
+                        identity, pending = self.inbox.enqueue(content)
+                        if pending and identity not in self._known_inputs:
+                            self._known_inputs.add(identity)
+                            self.pending.append((identity, content))
                 stream.write((json.dumps({"accepted": accepted}) + "\n").encode())
                 stream.flush()
                 if accepted and request.get("wait"):
@@ -110,14 +119,22 @@ class ActiveHomeTurn:
             # A disconnected sender does not cancel an accepted event.
             return
 
-    def take(self, *, close_if_empty=False):
+    def take_records(self, *, close_if_empty=False):
         with self.lock:
             pending, self.pending = self.pending, []
+            self._taken_inputs.update(identity for identity, _ in pending)
             if close_if_empty and not pending:
                 self.accepting = False
             return pending
 
+    def take(self, *, close_if_empty=False):
+        return [content for _, content in self.take_records(close_if_empty=close_if_empty)]
+
     def finish(self, result=None, error=None):
+        try:
+            self.inbox.acknowledge_recorded(self._taken_inputs)
+        except Exception:
+            logging.getLogger(__name__).exception("Managed inbox acknowledgement failed; accepted inputs remain saved")
         with self.lock:
             self.accepting = False
             self.outcome = {"result": result, "error": error}
@@ -191,7 +208,8 @@ def run_conversation(self, proceed, *args, **kwargs):
             result = proceed(*args, **kwargs)
             while True:
                 leftover = result.pop("pending_steer", None)
-                pending = turn.take(close_if_empty=not leftover)
+                records = turn.take_records(close_if_empty=not leftover)
+                pending = [content for _, content in records]
                 if leftover:
                     pending.insert(0, leftover)
                 if not pending:
@@ -204,6 +222,9 @@ def run_conversation(self, proceed, *args, **kwargs):
                 continuation.pop("user_message", None)
                 continuation.pop("persist_user_message", None)
                 continuation.pop("persist_user_timestamp", None)
+                continuation["persist_user_platform_id"] = records[0][0] if records else None
+                continuation["persist_user_display_kind"] = None
+                continuation["persist_user_display_metadata"] = {"agentready_inbox_ids": [identity for identity, _ in records]}
                 result = proceed(combine_event_content(pending), **continuation)
             turn.finish(result=result)
             return result
@@ -220,8 +241,8 @@ def run_conversation(self, proceed, *args, **kwargs):
 def after_tool_group(agent, messages):
     turn = getattr(agent, "_agentready_active_turn", None)
     if turn is not None:
-        for content in turn.take():
-            messages.append({"role": "user", "content": content})
+        for identity, content in turn.take_records():
+            messages.append({"role": "user", "content": content, "platform_message_id": identity})
 
 
 def steer(agent, content):
