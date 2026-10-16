@@ -1,6 +1,7 @@
 """Recover through Hermes' fenced in-place compaction commit, without another LLM call."""
 
 import json
+import logging
 import time
 
 from agentready_runtime.adapters.checkpoint_files import FileCheckpointArchive
@@ -62,12 +63,21 @@ def compress_with_recovery(agent, proceed, messages, system_prompt, **kwargs):
     except AuxiliaryExplicitCancellation:
         raise
     except Exception as error:
+        logging.getLogger(__name__).debug("Managed context recovery failed", exc_info=True)
         if timed_out:
             agent._compression_skipped_due_to_lock = None
             mark_context_compression_timed_out(agent)
         agent._emit_warning("AgentReady context recovery could not commit (" + type(error).__name__
                             + "). The original history and session were preserved.")
         return result
+
+
+def carried_recovery_messages(messages, reinserted_reply, managed_recovery):
+    if not managed_recovery:
+        return [reinserted_reply] if reinserted_reply is not None else None
+    from agent.context_compressor import COMPRESSED_SUMMARY_METADATA_KEY
+    return [message for message in messages
+            if message.get("role") != "system" and not message.get(COMPRESSED_SUMMARY_METADATA_KEY)]
 
 
 def prepare_recovery(agent, messages):

@@ -11,6 +11,7 @@ the delegation call and the summary result, never the child's intermediate
 tool calls or reasoning.
 """
 
+import json
 import logging
 import time
 import weakref
@@ -503,7 +504,7 @@ def delegate_task(
         return tool_error("delegate_task requires a parent agent context.")
 
     normalized_action = (action or "").strip().lower()
-    from tools.delegate_projects import project_action
+    from tools.delegate_projects import include_projects, project_action
     if normalized_action in ("send", "read", "archive") or (normalized_action == "stop" and str(subagent_id or "").startswith("project-")):
         try:
             return json.dumps(project_action(parent_agent, normalized_action, subagent_id=subagent_id,
@@ -512,14 +513,10 @@ def delegate_task(
             return tool_error(str(exc))
     if normalized_action == "list":
         payload = json.loads(_handle_control_action(normalized_action, subagent_id, message, parent_agent))
-        if getattr(parent_agent, "_session_db", None) is not None:
-            try:
-                payload.update(project_action(parent_agent, "list", query=query))
-                if payload.get("projects"):
-                    payload.pop("note", None)
-            except ValueError as exc:
-                return tool_error(str(exc))
-        return json.dumps(payload, ensure_ascii=False)
+        try:
+            return json.dumps(include_projects(parent_agent, payload, query), ensure_ascii=False)
+        except ValueError as exc:
+            return tool_error(str(exc))
     if normalized_action in _CONTROL_ACTIONS:
         return _handle_control_action(normalized_action, subagent_id, message, parent_agent)
     if normalized_action and normalized_action != "spawn":

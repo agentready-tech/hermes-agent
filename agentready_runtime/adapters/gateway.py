@@ -1,5 +1,6 @@
 """Hermes gateway routing and business-event translation."""
 
+import logging
 import uuid
 from agentready_runtime.events import event_prompt
 from agentready_runtime.sessions import (
@@ -39,6 +40,7 @@ def recover_home(self, recovered, *, session_key, source, now):
         )
         return entry
     except Exception:
+        logging.getLogger(__name__).debug("Managed gateway recovery unavailable", exc_info=True)
         return None
 
 
@@ -65,7 +67,7 @@ def prepare_event(event, source):
                 },
             )
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("Managed event translation failed", exc_info=True)
 
 
 async def busy_event(self, proceed, event, session_key):
@@ -92,7 +94,7 @@ async def busy_event(self, proceed, event, session_key):
     content = event_prompt(
         text,
         platform,
-        "{}:{}".format(platform, event.message_id or uuid.uuid4().hex),
+        f"{platform}:{event.message_id or uuid.uuid4().hex}",
         {
             "chat_id": str(event.source.chat_id or ""),
             "thread_id": str(event.source.thread_id or ""),

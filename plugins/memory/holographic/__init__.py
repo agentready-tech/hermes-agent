@@ -10,7 +10,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from agent.memory_provider import MemoryProvider
 from tools.registry import tool_error
@@ -88,6 +88,7 @@ def _load_plugin_config() -> dict:
         from hermes_cli.config import load_config_readonly  # canonical: managed-scope overlay + ${VAR} expansion
         return cfg_get(load_config_readonly(), "plugins", "hermes-memory-store", default={}) or {}
     except Exception:
+        logger.debug("Holographic configuration unavailable", exc_info=True)
         return {}
 
 
@@ -166,6 +167,7 @@ class HolographicMemoryProvider(MemoryProvider):
         try:
             total = self._store._conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
         except Exception:
+            logger.debug("Holographic fact count unavailable", exc_info=True)
             total = 0
         body = ("Active. Empty fact store — proactively add facts the user would expect you to remember.\n"
                 "Use fact_store(action='add') to store durable structured facts about people, projects, preferences, decisions.\n"
@@ -195,13 +197,13 @@ class HolographicMemoryProvider(MemoryProvider):
                 size += len(line)
             return "## Holographic Memory\n" + "\n".join(lines) if lines else ""
         except Exception as e:
-            logger.debug("Holographic prefetch failed: %s", e)
+            logger.debug("Holographic prefetch failed: %s", e, exc_info=True)
             return ""
 
-    def get_tool_schemas(self) -> List[Dict[str, Any]]:
+    def get_tool_schemas(self) -> list[dict[str, Any]]:
         return [FACT_STORE_SCHEMA, FACT_FEEDBACK_SCHEMA]
 
-    def handle_tool_call(self, tool_name: str, args: Dict[str, Any], *, messages=None, session_id="", **kwargs) -> str:
+    def handle_tool_call(self, tool_name: str, args: dict[str, Any], *, messages=None, session_id="", **kwargs) -> str:
         if tool_name not in self._TOOL_HANDLERS:
             return tool_error(f"Unknown tool: {tool_name}")
         try:
@@ -212,9 +214,10 @@ class HolographicMemoryProvider(MemoryProvider):
         except KeyError as exc:
             return tool_error(f"Missing required argument: {exc}")
         except Exception as exc:
+            logger.debug("Holographic tool failed", exc_info=True)
             return tool_error(str(exc))
 
-    def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
+    def on_session_end(self, messages: list[dict[str, Any]]) -> None:
         # is_truthy_value: auto_extract is a string enum ("false"/"true"); plain truthiness would treat "false" as on.
         if is_truthy_value(self._config.get("auto_extract", False)) and self._store and messages:
             self._auto_extract_facts(messages)
@@ -252,7 +255,7 @@ class HolographicMemoryProvider(MemoryProvider):
             try:
                 self._store.close()
             except Exception as e:
-                logger.debug("Holographic shutdown close() failed: %s", e)
+                logger.debug("Holographic shutdown close() failed: %s", e, exc_info=True)
         self._store = self._retriever = self._consolidator = None
 
     # Tool handlers (self, args) -> str. KeyError from args[...] / Exception -> tool_error in handle_tool_call;
@@ -312,7 +315,7 @@ class HolographicMemoryProvider(MemoryProvider):
                         self._store.add_fact(content[:400], category=category, sources=sources[-1:] or None)
                         extracted += 1
                     except Exception:
-                        pass
+                        logger.debug("Holographic extraction failed", exc_info=True)
         if extracted:
             logger.info("Auto-extracted %d facts from conversation", extracted)
 

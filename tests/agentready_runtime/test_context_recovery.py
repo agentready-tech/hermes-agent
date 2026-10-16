@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from tests.waiting import wait_until
 
 
 @pytest.fixture
@@ -55,7 +56,7 @@ def test_failed_compression_recovers_and_continues_with_all_history(recovery_hom
             agent._hard_interrupt_requested.set()
             raise AuxiliaryExplicitCancellation()
         if failure == "timeout":
-            time.sleep(0.5)
+            time.sleep(0.5)  # health: allow HX013 -- deliberately finish the provider after its 0.3s compression deadline
             return ChatCompletion(id="late", object="chat.completion", created=1, model="gpt-4.1", choices=[{
                 "index": 0, "message": {"role": "assistant", "content":
                     "## Historical Task Snapshot\nUser asked: keep working.\n\n## Active State\nLATE_CANDIDATE"},
@@ -69,8 +70,19 @@ def test_failed_compression_recovers_and_continues_with_all_history(recovery_hom
         raise RuntimeError("summary service unavailable")
 
     monkeypatch.setattr("agent.context_compressor.call_llm", failed_summary)
+    compression_futures = []
     if failure == "timeout":
         monkeypatch.setattr("agent.conversation_compression.resolve_context_compression_timeouts", lambda: (0.15, 0.3))
+        from agent.conversation_compression import _get_compress_timeout_executor
+        executor = _get_compress_timeout_executor()
+        submit = executor.submit
+
+        def record_submit(*args, **kwargs):
+            future = submit(*args, **kwargs)
+            compression_futures.append(future)
+            return future
+
+        monkeypatch.setattr(executor, "submit", record_submit)
     if failure == "archive_error":
         def unavailable_archive(*args, **kwargs):
             raise OSError("archive storage unavailable")
@@ -134,7 +146,8 @@ def test_failed_compression_recovers_and_continues_with_all_history(recovery_hom
         assert agent.session_id == HOME_SESSION_ID
         assert agent.client.chat.completions.create.called
         if failure == "timeout":
-            time.sleep(0.6)
+            wait_until(lambda: all(future.done() for future in compression_futures), timeout=10,
+                       what="retired compression workers to finish")
             assert "LATE_CANDIDATE" not in json.dumps(db.get_messages_as_conversation(HOME_SESSION_ID))
     finally:
         db.close()

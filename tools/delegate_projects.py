@@ -111,6 +111,7 @@ def _run(parent, store, project, message, child, text):
         store.settle(project, message, result)
         return result
     except Exception as exc:
+        logger.debug("Persistent project execution failed", exc_info=True)
         result = {"status": "failed", "error": f"{type(exc).__name__}: {exc}", "summary": None,
                   "subagent_id": project["subagent_id"], "session_id": project["session_id"]}
         try:
@@ -174,6 +175,15 @@ def _recover_projects(parent, store):
             result = _run(parent, store, project, message, child, text)
             outcomes.append(result)
     return outcomes
+
+
+def include_projects(parent, payload, query=""):
+    if getattr(parent, "_session_db", None) is None:
+        return payload
+    payload.update(project_action(parent, "list", query=query))
+    if payload.get("projects"):
+        payload.pop("note", None)
+    return payload
 
 
 def project_action(parent, action, *, tasks=None, subagent_id=None, message=None, query="", event_id=None):

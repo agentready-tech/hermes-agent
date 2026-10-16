@@ -57,7 +57,7 @@ async def resume_after_bind(port, token):
                     return
             try:
                 await asyncio.wait_for(socket.recv(), timeout=2)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
 
 
@@ -69,7 +69,7 @@ def start_recovery(port, token):
     def recover():
         try:
             asyncio.run(resume_after_bind(port, token))
-        except Exception as error:
+        except Exception as error:  # health: allow BLE001 -- exception traces can contain the WebSocket session token
             # Connection exception strings may contain the session-token URL.
             logger.warning("Managed startup recovery deferred (%s); accepted work remains saved", type(error).__name__)
     thread = spawn_context_thread(recover, name="managed-startup-recovery")

@@ -11,11 +11,12 @@ import time
 from pathlib import Path
 
 import pytest
+from tests.waiting import wait_until
 
 
 def _crash_project_process(home, phase="tool"):
     script = '''
-import os, time
+import os, threading
 from pathlib import Path
 from openai.types.chat import ChatCompletion
 from run_agent import AIAgent
@@ -55,11 +56,10 @@ parent = AIAgent(model="gpt-4.1", provider="custom", base_url="http://127.0.0.1:
     enabled_toolsets=["delegation", "file"], skip_context_files=True, load_soul_identity=False,
     skip_memory=True, quiet_mode=True)
 delegate_task(tasks=[{"project":"order-42", "goal":"Analyse the supplier delivery for order 42"}], parent_agent=parent)
-while True:
-    time.sleep(0.1)
+threading.Event().wait()
 '''
     run = subprocess.run([sys.executable, "-c", script], env={**os.environ, "HERMES_HOME": str(home), "PROJECT_CRASH_PHASE": phase},
-                         capture_output=True, text=True, timeout=25)
+                         capture_output=True, text=True, timeout=25, check=False)
     assert run.returncode == 23, run.stdout[-2000:] + run.stderr[-2000:]
     with sqlite3.connect(home / "state.db") as conn:
         if phase == "outbox":
@@ -77,7 +77,7 @@ def test_boot_resumes_interrupted_home_through_native_websocket(monkeypatch, wor
     import uvicorn
 
     with tempfile.TemporaryDirectory(prefix="hb-") as directory:
-        home = Path(directory)
+        home = Path(directory).resolve()
         monkeypatch.setenv("HERMES_HOME", directory)
         monkeypatch.setenv("OPENAI_API_KEY", "test-only")
         monkeypatch.setattr("hermes_state.DEFAULT_DB_PATH", home / "state.db")
@@ -122,10 +122,7 @@ def test_boot_resumes_interrupted_home_through_native_websocket(monkeypatch, wor
         thread.start()
         recovery = None
         try:
-            deadline = time.monotonic() + 20
-            while not backend.started and time.monotonic() < deadline:
-                time.sleep(0.02)
-            assert backend.started
+            wait_until(lambda: backend.started, timeout=20, what="native backend bind")
             port = backend.servers[0].sockets[0].getsockname()[1]
             from agentready_runtime.adapters.startup import start_recovery
             recovery = start_recovery(port, web_server._SESSION_TOKEN)

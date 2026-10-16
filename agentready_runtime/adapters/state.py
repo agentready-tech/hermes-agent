@@ -1,5 +1,6 @@
 """Hermes SQLite home-session routing and legacy lineage migration."""
 
+import logging
 import sqlite3
 from agentready_runtime.sessions import (
     HOME_SESSION_ID,
@@ -88,6 +89,7 @@ def current_home_session_id():
             ).fetchone()
             return str(row[0]) if row else HOME_SESSION_ID
     except Exception:
+        logging.getLogger(__name__).debug("Managed home head unavailable", exc_info=True)
         return HOME_SESSION_ID
 
 
@@ -135,6 +137,7 @@ def belongs_to_home_lineage(session_id):
             ).fetchone()
             return row is not None
     except Exception:
+        logging.getLogger(__name__).debug("Managed home lineage unavailable", exc_info=True)
         return False
 
 

@@ -1,3 +1,4 @@
+# health: allow FILE_LINES -- thin managed summary hook; recovery policy remains in adapter siblings
 """Automatic context window compression: a cheap auxiliary model summarizes middle turns while head and
 tail are protected (iterative summaries, token-budget tail, tool-output pruning first, scaled budgets)."""
 
@@ -3985,7 +3986,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         )
 
     def _agentready_native_generate_summary(
-        self, turns_to_summarize: List[Dict[str, Any]], focus_topic: Optional[str] = None,
+        self, turns_to_summarize: list[dict[str, Any]], focus_topic: Optional[str] = None,
         memory_context: str = "", bypass_cooldown: bool = False,
     ) -> Optional[str]:
         """Structured summary of the turns (iterative update when a previous summary exists); None if all attempts fail."""
@@ -4052,6 +4053,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             self._reset_consecutive_overload_aborts()
             return self._with_summary_prefix(summary)
         except Exception as e:
+            logger.debug("Managed native summary failed", exc_info=True)
             return self._on_summary_failure(e, turns_to_summarize, focus_topic, memory_context)
 
     def _build_summary_prompt(

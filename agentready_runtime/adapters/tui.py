@@ -49,5 +49,7 @@ def busy_submit(
         if not accepted:
             # Preserve upstream FIFO envelopes, attachments and authors
             # when no turn owner can accept a steer yet.
-            server._enqueue_prompt(session, content, transport, turn_author=turn_author)
+            envelope = server._enqueue_prompt(session, content, transport, turn_author=turn_author)
+            if envelope is not None:
+                server._persist_queued_user_row(session, envelope, display_kind)
     return server._ok(rid, {"status": "steered" if accepted else "queued"})

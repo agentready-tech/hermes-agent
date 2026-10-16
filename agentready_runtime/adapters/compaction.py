@@ -1,5 +1,6 @@
 """Hermes compression state, cancellation and auxiliary-model binding."""
 
+import logging
 import threading
 import time
 from agentready_runtime.checkpoints import persist_bounded_checkpoint
@@ -16,6 +17,7 @@ def estimate_checkpoint_tokens(text):
 
         return int(estimate_messages_tokens_rough([{"role": "user", "content": text}]))
     except Exception:
+        logging.getLogger(__name__).debug("Checkpoint token estimator unavailable", exc_info=True)
         return max(1, (len(text) + 2) // 3)
 
 
@@ -84,6 +86,7 @@ def generate_summary(self, proceed, *args, **kwargs):
                 self._summary_has_user_turn = previous_provenance
             raise
         except Exception as error:
+            logging.getLogger(__name__).debug("Checkpoint recompression failed", exc_info=True)
             _raise_if_stale_attempt(self)
             self._previous_summary = previous
             self._summary_has_user_turn = previous_provenance

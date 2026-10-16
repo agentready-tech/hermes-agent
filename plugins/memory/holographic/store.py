@@ -1,5 +1,6 @@
 """SQLite-backed fact store with entity resolution and trust scoring (single-user Hermes memory plugin)."""
 
+import logging
 import os
 import re
 import sqlite3
@@ -310,8 +311,8 @@ class MemoryStore(FactHistory):
                 try:
                     with entry["lock"]:
                         entry["conn"].close()
-                except Exception:
-                    pass  # an already-closed/broken connection must not abort releasing siblings
+                except sqlite3.Error:
+                    logging.getLogger(__name__).debug("Holographic connection close failed", exc_info=True)
         return len(doomed)
 
     def close(self) -> None:

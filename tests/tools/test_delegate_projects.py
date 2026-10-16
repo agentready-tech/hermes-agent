@@ -4,19 +4,14 @@ import json
 import sqlite3
 import subprocess
 import threading
-import time
 from pathlib import Path
 
 import pytest
+from tests.waiting import wait_until
 
 
 def _wait(predicate):
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        if predicate():
-            return
-        time.sleep(0.02)
-    assert predicate()
+    wait_until(predicate, timeout=15, what="project inbox completion")
 
 
 def _parent(home):
@@ -150,6 +145,7 @@ def test_project_inbox_serializes_new_facts_and_deduplicates_retries(tmp_path, m
         duplicate = call(update)["projects"][0]
         assert second["message_id"] == duplicate["message_id"]
         third = call({"action": "send", "subagent_id": project_id, "message": "Customer accepts Monday", "event_id": "mail-2"})["projects"][0]
+        assert third["message_id"] != second["message_id"]
         assert len(seen) == 1
         # Release the request's own DB/client while independent child handles remain live.
         parent.close()

@@ -9,7 +9,6 @@ import urllib.parse
 import websockets
 
 HOME_SESSION_ID = "agentready_home"
-DASHBOARD_TOKEN = os.environ.get("HERMES_DASHBOARD_SESSION_TOKEN", "")
 GATEWAY_URL = "ws://127.0.0.1:9119"
 EVENT_CHANNEL = HOME_SESSION_ID
 
@@ -37,10 +36,7 @@ async def rpc(socket, method, params, request_id, events=None):
 from agentready_runtime.events import event_prompt
 
 
-async def ask_agent(prompt, *, source, event_id, metadata=None, timeout_seconds=1800):
-    if not DASHBOARD_TOKEN:
-        raise RuntimeError("HERMES_DASHBOARD_SESSION_TOKEN is required")
-    deadline = time.time() + timeout_seconds
+async def _connect(deadline, token):
     last_error = None
     socket = None
     while socket is None and time.time() < deadline:
@@ -48,31 +44,41 @@ async def ask_agent(prompt, *, source, event_id, metadata=None, timeout_seconds=
             socket = await websockets.connect(
                 GATEWAY_URL
                 + "/api/ws?token="
-                + urllib.parse.quote(DASHBOARD_TOKEN, safe=""),
+                + urllib.parse.quote(token, safe=""),
                 open_timeout=10,
                 ping_interval=20,
                 max_size=8 * 1024 * 1024,
             )
-        except (OSError, asyncio.TimeoutError, websockets.WebSocketException) as error:
+        except (TimeoutError, OSError, websockets.WebSocketException) as error:
             last_error = error
             await asyncio.sleep(2)
     if socket is None:
         raise RuntimeError(
-            "Hermes was unavailable before event submission: {}".format(last_error)
+            f"Hermes was unavailable before event submission: {last_error}"
         )
+
+    return socket
+
+
+async def ask_agent(prompt, *, source, event_id, metadata=None, timeout_seconds=1800):
+    token = os.environ.get("HERMES_DASHBOARD_SESSION_TOKEN", "")
+    if not token:
+        raise RuntimeError("HERMES_DASHBOARD_SESSION_TOKEN is required")
+    deadline = time.time() + timeout_seconds
+    socket = await _connect(deadline, token)
 
     publisher = None
     try:
         publisher = await websockets.connect(
             "ws://127.0.0.1:9119/api/pub?token={}&channel={}".format(
-                urllib.parse.quote(DASHBOARD_TOKEN, safe=""),
+                urllib.parse.quote(token, safe=""),
                 urllib.parse.quote(EVENT_CHANNEL, safe=""),
             ),
             open_timeout=10,
             ping_interval=20,
             max_size=8 * 1024 * 1024,
         )
-    except (OSError, asyncio.TimeoutError, websockets.WebSocketException):
+    except (TimeoutError, OSError, websockets.WebSocketException):
         # Live Environment chat is an observer. A missing observer feed must
         # never prevent an email/schedule/channel event from being processed.
         publisher = None

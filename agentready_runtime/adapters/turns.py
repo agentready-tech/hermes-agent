@@ -65,6 +65,7 @@ class ActiveHomeTurn:
     """One run owns the model; all other ingress processes feed its mailbox."""
 
     def __init__(self):
+        from agent.memory_provider import spawn_context_thread
         from agentready_runtime.adapters.inbox import HomeInbox
         self.lock = threading.Lock()
         self.inbox = HomeInbox()
@@ -81,20 +82,19 @@ class ActiveHomeTurn:
         os.chmod(steer_socket_path(), 0o600)
         self.socket.listen()
         self.socket.settimeout(0.2)
-        self.listener = threading.Thread(target=self.listen, daemon=True)
+        self.listener = spawn_context_thread(self.listen, name="managed-inbox-listener")
         self.listener.start()
 
     def listen(self):
+        from agent.memory_provider import spawn_context_thread
         while not self.done.is_set():
             try:
                 connection, _ = self.socket.accept()
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 return
-            threading.Thread(
-                target=self.receive, args=(connection,), daemon=True
-            ).start()
+            spawn_context_thread(lambda conn=connection: self.receive(conn), name="managed-inbox-receive").start()
 
     def receive(self, connection):
         try:

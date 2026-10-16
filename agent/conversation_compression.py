@@ -1,3 +1,4 @@
+# health: allow FILE_LINES -- managed recovery must share the native compaction lease, fence and atomic commit
 """Context compression: feasibility probe, warning replay, compress, image fix.
 
 Thread-safety contract for extension points: with ``compression.context_timeout_seconds > 0`` (default) the
@@ -4313,13 +4314,10 @@ def compress_context(
         _fold_todo_snapshot(agent, compressed)
         compressed_user_turn_outcome = _ensure_compressed_has_user_turn(messages, compressed)
         new_system_prompt = _rebuild_system_prompt_at_boundary(agent, system_message)
-        carried_messages = [reinserted_reply] if reinserted_reply is not None else None
-        if managed_recovery:
-            from agent.context_compressor import COMPRESSED_SUMMARY_METADATA_KEY
-            # Recovery can retain a non-contiguous current event while offloading
-            # its large tool/reply tail. Rewind only byte-identical durable twins.
-            carried_messages = [message for message in compressed
-                                if message.get("role") != "system" and not message.get(COMPRESSED_SUMMARY_METADATA_KEY)]
+        from agentready_runtime.adapters.recovery import carried_recovery_messages
+        # Recovery can retain a non-contiguous event while offloading its large
+        # tool/reply tail; only byte-identical durable twins may be rewound.
+        carried_messages = carried_recovery_messages(compressed, reinserted_reply, managed_recovery)
         commit = _commit_compaction(
             agent, messages, compressed, in_place=in_place, lease=lease, new_system_prompt=new_system_prompt,
             system_message=system_message, compressed_user_turn_outcome=compressed_user_turn_outcome,

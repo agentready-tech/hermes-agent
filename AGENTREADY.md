@@ -1,7 +1,7 @@
 # AgentReady managed Hermes fork
 
-Upstream baseline: NousResearch/hermes-agent `v2026.9.24` / `0.21.5`,
-commit `f97608f178d1ffeca59860195ab7da295f7c8e5f`.
+Upstream baseline: NousResearch/hermes-agent `main`,
+commit `53bec2a311979ad6f77580ba491eca261ab988e0` (2026-10-16).
 Managed runtime: `0.12.0`.
 
 Run managed processes with `python -m agentready_runtime serve ...` or
@@ -43,6 +43,10 @@ to the main conversation. Dead owners leave recoverable messages, completed nati
 answers are not executed again, and explicit stops remain paused until a new send.
 No additional service or database is required.
 
+The fork retains its enhanced bundled Holographic provider and its regression tests.
+Upstream moved the stock provider to the external catalog; that migration must not
+replace the fork's sourced facts, revision history or background consolidation.
+
 ## Native capabilities and independent sessions
 
 AgentReady does not prohibit manual `/new`, `/reset`, `/resume` or `/branch`.
@@ -68,13 +72,15 @@ Gateway's upstream compression-exhaustion reset is disabled for the managed home
 
 ## Build and verify
 
-`Dockerfile.agentready` overlays fork Python source on the pinned upstream image,
-preserving its entrypoint, built UI, interpreter and SQLite. It registers the new
-Python package in the existing venv. AgentReady's release image downloads this fork
+`Dockerfile.agentready` overlays the complete fork source on the pinned upstream image,
+preserving its entrypoint, built UI, Python 3.14 and SQLite. It rebuilds the pinned
+environment through upstream PM and binds the source through the native assembler.
+AgentReady's release image downloads this fork
 by exact commit and archive checksum, adds managed Office dependencies, and is
 referenced by immutable image digest in production.
 Pass the fork revision when building the overlay: native session tool pins use this
-identity to refresh changed tool contracts after an update while keeping the session.
+identity, recorded in the canonical install stamp, to refresh changed tool contracts
+after an update while keeping the session.
 
 ```sh
 docker build --build-arg HERMES_GIT_SHA="$(git rev-parse HEAD)" -f Dockerfile.agentready -t agentready-hermes:local .
@@ -88,8 +94,8 @@ ownership/failure and settings validation. No real model-quality claim is made.
 
 ## Upstream updates and rollback
 
-Keep `upstream` pointing to NousResearch/hermes-agent. Merge a reviewed upstream
-release into the managed branch, resolve the small native call sites, run policy,
+Keep `upstream` pointing to NousResearch/hermes-agent. Rebase the complete fork
+series onto a reviewed upstream snapshot, resolve the small native call sites, run policy,
 adapter and image-backed AgentReady tests, then pin the new fork commit in
 AgentReady. Do not overwrite the managed branch with upstream or copy AIAgent.
 

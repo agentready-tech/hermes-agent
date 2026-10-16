@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -30,8 +31,8 @@ def atomic_write_text(target, content):
     finally:
         try:
             temporary.unlink(missing_ok=True)
-        except Exception:
-            pass
+        except OSError:
+            logging.getLogger(__name__).debug("Checkpoint temporary cleanup failed", exc_info=True)
 
 
 class FileCheckpointArchive:
@@ -98,7 +99,7 @@ class FileCheckpointArchive:
             entries = json.loads(index_path.read_text(encoding="utf-8"))
             if not isinstance(entries, list):
                 entries = []
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             entries = []
         referenced_artifacts = sorted(
             set(re.findall(r"/opt/data/workspace/[^\s\x60\"']+", clean))

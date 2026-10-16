@@ -1,3 +1,4 @@
+# health: allow FILE_LINES -- recognize the managed entrypoint through the canonical gateway process matcher
 """Gateway runtime status helpers: PID/lock/marker files under ``{HERMES_HOME}`` (one set per
 home/profile) that tell whether the gateway daemon is running."""
 
