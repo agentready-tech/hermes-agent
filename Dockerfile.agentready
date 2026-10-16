@@ -43,3 +43,4 @@ RUN /opt/hermes/.venv/bin/python -m docker.build_agent
 # unprivileged runtime user. Match the native image's final sealing step.
 RUN chmod 0644 /opt/hermes/tools/facts.json && \
     rm -f /opt/hermes/.venv/.lock /opt/hermes/pm-runtime/.lock
+CMD ["hermes-autonomous", "run", "--host", "0.0.0.0"]

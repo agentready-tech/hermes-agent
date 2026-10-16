@@ -13,6 +13,17 @@ from agentready_runtime.adapters.state import current_home_session_id
 logger = logging.getLogger(__name__)
 
 
+def _wake_inbox(inbox):
+    from tools.delegate_project_recovery import publish_wakeup
+    inbox.acknowledge_recorded()
+    if pending := inbox.pending():
+        identity = "home-recovery-" + hashlib.sha256(json.dumps([i for i, _ in pending]).encode()).hexdigest()
+        return publish_wakeup(identity, current_home_session_id(), {"session_key": "", "origin_ui_session_id": ""},
+            "Accepted messages remain in the managed inbox. Continue the home conversation; "
+            "the saved messages will be delivered at a normal turn boundary. Check existing outcomes before repeating actions.")
+    return False
+
+
 def _work_pending():
     from tui_gateway.turn_marker import read_turn_marker
     from tools.delegate_project_store import _transaction
@@ -30,26 +41,37 @@ async def resume_after_bind(port, token):
     from agentready_runtime.session_event import rpc
     from tools.async_delegation import restore_undelivered_completions
     from tools.process_registry import process_registry
-    from tools.delegate_project_recovery import publish_wakeup
     import websockets
 
     inbox = HomeInbox()
-    inbox.acknowledge_recorded()
-    if pending := inbox.pending():
-        identity = "home-recovery-" + hashlib.sha256(json.dumps([i for i, _ in pending]).encode()).hexdigest()
-        publish_wakeup(identity, current_home_session_id(), {"session_key": "", "origin_ui_session_id": ""},
-            "Accepted messages remain in the managed inbox after restart. Continue the home conversation; "
-            "the saved messages will be delivered at a normal turn boundary. Check existing outcomes before repeating actions.")
+    _wake_inbox(inbox)
     restore_undelivered_completions(process_registry.completion_queue)
     if not _work_pending():
         return
-    async with websockets.connect(f"ws://127.0.0.1:{port}/api/ws?token={quote(token, safe='')}",
+    from hermes_cli.web_server import app
+    if getattr(app.state, "auth_required", False):
+        # This client lives inside the bound server. Use its existing private
+        # credential, exactly like the native embedded TUI, in gated bind mode.
+        from hermes_cli.dashboard_auth.ws_tickets import internal_ws_credential
+        auth = "internal=" + quote(internal_ws_credential(), safe="")
+    else:
+        auth = "token=" + quote(token, safe="")
+    async with websockets.connect(f"ws://127.0.0.1:{port}/api/ws?{auth}",
                                   open_timeout=10, max_size=8 * 1024 * 1024) as socket:
         opened = await rpc(socket, "session.resume", {"session_id": current_home_session_id(),
             "source": "agentready", "close_on_disconnect": False}, "managed-startup-resume")
         # Keep a live transport while native notification delivery wakes the parent
         # and its project children. No model turn is manufactured for an idle home.
+        loop = asyncio.get_running_loop()
+        next_scan = loop.time() + 2
         while True:
+            # New admissions can arrive after the active owner stopped accepting
+            # IPC, while this transport still waits for that owner's idle event.
+            # Refresh the deterministic wakeup so this window cannot strand them.
+            if loop.time() >= next_scan:
+                if _wake_inbox(inbox):
+                    restore_undelivered_completions(process_registry.completion_queue)
+                next_scan = loop.time() + 2
             if not _work_pending():
                 active = await rpc(socket, "session.active_list", {}, "managed-recovery-status")
                 owner = next((s for s in active.get("sessions", []) if s["id"] == opened["session_id"]), None)
@@ -68,7 +90,10 @@ def start_recovery(port, token):
 
     def recover():
         try:
-            asyncio.run(resume_after_bind(port, token))
+            from agentready_runtime.standalone.config import settings
+            from agentready_runtime.standalone.events import watch_home
+            coroutine = watch_home(port, token) if settings(managed_home()).get("enabled") else resume_after_bind(port, token)
+            asyncio.run(coroutine)
         except Exception as error:  # health: allow BLE001 -- exception traces can contain the WebSocket session token
             # Connection exception strings may contain the session-token URL.
             logger.warning("Managed startup recovery deferred (%s); accepted work remains saved", type(error).__name__)

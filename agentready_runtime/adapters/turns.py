@@ -21,7 +21,18 @@ def lock_path():
 
 
 def steer_socket_path():
-    return str(lock_path().with_suffix(".sock"))
+    from gateway.control_socket import _home_hash, _private_directory, _private_runtime_dir
+    # A Docker Desktop bind mount can create sockets but rejects chmod on them.
+    # Keep this ephemeral IPC endpoint on the OS runtime filesystem; the durable
+    # ownership lock and accepted messages remain in the original home.
+    base = _private_runtime_dir() or Path("/tmp")  # no-tmp: ok — AF_UNIX needs a local, short path outside shared home mounts
+    directory = base / f"hermes-home-{os.getuid()}-{_home_hash(managed_home())}"
+    if len(str(directory / "inbox.sock").encode()) > 100:
+        directory = Path("/tmp") / directory.name  # no-tmp: ok — native AF_UNIX path length limit
+    directory.mkdir(mode=0o700, exist_ok=True)
+    if not _private_directory(directory):
+        raise PermissionError(f"Managed IPC directory must be private and owned by this user: {directory}")
+    return str(directory / "inbox.sock")
 
 
 def forward_to_active_turn(content, *, wait=False):

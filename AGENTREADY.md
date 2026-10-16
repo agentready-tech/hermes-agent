@@ -110,3 +110,9 @@ Before switching an existing agent, stop writers and back up its complete home
 and Environment state. Keep the previous image. Rollback restores the previous
 image together with its matching state backup. Session IDs, settings schema,
 memories, workspace and checkpoint files remain unchanged by this port.
+
+## Standalone operation
+
+This fork can run without the AgentReady application. See [AUTONOMOUS.md](AUTONOMOUS.md)
+for local setup, supervised startup, main-session events/schedules, Gmail and
+matching image/data update rollback. The existing managed entrypoint remains supported.
