@@ -87,6 +87,13 @@ docker build --build-arg HERMES_GIT_SHA="$(git rev-parse HEAD)" -f Dockerfile.ag
 scripts/run_tests.sh tests/agentready_runtime/
 ```
 
+If macOS Keychain rejects the Docker credential helper, use a separate public-build
+Docker config with `{"auths":{"https://index.docker.io/v1/":{}}}` and pass its
+directory through `docker --config`. An entirely empty config auto-detects
+`osxkeychain` again. Keep the regular Docker config and saved credentials intact.
+Both the native install stamp and immutable image provenance identify the fork
+commit supplied at build time.
+
 The AgentReady repository's `smoke:hermes-runtime` with
 `AGENTREADY_HERMES_TEST_IMAGE` exercises real native steer and compaction hooks in
 isolated containers, with controlled model/tool responses, plus multiprocess

@@ -3,13 +3,34 @@
 ARG HERMES_BASE_IMAGE=nousresearch/hermes-agent:v0.22.2
 FROM ${HERMES_BASE_IMAGE}
 ARG HERMES_GIT_SHA
+LABEL org.opencontainers.image.source="https://github.com/agentready-tech/hermes-agent" \
+    org.opencontainers.image.revision="${HERMES_GIT_SHA}"
 USER root
 WORKDIR /opt/hermes
 # Native modules move between releases; overlay the complete source snapshot.
 COPY --link --chmod=a+rX,go-w . /opt/hermes/
+# These scripts are intentionally non-executable in Git; native Docker builds
+# install their executable copies after the source copy as well.
+COPY --chmod=0755 docker/entrypoint-dispatch.sh /opt/hermes/docker/entrypoint-dispatch.sh
+COPY --chmod=0755 docker/hermes-exec-shim.sh /opt/hermes/bin/hermes
 RUN test -n "${HERMES_GIT_SHA}" && python3 scripts/write_install_stamp.py \
     --output /opt/hermes/install-stamp.json --commit "${HERMES_GIT_SHA}" \
     --branch codex/agentready-runtime --source ci --distribution docker --update-mechanism external
+# The base image's immutable provenance must identify this fork too. Retain the
+# native PM runtime pointer when replacing its install stamp.
+RUN python3 - <<'PY'
+import json
+from pathlib import Path
+stamp_path = Path("/opt/hermes/install-stamp.json")
+stamp = json.loads(stamp_path.read_text())
+stamp["pmRuntime"] = "/opt/hermes/pm-runtime"
+stamp_path.write_text(json.dumps(stamp) + "\n")
+marker_path = Path("/etc/hermes/image-provenance.json")
+marker = json.loads(marker_path.read_text())
+marker.update(image="agentready-tech/hermes-agent", revision=stamp["commit"])
+marker_path.write_text(json.dumps(marker) + "\n")
+marker_path.chmod(0o444)
+PY
 # This is a disposable build output. PM requires a fresh destination and owns
 # the pinned dependencies; never carry a previous release's editable environment.
 RUN rm -rf /opt/hermes/.venv && python3 -m pm.build_env --source /opt/hermes \
@@ -18,3 +39,7 @@ RUN rm -rf /opt/hermes/.venv && python3 -m pm.build_env --source /opt/hermes \
     --extra all --extra messaging --extra otlp --extra anthropic --extra bedrock \
     --extra azure-identity --extra matrix --extra google-chat
 RUN /opt/hermes/.venv/bin/python -m docker.build_agent
+# PM writes private facts by default; image metadata is shared with the
+# unprivileged runtime user. Match the native image's final sealing step.
+RUN chmod 0644 /opt/hermes/tools/facts.json && \
+    rm -f /opt/hermes/.venv/.lock /opt/hermes/pm-runtime/.lock
