@@ -1496,9 +1496,9 @@ class SessionMessagesMixin:
         — the parent ends up with ``message_count = 0`` rows unless messages had already been flushed to it
         before compression. See #15000.
         """
-        from agentready_runtime.adapters.hermes import enabled
+        from hermes_runtime.adapters.hermes import enabled
         if enabled():
-            from agentready_runtime.adapters.state import resolve_home
+            from hermes_runtime.adapters.state import resolve_home
             home = resolve_home(session_id)
             if home is not None:
                 return home

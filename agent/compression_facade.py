@@ -219,10 +219,10 @@ class CompressionFacadeMixin:
     """``_compress_context`` (see module docstring)."""
 
     def _compress_context(self, messages: list, system_message: str, **kwargs) -> tuple:
-        from agentready_runtime.adapters.hermes import enabled
+        from hermes_runtime.adapters.hermes import enabled
 
         if enabled():
-            from agentready_runtime.adapters.recovery import compress_with_recovery
+            from hermes_runtime.adapters.recovery import compress_with_recovery
             return compress_with_recovery(
                 self, self._agentready_native_compress_context, messages, system_message, **kwargs)
         return self._agentready_native_compress_context(messages, system_message, **kwargs)

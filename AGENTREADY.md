@@ -4,14 +4,14 @@ Upstream baseline: NousResearch/hermes-agent `main`,
 commit `53bec2a311979ad6f77580ba491eca261ab988e0` (2026-10-16).
 Managed runtime: `0.12.0`.
 
-Run managed processes with `python -m agentready_runtime serve ...` or
-`python -m agentready_runtime gateway run ...`. `--ensure-home` initializes the
+Run managed processes with `python -m hermes_runtime serve ...` or
+`python -m hermes_runtime gateway run ...`. `--ensure-home` initializes the
 existing home session. Ordinary Hermes entrypoints do not activate the adapter.
 One managed process owns one home; hooks are disabled for other profile homes.
 
 ## Ownership
 
-- `agentready_runtime/sessions.py`, `events.py`, `checkpoints.py` and `contracts.py`
+- `hermes_runtime/sessions.py`, `events.py`, `checkpoints.py` and `contracts.py`
   define AgentReady policies without importing Hermes or receiving engine objects.
 - `adapters/hermes.py` explicitly activates the owning home. `adapters/state.py`
   translates its logical session into existing Hermes SQLite lineage.
@@ -84,7 +84,7 @@ after an update while keeping the session.
 
 ```sh
 docker build --build-arg HERMES_GIT_SHA="$(git rev-parse HEAD)" -f Dockerfile.agentready -t agentready-hermes:local .
-scripts/run_tests.sh tests/agentready_runtime/
+scripts/run_tests.sh tests/hermes_runtime/
 ```
 
 If macOS Keychain rejects the Docker credential helper, use a separate public-build

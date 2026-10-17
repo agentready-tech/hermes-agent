@@ -7,7 +7,7 @@ import sys
 
 
 def test_skill_schedule_command_creates_native_main_inbox_job():
-    result = subprocess.run([sys.executable, "-m", "agentready_runtime.standalone.cli",
+    result = subprocess.run([sys.executable, "-m", "hermes_runtime.standalone.cli",
         "--home", os.environ["HERMES_HOME"], "schedule", "--when", "every 1h", "--name", "Order review",
         "Review outstanding supplier orders"], capture_output=True, text=True, timeout=20, check=False)
     assert result.returncode == 0, result.stderr

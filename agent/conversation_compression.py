@@ -3925,7 +3925,7 @@ def _run_summary_phase(
         )
         if managed_recovery:
             from functools import partial
-            from agentready_runtime.adapters.recovery import prepare_recovery
+            from hermes_runtime.adapters.recovery import prepare_recovery
             compress_fn, compress_kwargs = partial(prepare_recovery, agent), {}
         messages_before_compression = copy.deepcopy(messages)
         _activity_heartbeat = _CompressionActivityHeartbeat(
@@ -4314,7 +4314,7 @@ def compress_context(
         _fold_todo_snapshot(agent, compressed)
         compressed_user_turn_outcome = _ensure_compressed_has_user_turn(messages, compressed)
         new_system_prompt = _rebuild_system_prompt_at_boundary(agent, system_message)
-        from agentready_runtime.adapters.recovery import carried_recovery_messages
+        from hermes_runtime.adapters.recovery import carried_recovery_messages
         # Recovery can retain a non-contiguous event while offloading its large
         # tool/reply tail; only byte-identical durable twins may be rewound.
         carried_messages = carried_recovery_messages(compressed, reinserted_reply, managed_recovery)

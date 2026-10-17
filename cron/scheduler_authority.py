@@ -53,7 +53,7 @@ def _lift_pause(job_id, pause):
 
 
 def run_canonical_job(job, *, extra_prompt=None, cancel_event=None, execution_id=None):
-    from agentready_runtime.standalone.events import admit_cron
+    from hermes_runtime.standalone.events import admit_cron
     admitted = admit_cron(job, extra_prompt=extra_prompt, cancel_event=cancel_event, execution_id=execution_id)
     if admitted is not None:
         return admitted

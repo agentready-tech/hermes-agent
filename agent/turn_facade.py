@@ -31,7 +31,7 @@ class TurnFacadeMixin:
         title_user_message: Optional[str]=None,
         prelude: Optional[Generator]=None,
     ) -> dict[str, Any]:
-        from agentready_runtime.adapters.hermes import enabled
+        from hermes_runtime.adapters.hermes import enabled
         kwargs = {
             "user_message": user_message,
             "system_message": system_message,
@@ -50,7 +50,7 @@ class TurnFacadeMixin:
             "prelude": prelude,
         }
         if enabled():
-            from agentready_runtime.adapters.turns import run_conversation
+            from hermes_runtime.adapters.turns import run_conversation
             return run_conversation(self, self._agentready_native_run_conversation, **kwargs)
         return self._agentready_native_run_conversation(**kwargs)
 

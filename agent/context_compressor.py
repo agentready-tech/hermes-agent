@@ -3967,9 +3967,9 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         self, turns_to_summarize: list[dict[str, Any]], focus_topic: Optional[str] = None,
         memory_context: str = "", bypass_cooldown: bool = False,
     ) -> Optional[str]:
-        from agentready_runtime.adapters.hermes import enabled
+        from hermes_runtime.adapters.hermes import enabled
         if enabled():
-            from agentready_runtime.adapters.compaction import generate_summary
+            from hermes_runtime.adapters.compaction import generate_summary
             return generate_summary(
                 self,
                 self._agentready_native_generate_summary,

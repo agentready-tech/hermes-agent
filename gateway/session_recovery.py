@@ -90,9 +90,9 @@ class SessionRecoveryMixin:
 
     def _generate_session_key(self, source: SessionSource, key_source: Optional[SessionSource] = None) -> str:
         """Session key for *source* (profile from *source*; key from *key_source* if given)."""
-        from agentready_runtime.adapters.hermes import enabled
+        from hermes_runtime.adapters.hermes import enabled
         if enabled():
-            from agentready_runtime.sessions import HOME_SESSION_KEY
+            from hermes_runtime.sessions import HOME_SESSION_KEY
             return HOME_SESSION_KEY
         from gateway.session import build_session_key
         return build_session_key(
@@ -260,9 +260,9 @@ class SessionRecoveryMixin:
         if entry is not None and migrated_legacy:
             self._record_gateway_session_peer(
                 entry.session_id, session_key, source, display_name=entry.display_name)
-        from agentready_runtime.adapters.hermes import enabled
+        from hermes_runtime.adapters.hermes import enabled
         if enabled():
-            from agentready_runtime.adapters.gateway import recover_home
+            from hermes_runtime.adapters.gateway import recover_home
             entry = recover_home(self, entry, session_key=session_key, source=source, now=now)
         return entry
 

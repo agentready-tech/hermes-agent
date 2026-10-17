@@ -3,13 +3,13 @@
 This fork runs its dashboard, messaging gateway, native scheduler, persistent
 main inbox and optional Gmail ingress without an AgentReady application,
 Control Plane, PostgreSQL, external config generator or mandatory MCP server.
-The internal `agentready_runtime` package name is retained for compatibility.
+The fork's session adapters and autonomous services live in `hermes_runtime`.
 
 ## Start
 
 Use Python 3.14 and the native Hermes PM installation, or the fork's Docker
 image. An installed fork exposes `hermes-autonomous`; from a checkout the
-equivalent is `python -m agentready_runtime.standalone.cli`.
+equivalent is `python -m hermes_runtime.standalone.cli`.
 Foreground supervision supports Linux and macOS; use the Linux container on Windows.
 
 ```sh
@@ -49,7 +49,13 @@ the host administrator's normal procedure. Do not also run a native gateway or
 dashboard service for the same home. Inside the native s6 image, the autonomous
 owner parks the root gateway/dashboard slots before taking ownership.
 Explicit native image commands still work, including `python -m
-agentready_runtime serve` for existing integrations.
+hermes_runtime serve` for existing integrations.
+
+Custom launchers use `python -m hermes_runtime` with this fork revision.
+After updating a source installation, regenerate an existing systemd user
+service with `hermes-autonomous install-service --enable`. Update the host's
+fork installation before upgrading a Docker deployment; its stable
+`hermes-autonomous` command can manage and roll back previous fork images.
 
 ## Docker and durable data
 

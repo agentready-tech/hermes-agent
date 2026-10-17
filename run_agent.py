@@ -1332,9 +1332,9 @@ class AIAgent(
             from hermes_cli.mem_trim import trim_memory
             trim_memory(reason="large tool result")
 
-        from agentready_runtime.adapters.hermes import enabled
+        from hermes_runtime.adapters.hermes import enabled
         if enabled():
-            from agentready_runtime.adapters.turns import after_tool_group
+            from hermes_runtime.adapters.turns import after_tool_group
             after_tool_group(self, messages)
 
     def _dispatch_delegate_task(self, function_args: dict) -> str:

@@ -78,8 +78,8 @@ def _maybe_schedule_auto_continue(sid: str, session: dict, session_key: str) -> 
                     marker.get("writer_pid"), os.getpid())
         return None
     enabled, freshness_secs, max_attempts = _auto_continue_config()
-    from agentready_runtime.adapters.hermes import enabled as managed_enabled
-    from agentready_runtime.adapters.state import belongs_to_home_lineage
+    from hermes_runtime.adapters.hermes import enabled as managed_enabled
+    from hermes_runtime.adapters.state import belongs_to_home_lineage
     if managed_enabled() and belongs_to_home_lineage(session_key):
         # A continuously owned home may be offline longer than desktop's 15-minute
         # convenience window. Keep the native explicit-cancel and crash-loop guards.
@@ -405,11 +405,11 @@ def _replace_queued_user_row_for_turn(session: dict, queued: dict, is_dispatchin
 
 def _handle_busy_submit(rid, sid: str, session: dict, text: Any, transport: Any, queued: bool = False,
                         turn_author: dict | None = None, display_kind: str | None = None) -> dict | None:
-    from agentready_runtime.adapters.hermes import enabled
+    from hermes_runtime.adapters.hermes import enabled
     kwargs = dict(rid=rid, sid=sid, session=session, text=text, transport=transport,
                   queued=queued, turn_author=turn_author, display_kind=display_kind)
     if enabled():
-        from agentready_runtime.adapters.tui import busy_submit
+        from hermes_runtime.adapters.tui import busy_submit
         return busy_submit(_agentready_native_handle_busy_submit, **kwargs)
     return _agentready_native_handle_busy_submit(**kwargs)
 
