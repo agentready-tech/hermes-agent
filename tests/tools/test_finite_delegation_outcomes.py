@@ -108,7 +108,7 @@ def harness(monkeypatch, tmp_path):
 
     def dispatch(*outcomes):
         children.extend(_Child(outcome) for outcome in outcomes)
-        return json.loads(dt.delegate_task(
+        return json.loads(dt.delegate_task(ephemeral=True,
             tasks=[{"goal": f"Exercise child outcome {i}"} for i in range(len(children))],
             background=True, parent_agent=parent,
         ))

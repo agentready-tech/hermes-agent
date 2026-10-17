@@ -175,7 +175,7 @@ def test_delegate_task_credentials_cfg_overrides_delegation_config(monkeypatch):
     )
 
     override = {"provider": "openrouter", "model": "review-model-x"}
-    out = dt.delegate_task(
+    out = dt.delegate_task(ephemeral=True,
         goal="review this",
         background=True,
         parent_agent=_fake_parent(),

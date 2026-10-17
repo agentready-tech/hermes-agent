@@ -6,7 +6,7 @@ description: "Spawn isolated child agents for parallel workstreams with delegate
 
 # Subagent Delegation
 
-The `delegate_task` tool spawns child AIAgent instances with isolated context, inherited tool access, and their own terminal sessions. Each child gets a fresh conversation and works independently — only its final summary enters the parent's context.
+The `delegate_task` tool spawns child AIAgent instances with isolated context, inherited tool access, and their own terminal sessions. A new child gets its own conversation and works independently; later messages reuse that saved history. Only its final summary enters the parent's context. Children are persistent by default; `ephemeral=true` explicitly requests a one-off worker.
 
 Top-level model calls run in the background automatically. Hermes returns a handle immediately so the conversation can continue, then posts the result back as a new message. An orchestrator subagent waits for its own workers so it can synthesize their results before returning.
 
@@ -34,8 +34,9 @@ A child should wait for its builds, tests, and other bounded background commands
 
 ## Persistent projects
 
-For a long-running task, the main agent creates its own project child on demand by
-adding a stable `project` key. There is no pre-created roster or required worker profile:
+Every ordinary delegation creates a persistent child on demand. A stable `project` key
+optionally names or reuses it; omitting the key creates a unique saved identity. There
+is no pre-created roster or required worker profile:
 
 ```python
 delegate_task(tasks=[{
@@ -54,8 +55,10 @@ The returned `subagent_id` and native `session_id` remain stable between tasks a
 processes. Reusing a project key finds the existing child. New messages enter its
 SQLite inbox and run serially against its previous native conversation. The
 optional `event_id` deduplicates retries of the same source event within that project.
-An identical spawn request reuses its original receipt; use `send` for subsequent work.
-Project messages return independently, so `group` applies only to ordinary tasks.
+An identical spawn request with the same explicit project key reuses its original receipt;
+use `send` for subsequent work. Unnamed spawns remain independent even for identical goals.
+Persistent messages return independently; `group` requires explicit `ephemeral=true`.
+An idle persistent child makes no model calls until another message arrives.
 
 The main agent is instructed to search existing projects before creating another,
 delegate substantial project work, and send later facts to the existing child.
@@ -135,7 +138,7 @@ Keep schemas forgiving: require only the fields you will actually read. Tasks wi
 ## How Subagent Context Works
 
 :::warning Critical: Subagents Know Nothing
-Subagents start with a **completely fresh conversation**. They have zero knowledge of the parent's conversation history, prior tool calls, or anything discussed before delegation. The subagent's only context comes from the `goal` and `context` fields the parent agent populates when it calls `delegate_task`.
+New subagents start with a **completely fresh conversation**; reused persistent children retain their own prior turns. They have zero knowledge of the parent's conversation history, prior tool calls, or anything discussed before delegation. The subagent's only context comes from the `goal` and `context` fields the parent agent populates when it calls `delegate_task`.
 :::
 
 One exception: when the parent has a resolved workspace directory, every subagent's system prompt embeds that workspace's **project context files** (`.hermes.md` > AGENTS.md chain > CLAUDE.md > `.cursorrules` — the same discovery, priority, and size caps as the main agent's system prompt; SOUL.md is excluded). Subagents working in a repo operate under the repo's own conventions without having to rediscover them.
@@ -238,9 +241,13 @@ delegate_task(
 
 ## Batch Mode Details
 
-When a top-level agent provides a `tasks` array, Hermes returns one background handle and runs the subagents in parallel. By default the call returns **one** consolidated message once every task has finished. Results are delivered only between the parent's turns: the parent should finish anything that does not depend on the children, then end its turn rather than polling transcripts, artifacts, or CI while it waits.
+When a top-level agent provides a `tasks` array, Hermes returns saved child IDs and runs the subagents in parallel. Persistent children deliver their results independently. A caller without later-result delivery joins the parallel work in the current turn. Results are delivered only between the parent's turns: the parent should finish anything that does not depend on the children, then end its turn rather than polling transcripts, artifacts, or CI while it waits.
 
-### Independent completions (opt-in)
+### Explicit ephemeral batches
+
+The rest of this subsection applies only to calls with `ephemeral=true`. These workers
+do not keep a reusable project identity; their existing native transcripts remain saved.
+By default an ephemeral batch delivers one consolidated result.
 
 Set `delegation.independent_completions: true` to have results land **per completion unit** as each finishes instead. The model-facing `group` field and grouping guidance are only advertised when this option is enabled. Start a new session after changing it so the tool schema can reflect the setting without changing an existing conversation's cached prefix. Old calls containing `group` remain accepted; with the option off, the whole call still returns together.
 
@@ -253,7 +260,7 @@ When independent completions are enabled:
 This is off by default because every unit is a new turn for the orchestrator: a 15-task call becomes up to 15 wake-ups, which fragmented long campaigns. Grouping controls **result delivery, not execution order**: all tasks still run in parallel. If task B needs task A's output to do its work, dispatch A first, then dispatch B with that output after A returns.
 
 ```json
-{"tasks": [
+{"ephemeral": true, "tasks": [
   {"goal": "Review PR #101 ..."},
   {"goal": "Review PR #102 ..."},
   {"goal": "Benchmark approach A ...", "group": "bench"},
@@ -281,8 +288,9 @@ consumers use a durable claim, so only the consumer that successfully accepts
 the synthetic turn acknowledges delivery; failed attempts release the claim for
 retry.
 
-For ordinary tasks without a `project` key, this does not resume child execution after a crash. A delegation whose owner
-process disappears while it is still running is recorded as `unknown`, because
+Only explicitly ephemeral calls lack project-queue execution recovery after a crash.
+Ordinary tasks, including those without a `project` key, resume through the persistent
+queue described above. An ephemeral delegation whose owner process disappears while it is still running is recorded as `unknown`, because
 Hermes cannot prove whether its external side effects happened. Pending and
 delivered records are bounded and profile-local.
 
@@ -348,7 +356,7 @@ Note that the pin is global: `delegate_task` has no per-task model parameter, so
 
 ## The `/review` Command
 
-`/review` spawns an independent, full-privilege background subagent whose only job is to review the work your conversation just produced — a PR, a diff, code, documentation, a design. It works on every surface: CLI, TUI, the Desktop app, and every gateway messaging platform.
+`/review` explicitly selects a one-off (`ephemeral=true`), independent, full-privilege background subagent whose only job is to review the work your conversation just produced — a PR, a diff, code, documentation, a design. It works on every surface: CLI, TUI, the Desktop app, and every gateway messaging platform.
 
 ```
 /review                       # review whatever the last 10 messages presented

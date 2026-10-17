@@ -309,7 +309,7 @@ class TestDelegateTaskDispatch:
                 },
             ),
         ):
-            out = delegate_task(
+            out = delegate_task(ephemeral=True,
                 tasks=[
                     {"goal": "Summarize the release notes for module A", "output_schema": "not-a-dict"},
                     {"goal": "Summarize the release notes for module B"},
@@ -334,7 +334,7 @@ class TestDelegateTaskDispatch:
                 },
             ),
         ):
-            out = delegate_task(
+            out = delegate_task(ephemeral=True,
                 tasks=[
                     {"goal": "Summarize the release notes for module A", "output_schema": {"type": 42}},
                     {"goal": "Summarize the release notes for module B"},
@@ -372,7 +372,7 @@ class TestDelegateTaskDispatch:
                 side_effect=fake_build,
             ),
         ):
-            out = delegate_task(
+            out = delegate_task(ephemeral=True,
                 goal="produce the address",
                 context="base context",
                 output_schema=ADDRESS_SCHEMA,

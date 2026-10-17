@@ -169,13 +169,13 @@ class TestStripBlockedTools(unittest.TestCase):
 
 class TestDelegateTask(unittest.TestCase):
     def test_no_parent_agent(self):
-        result = json.loads(delegate_task(goal="test"))
+        result = json.loads(delegate_task(ephemeral=True, goal="test"))
         self.assertIn("error", result)
         self.assertIn("parent agent", result["error"])
 
     def test_depth_limit(self):
         parent = _make_mock_parent(depth=2)
-        result = json.loads(delegate_task(goal="test", parent_agent=parent))
+        result = json.loads(delegate_task(ephemeral=True, goal="test", parent_agent=parent))
         self.assertIn("error", result)
         self.assertIn("depth limit", result["error"].lower())
 
@@ -196,7 +196,7 @@ class TestDelegateTask(unittest.TestCase):
             }
             MockAgent.return_value = mock_child
 
-            delegate_task(goal="Test runtime inheritance", parent_agent=parent)
+            delegate_task(ephemeral=True, goal="Test runtime inheritance", parent_agent=parent)
 
             _, kwargs = MockAgent.call_args
             self.assertEqual(kwargs["base_url"], parent.base_url)
@@ -404,7 +404,7 @@ class TestToolNamePreservation(unittest.TestCase):
             }
             MockAgent.return_value = mock_child
 
-            delegate_task(goal="Test tool preservation", parent_agent=parent)
+            delegate_task(ephemeral=True, goal="Test tool preservation", parent_agent=parent)
 
         self.assertEqual(model_tools._last_resolved_tool_names, original_tools)
 
@@ -439,7 +439,7 @@ class TestDelegateObservability(unittest.TestCase):
             }
             MockAgent.return_value = mock_child
 
-            result = json.loads(delegate_task(goal="Test observability", parent_agent=parent))
+            result = json.loads(delegate_task(ephemeral=True, goal="Test observability", parent_agent=parent))
             entry = result["results"][0]
 
             # Core observability fields
@@ -484,7 +484,7 @@ class TestDelegateObservability(unittest.TestCase):
             }
             MockAgent.return_value = mock_child
 
-            result = json.loads(delegate_task(goal="Test list content", parent_agent=parent))
+            result = json.loads(delegate_task(ephemeral=True, goal="Test list content", parent_agent=parent))
             trace = result["results"][0]["tool_trace"]
             self.assertEqual(trace[0]["tool"], "image_generate")
             self.assertEqual(trace[0]["status"], "ok")
@@ -518,7 +518,7 @@ class TestDelegateObservability(unittest.TestCase):
             }
             MockAgent.return_value = mock_child
 
-            result = json.loads(delegate_task(goal="Test parallel", parent_agent=parent))
+            result = json.loads(delegate_task(ephemeral=True, goal="Test parallel", parent_agent=parent))
             trace = result["results"][0]["tool_trace"]
 
             # All three tool calls should have results
@@ -561,7 +561,7 @@ class TestDelegateObservability(unittest.TestCase):
             }
             MockAgent.return_value = mock_child
 
-            result = json.loads(delegate_task(goal="Test empty sentinel", parent_agent=parent))
+            result = json.loads(delegate_task(ephemeral=True, goal="Test empty sentinel", parent_agent=parent))
             self.assertEqual(result["results"][0]["status"], "failed")
 
     def test_failed_child_with_error_summary_marks_status_failed(self):
@@ -593,7 +593,7 @@ class TestDelegateObservability(unittest.TestCase):
             MockAgent.return_value = mock_child
 
             result = json.loads(
-                delegate_task(goal="Test failed child", parent_agent=parent)
+                delegate_task(ephemeral=True, goal="Test failed child", parent_agent=parent)
             )
             entry = result["results"][0]
             self.assertEqual(entry["status"], "failed")
@@ -626,7 +626,7 @@ class TestDelegateObservability(unittest.TestCase):
             MockAgent.return_value = mock_child
 
             result = json.loads(
-                delegate_task(goal="Test success control", parent_agent=parent)
+                delegate_task(ephemeral=True, goal="Test success control", parent_agent=parent)
             )
             entry = result["results"][0]
             self.assertEqual(entry["status"], "completed")
@@ -657,7 +657,7 @@ class TestDelegateFailedChildStatus(unittest.TestCase):
             mock_child.run_conversation.return_value = child_result
             MockAgent.return_value = mock_child
             result = json.loads(
-                delegate_task(goal="Test child status", parent_agent=parent)
+                delegate_task(ephemeral=True, goal="Test child status", parent_agent=parent)
             )
             return result["results"][0]
 
@@ -772,7 +772,7 @@ class TestSubagentCostRollup(unittest.TestCase):
             }
             MockAgent.return_value = mock_child
 
-            result = json.loads(delegate_task(goal="do stuff", parent_agent=parent))
+            result = json.loads(delegate_task(ephemeral=True, goal="do stuff", parent_agent=parent))
 
         # Parent footer must reflect parent_cost + child_cost.
         self.assertAlmostEqual(parent.session_estimated_cost_usd, 0.52, places=6)
@@ -815,7 +815,7 @@ class TestSubagentCostRollup(unittest.TestCase):
                 },
             ]
             result = json.loads(
-                delegate_task(
+                delegate_task(ephemeral=True,
                     tasks=[
                         {"goal": "Investigate module A"},
                         {"goal": "Investigate module B"},
@@ -1011,7 +1011,7 @@ class TestDelegationProviderIntegration(unittest.TestCase):
             }
             MockAgent.return_value = mock_child
 
-            delegate_task(goal="Cross-provider test", parent_agent=parent)
+            delegate_task(ephemeral=True, goal="Cross-provider test", parent_agent=parent)
 
             _, kwargs = MockAgent.call_args
             # Child should use OpenRouter, NOT Nous
@@ -1032,7 +1032,7 @@ class TestDelegationProviderIntegration(unittest.TestCase):
         )
         parent = _make_mock_parent(depth=0)
 
-        result = json.loads(delegate_task(goal="Should fail", parent_agent=parent))
+        result = json.loads(delegate_task(ephemeral=True, goal="Should fail", parent_agent=parent))
         self.assertIn("error", result)
         self.assertNotIn("results", result)
 
@@ -1537,7 +1537,7 @@ class TestDispatchDelegateTask(unittest.TestCase):
         with patch("tools.delegate_tool.delegate_task", fake_delegate_task):
             run_agent.AIAgent._dispatch_delegate_task(
                 parent,
-                {
+                {"ephemeral": True,
                     "goal": "test",
                     "acp_command": "claude",
                     "acp_args": ["--acp", "--stdio"],
@@ -1657,7 +1657,7 @@ class TestOrchestratorRoleSchema(unittest.TestCase):
             kwargs = {"goal": "test", "parent_agent": parent}
             if role_arg is not _SENTINEL:
                 kwargs["role"] = role_arg
-            delegate_task(**kwargs)
+            delegate_task(ephemeral=True, **kwargs)
             return mock_child
 
     def test_role_is_depth_derived_not_caller_declared(self):
@@ -1727,7 +1727,7 @@ class TestOrchestratorRoleBehavior(unittest.TestCase):
         with patch("run_agent.AIAgent") as MockAgent:
             mock_child = _make_role_mock_child()
             MockAgent.return_value = mock_child
-            delegate_task(goal="test", role="orchestrator", parent_agent=parent)
+            delegate_task(ephemeral=True, goal="test", role="orchestrator", parent_agent=parent)
             kwargs = MockAgent.call_args[1]
             self.assertIn("delegation", kwargs["enabled_toolsets"])
             self.assertEqual(mock_child._delegate_role, "orchestrator")
@@ -1749,7 +1749,7 @@ class TestOrchestratorRoleBehavior(unittest.TestCase):
         with patch("run_agent.AIAgent") as MockAgent:
             mock_child = _make_role_mock_child()
             MockAgent.return_value = mock_child
-            delegate_task(goal="test", role="orchestrator", parent_agent=parent)
+            delegate_task(ephemeral=True, goal="test", role="orchestrator", parent_agent=parent)
             kwargs = MockAgent.call_args[1]
             self.assertNotIn("delegation", kwargs["enabled_toolsets"])
             self.assertEqual(mock_child._delegate_role, "leaf")
@@ -1826,7 +1826,7 @@ class TestOrchestratorEndToEnd(unittest.TestCase):
 
                 def _orchestrator_run(user_message=None, task_id=None, stream_callback=None):
                     # Re-entrant: orchestrator spawns two leaves
-                    delegate_task(
+                    delegate_task(ephemeral=True,
                         tasks=[
                             {"goal": "Do leaf work stream A"},
                             {"goal": "Do leaf work stream B"},
@@ -1843,7 +1843,7 @@ class TestOrchestratorEndToEnd(unittest.TestCase):
             return m
 
         with patch("run_agent.AIAgent", side_effect=_factory) as MockAgent:
-            delegate_task(
+            delegate_task(ephemeral=True,
                 goal="top-level orchestration",
                 role="orchestrator",
                 parent_agent=parent,

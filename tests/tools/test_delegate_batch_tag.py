@@ -104,7 +104,7 @@ def test_batch_completion_lines_are_attributable_across_two_batches(monkeypatch,
     import re
 
     for n in (3, 9):
-        res = dt.delegate_task(
+        res = dt.delegate_task(ephemeral=True,
             tasks=[{"goal": f"batch of {n}: worker task number {i}"} for i in range(n)],
             parent_agent=parent,
         )

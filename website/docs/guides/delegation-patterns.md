@@ -8,6 +8,10 @@ description: "When and how to use subagent delegation — patterns for parallel 
 
 Hermes can spawn isolated child agents to work on tasks in parallel. Each subagent gets its own conversation, terminal session, and toolset. Only the final summary comes back — intermediate tool calls never enter your context window.
 
+Children are persistent by default. Search existing children before spawning another,
+and send later facts to the same child's ID. Only explicit `ephemeral=true` requests
+a disposable worker; a project key is optional. Idle saved children make no model calls.
+
 For the full feature reference, see [Subagent Delegation](../user-guide/features/delegation.md).
 
 ---
@@ -25,7 +29,7 @@ For the full feature reference, see [Subagent Delegation](../user-guide/features
 - Mechanical multi-step work with logic between steps → `execute_code`
 - Tasks needing user interaction → subagents can't use `clarify`
 - Quick file edits → do them directly
-- Durable long-running work that must survive session closure or process restart → `cronjob_manage` or `terminal(background=True, notify_on_complete=True)`. Top-level delegation is asynchronous but still process-local.
+- Future scheduled triggers → `cronjob_manage`. Ongoing project work belongs to a persistent child; its accepted messages and native history survive process restart.
 
 ---
 
@@ -221,7 +225,7 @@ delegation:
 - **Separate terminals** — each subagent gets its own terminal session with separate working directory and state
 - **No conversation history** — subagents see only the `goal` and `context` the parent agent passes when calling `delegate_task`
 - **Default 250 iterations** — set `delegation.max_iterations` lower in `config.yaml` for fleets of simple tasks to save cost
-- **Not durable** — top-level delegation runs in the background and posts its result back later, but it remains tied to the owning session and Hermes process. Session closure, `/stop`, `/new`, or a process restart can cancel or strand in-progress work. Use `cronjob_manage` or `terminal(background=True, notify_on_complete=True)` for work that must survive those boundaries.
+- **Persistent by default** — child identity, accepted messages and native history survive process restart. Completed answers are recovered without rerunning their tools. An explicit stop pauses the child; `send` resumes it. Only an explicit `ephemeral=true` worker lacks a reusable project queue.
 
 ---
 

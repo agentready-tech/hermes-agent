@@ -27,7 +27,7 @@ dd._Batch.run_child = fake_run_child
 # Background dispatch requires an async-capable session; emulate a CLI session key.
 import tools.async_delegation as ad
 t0 = time.time()
-out = dt.delegate_task(# Grouped: siblings share ONE final result, so a dead sibling would otherwise wait for the slowest. (Ungrouped tasks are
+out = dt.delegate_task(ephemeral=True, # Grouped: siblings share ONE final result, so a dead sibling would otherwise wait for the slowest. (Ungrouped tasks are
 # their own async unit since the per-group split landed on main and already report as they finish.)
 tasks=[{"goal": "fail fast on a simulated 401 error", "group": "g"}, {"goal": "slow successful worker number one", "group": "g"}, {"goal": "slow successful worker number two", "group": "g"}], background=True, parent_agent=parent)
 print("dispatch:", json.dumps(json.loads(out))[:160])

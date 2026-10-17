@@ -43,7 +43,7 @@ def _make_mock_parent(depth=0):
 
 
 def _call(tasks):
-    return json.loads(delegate_task(tasks=tasks, parent_agent=_make_mock_parent()))
+    return json.loads(delegate_task(ephemeral=True, tasks=tasks, parent_agent=_make_mock_parent()))
 
 
 GOOD_A = "Refactor the login handler to use the new session helper"
@@ -173,7 +173,7 @@ class TestValidBatchStillRuns(unittest.TestCase):
                 "task_index": 0, "status": "completed", "summary": "ok",
                 "api_calls": 1, "duration_seconds": 1.0, "_child_role": None,
             }
-            result = json.loads(delegate_task(goal="test", parent_agent=parent))
+            result = json.loads(delegate_task(ephemeral=True, goal="test", parent_agent=parent))
         self.assertNotIn("error", result)
 
 

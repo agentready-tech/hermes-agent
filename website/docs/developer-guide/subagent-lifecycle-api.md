@@ -5,6 +5,11 @@ sidebar_label: Subagent lifecycle API
 
 # Public Subagent Lifecycle API
 
+This page describes the plugin's transient execution-handle contract. The
+model-facing `delegate_task` tool creates persistent children by default;
+`ephemeral=true` explicitly requests its transient runner. Existing lifecycle
+handles keep the process-local semantics documented here.
+
 Plugins can launch and supervise fresh Hermes child sessions without importing
 `tools.delegate_tool`, gateway internals, TUI state, or `AIAgent` fields.
 The service resolves its parent from the current agent turn, so it works in

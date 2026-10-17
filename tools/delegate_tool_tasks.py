@@ -121,6 +121,17 @@ def _coerce_task_schemas(
         task_schemas.append(coerced_schema)
     return task_schemas, None
 
+
+def _validate_persistence_mode(task_list: list[dict[str, Any]], ephemeral: bool) -> Optional[str]:
+    """Durability is the default; ambiguous input must never select the transient runner."""
+    if not isinstance(ephemeral, bool):
+        return "ephemeral must be a boolean; set true only for a deliberately one-off delegation."
+    if ephemeral and any("project" in task for task in task_list):
+        return "ephemeral=true cannot be combined with a persistent project key."
+    if not ephemeral and any(task.get("group") for task in task_list):
+        return "Persistent children return independently. Omit group, or explicitly use ephemeral=true for a grouped one-off batch."
+    return None
+
 # Per-task image ceiling: enough for screenshots/mocks while keeping the child's first request small.
 _MAX_TASK_IMAGES = 8
 

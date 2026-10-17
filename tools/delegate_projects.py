@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import time
+import uuid
 
 from tools.delegate_project_store import ProjectStore, _transaction
 
@@ -102,9 +103,9 @@ def _build_child(parent, store, project, message):
 
 
 def _run(parent, store, project, message, child, text):
-    from tools.delegate_tool import _run_single_child
+    from tools.delegate_tool import _run_child_lifecycle
     try:
-        result = _run_single_child(task_index=0, goal=text, child=child, parent_agent=parent,
+        result = _run_child_lifecycle(task_index=0, goal=text, child=child, parent_agent=parent,
                                    **child._delegate_owner_kwargs)
         result.update(subagent_id=project["subagent_id"], session_id=child.session_id,
                       project=project["project_key"], message_id=message["message_id"])
@@ -129,51 +130,77 @@ def recover_projects(parent):
 
 
 def _recover_projects(parent, store):
-    from tools.async_delegation import dispatch_async_delegation
     from tools.delegate_tool import _get_max_concurrent_children, is_spawn_paused
     if is_spawn_paused():
         return []
-    outcomes = []
-    for project in store.projects():
-        for receipt in store.receipts(project["subagent_id"]):
-            _publish_completed(store, project, receipt, json.loads(receipt["result_json"]))
-        if project["archived"]:
-            continue
-        while (message := store.claim(project)) is not None:
-            result = store.committed_result(project, message)
-            if result:
-                store.settle(project, message, result)
-                _publish_completed(store, project, message, result)
-                outcomes.append(result)
-                continue
-            try:
-                child, text = _build_child(parent, store, project, message)
-            except Exception:
-                store.release(message)
-                raise
-            origin = json.loads(message["origin_json"])
-            if origin.get("wake"):
-                # Capture each iteration's objects, never the loop's mutable cells.
-                def runner(p=project, m=message, c=child, t=text):
-                    try:
-                        with ProjectStore(parent) as worker_store:
-                            return _run(parent, worker_store, p, m, c, t)
-                    finally:
-                        recover_projects(parent)
-                handle = dispatch_async_delegation(goal=f"Project {project['project_key']}: {project['goal']}",
-                    context=project["context"], toolsets=None, role="leaf", model=child.model,
-                    session_key=origin.get("session_key") or store.parent_id, parent_session_id=store.parent_id,
-                    origin_ui_session_id=origin.get("origin_ui_session_id", ""), origin_session_id=store.parent_id,
-                    delegation_id=message["message_id"], routing_origin=origin, runner=runner,
-                    interrupt_fn=lambda sid=project["subagent_id"]: _pause_child(parent, sid),
-                    max_async_children=_get_max_concurrent_children())
-                if handle["status"] != "dispatched":
-                    child.close()
-                    store.release(message)
-                outcomes.append(handle)
+    from concurrent.futures import wait
+    from tools.daemon_pool import DaemonThreadPoolExecutor
+    projects = store.projects()
+    if len(projects) < 2:
+        return _recover_project(parent, store, projects[0]) if projects else []
+    executor = DaemonThreadPoolExecutor(max_workers=_get_max_concurrent_children())
+    futures = [executor.submit(_recover_project_scoped, parent, project) for project in projects]
+    pending = set(futures)
+    interrupted = False
+    try:
+        while pending:
+            if getattr(parent, "_interrupt_requested", False):
+                interrupted = True
                 break
-            result = _run(parent, store, project, message, child, text)
+            _, pending = wait(pending, timeout=0.5)
+        return [result for future in futures if future.done() and not future.cancelled() for result in future.result()]
+    finally:
+        executor.shutdown(wait=not interrupted, cancel_futures=interrupted)
+
+
+def _recover_project_scoped(parent, project):
+    with ProjectStore(parent) as store:
+        return _recover_project(parent, store, project)
+
+
+def _recover_project(parent, store, project):
+    from tools.async_delegation import dispatch_async_delegation
+    from tools.delegate_tool import _get_max_concurrent_children
+    outcomes = []
+    for receipt in store.receipts(project["subagent_id"]):
+        _publish_completed(store, project, receipt, json.loads(receipt["result_json"]))
+    if project["archived"]:
+        return outcomes
+    while not getattr(parent, "_interrupt_requested", False) and (message := store.claim(project)) is not None:
+        result = store.committed_result(project, message)
+        if result:
+            store.settle(project, message, result)
+            _publish_completed(store, project, message, result)
             outcomes.append(result)
+            continue
+        try:
+            child, text = _build_child(parent, store, project, message)
+        except Exception:
+            store.release(message)
+            raise
+        origin = json.loads(message["origin_json"])
+        if origin.get("wake"):
+            # Capture each iteration's objects, never the loop's mutable cells.
+            def runner(p=project, m=message, c=child, t=text):
+                try:
+                    with ProjectStore(parent) as worker_store:
+                        return _run(parent, worker_store, p, m, c, t)
+                finally:
+                    recover_projects(parent)
+            handle = dispatch_async_delegation(goal=f"Project {project['project_key']}: {project['goal']}",
+                context=project["context"], toolsets=None, role="leaf", model=child.model,
+                session_key=origin.get("session_key") or store.parent_id, parent_session_id=store.parent_id,
+                origin_ui_session_id=origin.get("origin_ui_session_id", ""), origin_session_id=store.parent_id,
+                delegation_id=message["message_id"], routing_origin=origin, runner=runner,
+                interrupt_fn=lambda sid=project["subagent_id"]: _pause_child(parent, sid),
+                max_async_children=_get_max_concurrent_children())
+            if handle["status"] != "dispatched":
+                child.close()
+                store.release(message)
+            outcomes.append(handle)
+            break
+        result = _run(parent, store, project, message, child, text)
+        outcomes.append(result)
     return outcomes
 
 
@@ -209,29 +236,33 @@ def _project_action(parent, store, action, tasks, subagent_id, message, query, e
         return {"project": {k: v for k, v in project.items() if k != "instruction"}, "messages": [{"role": m["role"], "content": str(m.get("content") or "")[:2000]} for m in history[-12:]],
                 "note": "Recent conversation excerpt; use session_search with this session_id for older evidence."}
     origin = _origin()
+    if getattr(parent, "_delegate_depth", 0) > 0:
+        # Nested owners need results in their current turn, not in the root UI's inbox.
+        origin = {**origin, "wake": False}
     entries = []
     if action == "spawn":
-        if not tasks or any(not t.get("project") or not isinstance(t.get("goal"), str) or not t["goal"].strip() for t in tasks):
-            raise ValueError("Use a nonempty project key and goal on every persistent task; submit ephemeral tasks separately")
+        if not tasks or any(not isinstance(t.get("goal"), str) or not t["goal"].strip() for t in tasks):
+            raise ValueError("Use a nonempty goal on every persistent task")
         # Validate the whole batch before accepting any project input.
         for task in tasks:
-            if not isinstance(task["project"], str) or not task["project"].strip():
+            if "project" in task and (not isinstance(task["project"], str) or not task["project"].strip()):
                 raise ValueError("project must be a nonempty string")
             if task.get("context") is not None and not isinstance(task["context"], str):
                 raise ValueError("Project context must be text")
             if task.get("group"):
                 raise ValueError("Persistent project messages return independently; omit group on project tasks")
         archived = {p["project_key"] for p in store.projects() if p["archived"]}
-        if any(t["project"].strip() in archived for t in tasks):
+        if any(t.get("project", "").strip() in archived for t in tasks):
             raise ValueError("A project in this batch is archived; choose another key")
         for task in tasks:
             from tools.delegate_tool_progress import _resolve_workspace_hint
-            project = store.create(task["project"], task["goal"], task.get("context"), _resolve_workspace_hint(parent))
+            key = task.get("project") or "task-" + uuid.uuid4().hex
+            project = store.create(key, task["goal"], task.get("context"), _resolve_workspace_hint(parent))
             text = task["goal"] + ("\n\n" + task["context"] if task.get("context") else "")
             options = {k: task[k] for k in ("images", "output_schema") if task.get(k) is not None}
             seed = "spawn:" + hashlib.sha256(json.dumps([text, options], sort_keys=True).encode()).hexdigest()
             mid = store.enqueue(project, text, origin, seed, options)
-            entries.append({"subagent_id": project["subagent_id"], "session_id": project["session_id"], "message_id": mid})
+            entries.append({"subagent_id": project["subagent_id"], "session_id": project["session_id"], "project": project["project_key"], "message_id": mid})
     elif action == "send":
         project = store.get(subagent_id)
         store.pause(subagent_id, False)
@@ -245,6 +276,8 @@ def _project_action(parent, store, action, tasks, subagent_id, message, query, e
         entry["status"] = receipt["state"]
         if receipt["result_json"]:
             entry["result"] = json.loads(receipt["result_json"])
+    order = {entry["message_id"]: index for index, entry in enumerate(entries)}
+    results.sort(key=lambda result: order.get(result.get("message_id") or result.get("delegation_id"), len(order)))
     return {"projects": entries, "results": results}
 
 

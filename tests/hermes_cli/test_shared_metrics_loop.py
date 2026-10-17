@@ -214,7 +214,7 @@ def test_delegate_task_call_is_one_row_however_many_children(home, monkeypatch):
         session_id="root", model="m", tool_progress_callback=None, _delegate_spinner=None, _safe_print=lambda _l: None,
     )
 
-    dt.delegate_task(tasks=[{"goal": f"worker task number {i}"} for i in range(3)], parent_agent=parent)
+    dt.delegate_task(ephemeral=True, tasks=[{"goal": f"worker task number {i}"} for i in range(3)], parent_agent=parent)
 
     assert _rows(home, "hermes.delegation.run.count") == [(
         {"depth": "1", "mode": "foreground", "outcome": "partial", "subagent_count_bucket": "3_to_5"}, 1,

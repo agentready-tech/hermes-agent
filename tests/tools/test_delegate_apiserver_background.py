@@ -123,7 +123,7 @@ def test_apiserver_session_with_id_dispatches_background(monkeypatch):
         async_delivery=False,
     )
 
-    out = dt.delegate_task(
+    out = dt.delegate_task(ephemeral=True,
         goal="bg on api_server", context="ctx",
         background=True, parent_agent=_fake_parent(),
     )
@@ -159,7 +159,7 @@ def test_apiserver_session_without_id_stays_synchronous(monkeypatch):
         async_delivery=False,
     )
 
-    out = dt.delegate_task(
+    out = dt.delegate_task(ephemeral=True,
         goal="one-shot", context="ctx",
         background=True, parent_agent=_fake_parent(),
     )

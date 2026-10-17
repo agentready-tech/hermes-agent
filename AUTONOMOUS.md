@@ -4,6 +4,10 @@ This fork runs its dashboard, messaging gateway, native scheduler, persistent
 main inbox and optional Gmail ingress without an AgentReady application,
 Control Plane, PostgreSQL, external config generator or mandatory MCP server.
 The fork's session adapters and autonomous services live in `hermes_runtime`.
+Delegation creates reusable persistent children by default; only an explicit
+`ephemeral=true` call creates one-off workers. A missing project name receives
+an automatic saved identity. Use `send` with its returned subagent ID to continue
+the same history; `project` is an optional stable name for finding/reusing it.
 
 ## Start
 

@@ -2,7 +2,7 @@
 """
 Delegate Tool -- Subagent Architecture
 
-Spawns child AIAgent instances with a fresh conversation, their own task_id
+Spawns reusable child AIAgent instances with saved conversations and their own task_id
 (terminal session, file-ops cache), the parent's toolsets minus child-blocked
 tools, and a focused system prompt built from goal + context. Single-task and
 batch (parallel) modes; top-level model calls run in the background while
@@ -49,7 +49,7 @@ from tools.delegate_tool_registry import (
     steer_subagent,
 )
 from tools.delegate_tool_tasks import (
-    _MAX_TASK_IMAGES, _coerce_task_images, _coerce_task_schemas, _normalize_task_images, _normalize_task_list,
+    _MAX_TASK_IMAGES, _coerce_task_images, _coerce_task_schemas, _normalize_task_images, _normalize_task_list, _validate_persistence_mode,
 )
 from tools.delegate_tool_toolsets import (
     DELEGATE_BLOCKED_TOOLS, _expand_parent_toolsets, _resolve_child_toolsets, _strip_blocked_tools,
@@ -494,7 +494,7 @@ def delegate_task(
     output_schema: Optional[dict[str, Any]] = None, images: Optional[list[str]] = None, action: Optional[str] = None,
     subagent_id: Optional[str] = None, message: Optional[str] = None, parent_agent=None,
     credentials_cfg: Optional[dict[str, Any]] = None,
-    query: str = "", event_id: Optional[str] = None,
+    query: str = "", event_id: Optional[str] = None, ephemeral: bool = False,
 ) -> str:
     """Spawn child agents (single ``goal`` or ``tasks=[...]`` batch) or control running ones. ``action``
     list/steer/stop run synchronously and bypass the pause gate, depth limit and async dispatch. ``role`` is legacy
@@ -568,13 +568,15 @@ def delegate_task(
         task_schemas, err = _coerce_task_schemas(task_list, output_schema)
     if not err:
         task_images, err = _coerce_task_images(task_list, images)
+    if not err:
+        err = _validate_persistence_mode(task_list, ephemeral)
     if err:
         return tool_error(err)
     err = _oneshot_spawn_budget(parent_agent, len(task_list))
     if err:
         return tool_error(err)
 
-    if any("project" in task for task in task_list):
+    if not ephemeral:
         try:
             project_tasks = [{**task, "images": task_images[i], "output_schema": task_schemas[i]}
                              for i, task in enumerate(task_list)]
@@ -649,20 +651,23 @@ def _build_top_level_description(*, independent_completions=None) -> str:
     return _DESCRIPTION_HEAD.format(delivery=delivery) + restrictions_rule + _DESCRIPTION_TAIL
 
 _DESCRIPTION_HEAD = (
-    "Spawn subagents in isolated contexts; each gets its own conversation, terminal session, and toolset, and only its "
+    "Spawn persistent subagents by default in isolated contexts; each gets its own conversation, terminal session, and toolset, and only its "
     "final summary returns to you. Pass every task in `tasks` — one entry spawns one subagent, several run in parallel "
     "(limit in the tasks description).\n\n"
     "Sessions without a later-result consumer (including one-shot CLI and cron) join parallel children "
     "and return results in this tool call. "
-    "Otherwise runs in the background: dispatch returns live transcript paths and results re-enter "
-    "as a new message when subagents finish ({delivery}). Background results are delivered only "
+    "Otherwise runs in the background: dispatch returns child/delegation IDs (ephemeral runs also return transcript paths) and results re-enter "
+    "as a new message when subagents finish. Persistent children return independently; explicitly ephemeral batches use "
+    "{delivery}. Background results are delivered only "
     "BETWEEN your turns: finish whatever does not depend on them, then give a one-line status and END YOUR TURN. Never "
     "wait or poll on transcripts, artifact files, or CI for a child. "
     "While children run, `action` (list/steer/stop) controls them live.\n\n"
     "USE FOR: reasoning-heavy subtasks, work that would flood your context, or independent parallel workstreams.\n"
-    "For a long-running task or project, first action='list' (optionally query its topic), then set a stable "
-    "'project' key on the task to create/reuse its persistent child conversation. You create these children "
-    "on demand; no pre-created specialists are needed. Route later requirements, external events and new "
+    "Every ordinary spawn creates a reusable persistent child, including tasks without a project key. "
+    "First action='list' (optionally query its topic) to reuse an existing child. An optional stable 'project' "
+    "key names/reuses a project; without one, Hermes assigns a unique key and returns the child's ID. "
+    "Use ephemeral=true only when you deliberately need a one-off worker with no follow-up identity, such as "
+    "an independent spot-check or disposable parallel comparison. You create children on demand. Route later requirements, external events and new "
     "evidence to that same child with action='send', subagent_id and message. Read its history/results with "
     "action='read'. Keep coordination and user communication in your own conversation; delegate substantial "
     "project work and verify child claims against original sources. Persistent project inboxes and histories "
@@ -671,7 +676,7 @@ _DESCRIPTION_HEAD = (
     "- Mechanical multi-step work with no reasoning needed -> execute_code\n"
     "- A single tool call -> call the tool directly\n"
     "- Tasks needing user interaction -> subagents cannot ask questions\n"
-    "- Ordinary tasks without a project key end with this process; for durable project work use a project key. /stop, /new, "
+    "- Explicitly ephemeral tasks end with this process. Persistent histories and accepted queues remain saved. /stop, /new, "
     "or process exit halts running subagents (whole tree); each returns an 'interrupted' completion with partial output.\n\n"
     "RULES:\n"
     "- Children know nothing of this conversation: pass everything needed via 'context', including any required "
@@ -757,7 +762,7 @@ DELEGATE_TASK_SCHEMA = {
                             "Background THIS child needs: file paths, error messages, constraints. Each child "
                             "sees only its own context — repeat shared background in every task that needs it.",
                         ),
-                        "project": _p("string", "Optional stable key for a long-running project/task. Creates its own persistent session automatically; reuse the key or returned subagent_id for follow-ups. Omit for a short-lived child."),
+                        "project": _p("string", "Optional stable project/task name to create or reuse. Children are persistent even when omitted: Hermes assigns a unique key. Continue using the returned subagent_id. Cannot be combined with ephemeral=true."),
                         "output_schema": _p(
                             "object",
                             "Optional JSON Schema this child's final answer must validate against (told to the "
@@ -775,7 +780,7 @@ DELEGATE_TASK_SCHEMA = {
                         ),
                         "group": _p(
                             "string",
-                            "Optional result-delivery bucket within this call (only when delegation.independent_completions "
+                            "For explicitly ephemeral=true batches only: optional result-delivery bucket (when delegation.independent_completions "
                             "is enabled; otherwise the whole call returns as one message). Tasks sharing a group return "
                             "together in ONE message; ungrouped tasks return individually as each finishes. This does not "
                             "order execution; if B needs A's output, dispatch B after A returns.",
@@ -787,6 +792,7 @@ DELEGATE_TASK_SCHEMA = {
             },
             # `background` (bool) is also accepted — DEPRECATED, ignored: top-level
             # delegations always run in the background. Unadvertised; do not re-add.
+            "ephemeral": _p("boolean", "Default false: create reusable persistent children with saved history and restart recovery. Set true explicitly for a one-off worker; its live execution cannot resume after process loss. Applies to all tasks in this call.", default=False),
             "action": _p(
                 "string",
                 "Default 'spawn'. 'send' continues a persistent project child (subagent_id + message); "
@@ -841,7 +847,7 @@ registry.register(
         max_iterations=args.get("max_iterations"), role=args.get("role"),
         background=_model_background_value(args, kw.get("parent_agent")), output_schema=args.get("output_schema"),
         images=args.get("images"), action=args.get("action"), subagent_id=args.get("subagent_id"), message=args.get("message"),
-        query=args.get("query", ""), event_id=args.get("event_id"),
+        query=args.get("query", ""), event_id=args.get("event_id"), ephemeral=args.get("ephemeral", False),
         parent_agent=kw.get("parent_agent"),
     ),
     check_fn=check_delegate_requirements,

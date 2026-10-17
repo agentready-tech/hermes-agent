@@ -400,10 +400,10 @@ def _finalize_child_results(
         _notify_memory_manager(results, task_list, child_by_index, parent_agent)
         _rollup_children_cost(parent_agent, _fire_subagent_stop_hooks(results, child_by_index, parent_agent))
 
-def _run_child_lifecycle(task_index: int, goal: str, child=None, parent_agent=None) -> dict[str, Any]:
+def _run_child_lifecycle(task_index: int, goal: str, child=None, parent_agent=None, **owner_kwargs) -> dict[str, Any]:
     """Run one child and apply the same host lifecycle used by delegate_task."""
     from tools.delegate_tool import _run_single_child
-    result = _run_single_child(task_index, goal, child, parent_agent)
+    result = _run_single_child(task_index, goal, child, parent_agent, **owner_kwargs)
     result.setdefault("task_index", task_index)
     task = {"goal": goal}
     _finalize_child_results([result], [{"goal": ""} for _ in range(task_index)] + [task], [(task_index, task, child)], parent_agent)

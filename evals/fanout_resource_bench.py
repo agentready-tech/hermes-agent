@@ -193,7 +193,7 @@ def main() -> None:
     tasks = [{"goal": json.dumps({"file": os.path.join(wts[i % len(wts)], "hermes_cli", f"bench_{i}.py")}),
               "context": "bench"} for i in range(a.children)]
     t0 = time.monotonic()
-    res = delegate_tool.delegate_task(tasks=tasks, parent_agent=parent, background=False)
+    res = delegate_tool.delegate_task(ephemeral=True, tasks=tasks, parent_agent=parent, background=False)
     wall = round(time.monotonic() - t0, 1)
     if os.environ.get("BENCH_DEBUG"):
         sys.__stderr__.write(str(res)[:3000] + "\n")

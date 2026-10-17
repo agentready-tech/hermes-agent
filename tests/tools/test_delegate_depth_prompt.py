@@ -46,7 +46,7 @@ def test_dispatched_child_prompt_matches_depth_capability(
         "final_response": "done", "completed": True, "api_calls": 1, "messages": [],
     }
     config = {"max_spawn_depth": max_depth, "orchestrator_enabled": enabled}
-    args = {"tasks": [{"goal": "Inspect fixture"}], "background": False}
+    args = {"ephemeral": True, "tasks": [{"goal": "Inspect fixture"}], "background": False}
     if legacy_role is not None:
         args["role"] = legacy_role
     with (

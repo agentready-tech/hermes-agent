@@ -34,14 +34,22 @@ the home through its native WebSocket resume path without requiring a human clie
 
 ## Persistent project delegates
 
-The main agent creates project children on demand with `delegate_task(tasks=[{
-"project": "stable-task-key", "goal": "...", "context": "..."}])`. The existing tool's
+The main agent creates persistent children by default with `delegate_task(tasks=[{
+"goal": "...", "context": "..."}])`. An optional `project` key names or reuses a
+project; omitting it assigns a new saved identity, not a transient worker. Only
+`ephemeral=true` explicitly selects a one-off worker. The existing tool's
 `send`, `read`, `list`, `stop` and `archive` actions manage those identities. Children
 retain their native sessions, workspaces and evidence history; per-project SQLite
 inboxes serialize follow-ups. Native async completion delivery reports results back
 to the main conversation. Dead owners leave recoverable messages, completed native
 answers are not executed again, and explicit stops remain paused until a new send.
 No additional service or database is required.
+
+Existing named project identities, native histories and queue records stay valid;
+no data migration or history rewrite is needed. Existing transient runs and their
+saved native transcripts are left intact; they are not silently converted into
+project queues. `/review` deliberately selects the ephemeral path for its single
+independent assessment. Grouped transient fan-outs also require `ephemeral=true`.
 
 The fork retains its enhanced bundled Holographic provider and its regression tests.
 Upstream moved the stock provider to the external catalog; that migration must not
