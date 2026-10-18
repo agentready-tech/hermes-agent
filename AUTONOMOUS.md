@@ -55,9 +55,47 @@ On Linux, install the foreground owner under systemd:
 hermes-autonomous install-service --enable
 ```
 
-For startup without an interactive login, enable systemd user lingering using
-the host administrator's normal procedure. Do not also run a native gateway or
-dashboard service for the same home. Inside the native s6 image, the autonomous
+`--enable` also enables user lingering, so the service starts after reboot without
+an SSH login. It registers an XDG autostart entry for Xfce/Xubuntu under this Unix
+account. Run the installer as the desktop user, with the same `--home` as the
+running agent. Installing from SSH discovers that user's existing Xfce session;
+multiple sessions require installing from the intended desktop instead of guessing.
+The login hook captures the current display, Xauthority path and session D-Bus,
+then reconnects the enabled service with a normal restart. Reinstalling the service
+refreshes these files and restarts only its existing home owner.
+
+For a VM supplied with Xubuntu/Xfce, Hermes uses that existing desktop and browser.
+The VM must start this user's graphical session at boot without a human connection,
+for example through the provider's preconfigured desktop or LightDM autologin.
+Installing Xfce packages alone does not start a logged-in desktop. Check the VM's
+boot/login setup once; this installer does not change the display manager's login
+policy. Hermes creates no X server, Xfce session, VNC server or RDP session.
+
+Use remote access that shows this same X11 desktop: you and Hermes should see the
+same windows and browser. You can connect to observe or interact, then disconnect;
+the desktop and its applications must stay running. A separate desktop created
+only for a remote login will not show what Hermes is doing on the shared desktop.
+
+Disconnecting an SSH/RDP/viewer connection does not stop the Hermes service. GUI
+control remains available while the existing desktop stays running independently
+of that connection. If the provider destroys the desktop at disconnect, that host
+configuration must be changed; service attachment cannot keep a destroyed desktop
+alive. Reconnecting a viewer alone does not restart the agent. A new graphical
+login updates the binding through the Xfce hook. Until the desktop starts, the
+agent's inbox, scheduler and recovery remain available. SSH-forwarded displays and
+another user's session are never selected. A saved binding is private to this
+account and rejected after a different boot; service startup can rediscover a live
+Xfce session when the login hook has not run. Headless services still work normally.
+
+Prepare native GUI support once with `hermes computer-use install` and enable
+Computer Use in `hermes tools`; check it in the desktop with `hermes computer-use
+doctor`. The service uses the same host desktop and local browser when configured
+for local terminal/browser execution. No Bot Desktop or second virtual display is
+created by this installer. Existing history, memory, main-session identity,
+subagent queues and recovery records stay in the same home through reconnects.
+
+Do not also run a native gateway or dashboard service for the same home.
+Inside the native s6 image, the autonomous
 owner parks the root gateway/dashboard slots before taking ownership.
 Explicit native image commands still work, including `python -m
 hermes_runtime serve` for existing integrations.

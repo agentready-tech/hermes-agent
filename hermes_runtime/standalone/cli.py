@@ -30,6 +30,8 @@ def parser():
     commands.add_parser("gmail-worker", help=argparse.SUPPRESS)
     service = commands.add_parser("install-service", help="Install a Linux systemd user service")
     service.add_argument("--enable", action="store_true", help="Enable and start the installed service")
+    commands.add_parser("service-run", help=argparse.SUPPRESS)
+    commands.add_parser("desktop-session", help=argparse.SUPPRESS)
     up = commands.add_parser("up", help="Start a host-managed Docker deployment")
     up.add_argument("--image", required=True)
     up.add_argument("--port", type=int, default=9119)
@@ -41,28 +43,6 @@ def parser():
     rollback.add_argument("snapshot", type=Path)
     commands.add_parser("recover", help="Recover a host update interrupted by shutdown")
     return result
-
-
-def install_service(home, enable):
-    from hermes_platform.host.facts import os_family
-    from utils import atomic_write_text
-    if os_family() != "linux":
-        raise ValueError("install-service requires Linux systemd; use Docker up with automatic restart on this host")
-    import hashlib
-    name = "hermes-autonomous-" + hashlib.sha256(str(home).encode()).hexdigest()[:12] + ".service"
-    folder = Path.home() / ".config" / "systemd" / "user"
-    folder.mkdir(parents=True, exist_ok=True)
-    # systemd's specifiers and argument quoting differ from shell quoting.
-    def quote(value):
-        return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%").replace("$", "$$").replace("\n", "\\n") + '"'
-    command = " ".join(quote(v) for v in (sys.executable, "-m", "hermes_runtime.standalone.cli", "--home", home, "run"))
-    atomic_write_text(folder / name, "[Unit]\nDescription=Autonomous Hermes\nAfter=network-online.target\n\n"
-        "[Service]\nType=simple\n" + f"ExecStart={command}\n" + "Restart=always\nRestartSec=5\nKillMode=mixed\nTimeoutStopSec=60\n\n"
-        "[Install]\nWantedBy=default.target\n", mode=0o600)
-    if enable:
-        subprocess.run(["systemctl", "--user", "daemon-reload"], check=True, timeout=30)
-        subprocess.run(["systemctl", "--user", "enable", "--now", name], check=True, timeout=90)
-    return {"unit": str(folder / name), "enabled": enable}
 
 
 def mounts(values):
@@ -126,7 +106,11 @@ def execute(args, home):
         print(json.dumps(value, ensure_ascii=False))
         raise SystemExit(0 if value["ok"] else 1)
     if args.command == "install-service":
+        from hermes_runtime.standalone.service import install_service
         return install_service(home, args.enable)
+    if args.command in {"service-run", "desktop-session"}:
+        from hermes_runtime.standalone.desktop_session import run_service, capture_session
+        return run_service(home) if args.command == "service-run" else capture_session(home)
     if args.command == "gmail-worker":
         from hermes_runtime.standalone.gmail import worker
         return worker(home)
