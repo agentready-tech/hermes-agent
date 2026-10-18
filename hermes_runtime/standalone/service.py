@@ -11,8 +11,9 @@ def service_name(home):
     return "hermes-autonomous-" + hashlib.sha256(str(Path(home).resolve()).encode()).hexdigest()[:12] + ".service"
 
 
-def _systemd_quote(value):
-    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%").replace("$", "$$").replace("\n", "\\n") + '"'
+def _systemd_quote(value, *, exec_line=True):
+    value = str(value).replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%").replace("\n", "\\n").replace("\r", "\\r")
+    return '"' + (value.replace("$", "$$") if exec_line else value) + '"'
 
 
 def _argv(home, interpreter, action):
@@ -42,7 +43,7 @@ def render_autostart(home, interpreter):
         f"Exec={command}\nTerminal=false\nOnlyShowIn=XFCE;\nX-GNOME-Autostart-enabled=true\n")
 
 
-def install_service(home, enable):
+def install_service(home, enable, *, rdp=None):
     from hermes_platform.host.facts import os_family
     from tools.process_registry import systemd_user_bus_env
     from utils import atomic_write_text
@@ -50,6 +51,15 @@ def install_service(home, enable):
 
     if os_family() != "linux":
         raise ValueError("install-service requires Linux systemd; use Docker up with automatic restart on this host")
+    from hermes_runtime.standalone.config import settings
+    from hermes_runtime.standalone import rdp as desktop_rdp
+    autonomous = settings(home)
+    if not isinstance(autonomous, dict):
+        raise ValueError("autonomous must be a mapping in config.yaml")
+    rdp = autonomous.get("rdp", False) if rdp is None else rdp
+    if not isinstance(rdp, bool):
+        raise ValueError("autonomous.rdp must be true or false")
+    user = desktop_rdp.preflight(home) if rdp else None
     desktop = discover_session()
     name = service_name(home)
     config = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
@@ -60,12 +70,21 @@ def install_service(home, enable):
     autostart.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(autostart, render_autostart(home, sys.executable), mode=0o600)
     session = capture_session(home, desktop, notify=False)
+    managed = desktop_rdp.install(home, user) if user else None
     if enable:
         environment = systemd_user_bus_env()
-        subprocess.run(["loginctl", "enable-linger"], env=environment, check=True, timeout=30)
+        if user:
+            desktop_rdp.root_run("loginctl", "enable-linger", user.pw_name)
+        else:
+            subprocess.run(["loginctl", "enable-linger"], env=environment, check=True, timeout=30)
         subprocess.run(["systemctl", "--user", "daemon-reload"], env=environment, check=True, timeout=30)
+        if user:
+            desktop_rdp.enable(user)
+            from hermes_runtime.standalone.rdp_session import wait_for_desktop
+            live = wait_for_desktop(home)
+            session = {"captured": True, "display": live["DISPLAY"]}
         subprocess.run(["systemctl", "--user", "enable", name], env=environment, check=True, timeout=30)
         # Reinstalling refreshes the running owner's display binding and interpreter too.
         subprocess.run(["systemctl", "--user", "restart", name], env=environment, check=True, timeout=90)
-    return {"unit": str(folder / name), "enabled": enable, "autostart": str(autostart), "desktop_session": session,
-            "boot_requirement": "The VM must start this user's existing Xfce session at boot and keep it alive without a viewer (e.g. LightDM autologin)."}
+    return {"unit": str(folder / name), "enabled": enable, "autostart": str(autostart), "desktop_session": session, "rdp": managed,
+            "boot_requirement": None if managed else "The VM must start this user's existing Xfce session at boot and keep it alive without a viewer (e.g. LightDM autologin)."}

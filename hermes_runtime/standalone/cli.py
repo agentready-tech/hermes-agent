@@ -30,8 +30,10 @@ def parser():
     commands.add_parser("gmail-worker", help=argparse.SUPPRESS)
     service = commands.add_parser("install-service", help="Install a Linux systemd user service")
     service.add_argument("--enable", action="store_true", help="Enable and start the installed service")
+    service.add_argument("--rdp", action="store_true", default=None, help="Start one persistent Xfce RDP desktop at boot (xrdp >= 0.10)")
     commands.add_parser("service-run", help=argparse.SUPPRESS)
     commands.add_parser("desktop-session", help=argparse.SUPPRESS)
+    commands.add_parser("rdp-start", help=argparse.SUPPRESS)
     up = commands.add_parser("up", help="Start a host-managed Docker deployment")
     up.add_argument("--image", required=True)
     up.add_argument("--port", type=int, default=9119)
@@ -107,7 +109,10 @@ def execute(args, home):
         raise SystemExit(0 if value["ok"] else 1)
     if args.command == "install-service":
         from hermes_runtime.standalone.service import install_service
-        return install_service(home, args.enable)
+        return install_service(home, args.enable, rdp=args.rdp)
+    if args.command == "rdp-start":
+        from hermes_runtime.standalone.rdp_session import start
+        return start(home)
     if args.command in {"service-run", "desktop-session"}:
         from hermes_runtime.standalone.desktop_session import run_service, capture_session
         return run_service(home) if args.command == "service-run" else capture_session(home)

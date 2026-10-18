@@ -14,7 +14,7 @@ import psutil
 logger = logging.getLogger(__name__)
 GUI_KEYS = frozenset({"DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR",
     "XDG_SESSION_TYPE", "XDG_SESSION_ID", "XDG_CURRENT_DESKTOP", "DESKTOP_SESSION", "AT_SPI_BUS_ADDRESS",
-    "WAYLAND_DISPLAY"})
+    "WAYLAND_DISPLAY", "XDG_CONFIG_HOME"})
 
 
 def snapshot_path(home):
@@ -50,12 +50,8 @@ def _xfce_environment(environment):
     return any(name.lower() in {"xfce", "xubuntu"} for name in desktop.split(":"))
 
 
-def discover_session(environment=None):
-    """An SSH installer may adopt exactly one Xfce session belonging to its own Unix account."""
-    environment = dict(os.environ if environment is None else environment)
-    if _local_x11(environment) and _xfce_environment(environment):
-        return environment
-    candidates = {}
+def xfce_sessions():
+    candidates = []
     for process in psutil.process_iter(["name", "uids"]):
         try:
             if process.info["name"] != "xfce4-session" or process.info["uids"].real != os.getuid():
@@ -63,9 +59,18 @@ def discover_session(environment=None):
             desktop = process.environ()
             if _local_x11(desktop):
                 desktop.setdefault("XDG_CURRENT_DESKTOP", "XFCE")
-                candidates[desktop["DISPLAY"]] = desktop
+                candidates.append(desktop)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
+    return candidates
+
+
+def discover_session(environment=None):
+    """An SSH installer may adopt exactly one Xfce session belonging to its own Unix account."""
+    environment = dict(os.environ if environment is None else environment)
+    if _local_x11(environment) and _xfce_environment(environment):
+        return environment
+    candidates = {env["DISPLAY"]: env for env in xfce_sessions()}
     if len(candidates) > 1:
         raise ValueError("Several Xfce sessions belong to this account; run install-service from the desired desktop")
     return next(iter(candidates.values()), environment)
@@ -119,6 +124,10 @@ def run_service(home):
     # The user manager may retain a display imported by an old SSH/RDP login.
     # Only a current-boot hook or a live Xfce process can supply the binding.
     environment = {k: v for k, v in os.environ.items() if k not in GUI_KEYS or k == "XDG_RUNTIME_DIR"}
+    from hermes_runtime.standalone.config import settings
+    if settings(home).get("rdp"):
+        from hermes_runtime.standalone.rdp_session import wait_for_desktop
+        wait_for_desktop(home)
     if not _read_snapshot(home):
         capture_session(home, discover_session({}), notify=False)
     environment = session_environment(home, environment)

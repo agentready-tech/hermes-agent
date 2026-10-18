@@ -49,7 +49,50 @@ native gateway lock still protects the gateway. Only a failed child restarts,
 with backoff. SIGTERM drains children before exiting. Status validates process
 start times and HTTP health, so a reused PID cannot count as a healthy service.
 
-On Linux, install the foreground owner under systemd:
+On a Linux VM with Xfce, start the shared desktop at boot before the first RDP
+connection and install the foreground Hermes owner:
+
+```sh
+hermes-autonomous install-service --rdp --enable
+```
+
+Run this as the same local Unix account that will log in through RDP. This mode
+requires systemd, xrdp 0.10 or newer, xorgxrdp, Xfce (`startxfce4`, `xfce4-session`,
+`xfconf-query`) and `xdpyinfo` already installed. On Debian/Ubuntu these come from
+`xrdp xorgxrdp xfce4-session xfce4-settings x11-utils` alongside the VM's Xfce
+desktop. Older xrdp versions are rejected before changing service files. The
+installer uses `sudo` for host configuration; do not run the whole command as a
+different account or it will install that account's desktop and Hermes home.
+
+The installer adds one `hermes-xfce-rdp-<uid>.service` system unit per Unix account.
+It uses the current Hermes interpreter and home to call native `xrdp-sesrun` as
+that account, starts Xorg and Xfce, and captures the live display credentials.
+The Hermes owner waits for the desktop's X11 readiness before launching the
+backend and gateway. A running RDP desktop is reused; an existing console desktop
+or several RDP desktops causes an error instead of creating another session.
+Do not enable a second LightDM autologin for this same account in this mode.
+
+Connect using the same account and the **Xorg** backend in the RDP client. xrdp
+reconnects to that desktop; closing the RDP client leaves Xfce, applications and
+Hermes running. The installer sets `Policy=Default`, `KillDisconnected=false`,
+`DisconnectedTimeLimit=0`, `IdleTimeLimit=0`, and selects Xorg for RDP autologin.
+It preserves other xrdp settings and saves original host files beside them with
+the `.hermes-before-rdp` suffix. It masks Xfce screensaver, light-locker and power
+manager autostarts for this account, saving any existing user overrides first,
+so the unattended desktop remains available to the agent.
+This mode selects local terminal execution and a local headed Chrome browser,
+clears a pinned CDP target, and disables automatic Bot Desktop creation. Browser
+windows launched by Hermes therefore appear on the same shared RDP screen.
+
+`autonomous.rdp: true` is remembered in this home's `config.yaml`; reinstalling
+or upgrading with the ordinary install command keeps the selected mode. The
+original `config.yaml` is saved with the same `.hermes-before-rdp` suffix. Main
+history, saved prompts, memory, delegation mail and recovery records are not
+replaced. After a VM reboot xrdp starts a fresh desktop and Hermes resumes its
+durable work; processes and unsaved GUI application state do not survive reboot.
+
+For a headless service or attachment to an independently managed existing desktop,
+install the owner without selecting RDP startup:
 
 ```sh
 hermes-autonomous install-service --enable
@@ -65,11 +108,11 @@ then reconnects the enabled service with a normal restart. Reinstalling the serv
 refreshes these files and restarts only its existing home owner.
 
 For a VM supplied with Xubuntu/Xfce, Hermes uses that existing desktop and browser.
-The VM must start this user's graphical session at boot without a human connection,
+Without managed RDP startup, the VM must start this user's graphical session at boot without a human connection,
 for example through the provider's preconfigured desktop or LightDM autologin.
 Installing Xfce packages alone does not start a logged-in desktop. Check the VM's
 boot/login setup once; this installer does not change the display manager's login
-policy. Hermes creates no X server, Xfce session, VNC server or RDP session.
+policy. Plain attachment creates no X server, Xfce session, VNC server or RDP session.
 
 Use remote access that shows this same X11 desktop: you and Hermes should see the
 same windows and browser. You can connect to observe or interact, then disconnect;
