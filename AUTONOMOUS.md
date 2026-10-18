@@ -106,6 +106,15 @@ only after all container writers have stopped.
 
 ## One main inbox for external events and schedules
 
+The main agent receives mandatory scheduling instructions through Hermes' native
+per-agent system suffix, even without skills tools. Schedules target the main inbox
+by default; isolated execution requires an explicit user request. The suffix is
+installed when the main agent is constructed, including on resume, and retained
+when its personality overlay changes. Existing
+saved system prompts, histories and recovery records are retained. The policy is
+installed only on the owning main agent. Native prompt inheritance for background
+reviews remains intact so those forks retain the parent's cached prefix.
+
 ```sh
 hermes-autonomous event --source webhook --id delivery-42 'Supplier moved delivery to Monday'
 hermes-autonomous schedule --when 'every 1h' --name 'Order review' 'Review outstanding orders and delegate project work as needed'
@@ -124,8 +133,11 @@ catch-up. A fire's deterministic execution ID deduplicates admission. A successf
 cron run means **accepted into the main inbox**; its model outcome appears in the
 main history. Ordinary native cron jobs, scripts, monitor jobs and their result
 delivery are unchanged. Manage both kinds with native cron commands. Main-inbox
-jobs accept prompts, without per-job models, scripts or skill overrides; use an
-ordinary native cron job for those modes.
+jobs accept prompts, without per-job models, scripts or skill overrides. Put work
+the main agent should perform into its prompt; unsupported options do not silently
+change execution scope. Use an ordinary native cron job only when separate-session
+execution was explicitly requested. Native cron edit/pause/resume/remove commands
+manage main-inbox jobs while retaining their origin routing.
 
 Main-session compression, recovery, manual session commands, memory source and
 revision history, automatic recall/consolidation and persistent project subagents

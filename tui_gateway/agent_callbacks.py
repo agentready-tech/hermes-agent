@@ -315,6 +315,8 @@ def _apply_personality_to_session(
     if not (agent := session.get("agent")):
         return False, None
     agent.ephemeral_system_prompt = new_prompt or None
+    from hermes_runtime.standalone.instructions import install_main_schedule_instructions
+    install_main_schedule_instructions(agent)
     marker = (
         "[System: The user has changed the assistant's personality. "
         "From this point forward, adopt the following persona and respond "

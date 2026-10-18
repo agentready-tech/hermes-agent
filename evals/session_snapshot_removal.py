@@ -10,7 +10,7 @@ from types import SimpleNamespace
 home = Path(os.environ["HERMES_HOME"])
 home.mkdir(parents=True, exist_ok=True)
 (home / "config.yaml").write_text("sessions:\n  write_json_snapshots: true\n", encoding="utf-8")
-from agent.agent_init import _init_session_state
+from agent.agent_init_session import init_session_state
 from agent.session_persistence import SessionPersistenceMixin
 from hermes_cli.cli_session_mixin import CLISessionMixin
 from hermes_state import SessionDB
@@ -18,7 +18,7 @@ from hermes_state import SessionDB
 with SessionDB(db_path=home / "state.db") as db:
     agent = SessionPersistenceMixin()
     agent.max_iterations = 1
-    _init_session_state(agent, "snapshot-probe", db, None, None, None, False, 1, 1, 1)
+    init_session_state(agent, "snapshot-probe", db, None, None, None, False, 1, 1, 1)
     agent.model, agent.base_url, agent.platform = "fixture", "http://127.0.0.1:1/v1", "cli"
     agent.tools, agent.verbose_logging = [], True
     db.create_session(agent.session_id, source="cli", model=agent.model)

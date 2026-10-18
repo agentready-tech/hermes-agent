@@ -17,7 +17,6 @@ import threading
 import time
 from collections import deque
 from contextlib import suppress
-from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse, urlunparse
@@ -25,6 +24,7 @@ from urllib.parse import parse_qs, urlparse, urlunparse
 from agent.context_compressor import ContextCompressor
 from agent.agent_init_fallback import _fallback_entries, _init_fallback_chain, recompute_init_fallback_api_mode
 from agent.agent_init_params import _CALLBACK_PARAMS, _GATEWAY_IDENTITY_PARAMS, _PASSTHROUGH_PARAMS
+from agent.agent_init_session import init_session_state
 from agent.agent_runtime_helpers import _ra
 from agent.iteration_budget import IterationBudget, normalize_budget_warning_ratio
 from agent.memory_manager import StreamingContextScrubber
@@ -44,7 +44,6 @@ from hermes_cli.config import DEFAULT_CONFIG, cfg_get
 from hermes_cli.route_identity import normalize_route_base_url
 from hermes_cli.timeouts import get_provider_request_timeout
 from hermes_constants import get_hermes_home
-from hermes_state_ids import new_session_id
 from utils import base_url_host_matches, is_truthy_value
 
 # Same logger name as run_agent so caplog/patches on "run_agent" see our records.
@@ -1179,44 +1178,6 @@ def _publish_session_id(session_id: str) -> None:
             delegated_child = False
         if not delegated_child:
             os.environ["HERMES_SESSION_ID"] = session_id
-
-
-def _init_session_state(agent, session_id, session_db, parent_session_id, reasoning_config, max_tokens,
-    checkpoints_enabled, checkpoint_max_snapshots, checkpoint_max_total_size_mb, checkpoint_max_file_size_mb):
-    agent.session_start = datetime.now()
-    agent.session_id = session_id or new_session_id(agent.session_start)
-    _publish_session_id(agent.session_id)
-
-    # ~/.hermes/sessions/ — kept unconditionally for request_dump_*.json debug breadcrumbs.
-    agent.logs_dir = get_hermes_home() / "sessions"
-    agent.logs_dir.mkdir(parents=True, exist_ok=True)
-    _set_defaults(agent, _SESSION_STATE)
-
-    # Filesystem checkpoint manager (transparent — not a tool)
-    from tools.checkpoint_manager import CheckpointManager
-    agent._checkpoint_mgr = CheckpointManager(
-        enabled=checkpoints_enabled, max_snapshots=checkpoint_max_snapshots,
-        max_total_size_mb=checkpoint_max_total_size_mb,
-        max_file_size_mb=checkpoint_max_file_size_mb,
-    )
-
-    agent._session_db = session_db  # optional SQLite store (CLI/gateway-provided)
-    agent._parent_session_id = parent_session_id
-    agent._session_init_model_config = {
-        "max_iterations": agent.max_iterations,
-        "reasoning_config": reasoning_config,
-        "max_tokens": max_tokens,
-    }
-    # Process-scoped --yolo is persisted so `hermes --resume` restores the bypass
-    # (SessionDB.session_yolo_enabled); session-scoped /yolo toggles persist separately.
-    with suppress(Exception):
-        from tools.approval import _YOLO_MODE_FROZEN
-        if _YOLO_MODE_FROZEN:
-            agent._session_init_model_config["yolo_mode"] = True
-
-    # In-memory todo list for task planning (one per agent/session)
-    from tools.todo_tool import TodoStore
-    agent._todo_store = TodoStore()
 
 
 def _apply_display_config(agent, _agent_cfg, platform):
@@ -2391,7 +2352,7 @@ def init_agent(
     _build_client(agent, api_key, base_url, fallback_model)
     _init_fallback_chain(agent, fallback_model)
     _load_tools(agent, enabled_toolsets, disabled_toolsets)
-    _init_session_state(
+    init_session_state(
         agent, session_id, session_db, parent_session_id, reasoning_config, max_tokens,
         checkpoints_enabled, checkpoint_max_snapshots, checkpoint_max_total_size_mb, checkpoint_max_file_size_mb,
     )

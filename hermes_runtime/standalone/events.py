@@ -43,7 +43,8 @@ def admit_cron(job, *, extra_prompt=None, cancel_event=None, execution_id=None):
     if any(job.get(k) for k in ("script", "monitor_script", "monitor_url", "context_from", "skills", "skill",
                                 "model", "provider", "base_url", "enabled_toolsets", "workdir",
                                 "reasoning_effort", "interpreter")):
-        raise ValueError("Main-inbox schedules accept prompts; use a normal Hermes job for script/model overrides")
+        raise ValueError("Main-inbox schedules accept prompts; put tool/script work in the prompt. "
+                         "A separate-session job requires an explicit user request")
     if cancel_event is not None and cancel_event.is_set():
         return False, "Schedule cancelled before admission", "", "cancelled"
     if not enabled():

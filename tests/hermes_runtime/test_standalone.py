@@ -93,7 +93,7 @@ def test_mail_and_native_cron_retries_share_main_inbox(home):
     run_canonical_job(job, execution_id="fire-2")
     assert len(HomeInbox().pending()) == 3
     job["base_url"] = "http://example.test/v1"
-    with pytest.raises(ValueError, match="normal Hermes job"):
+    with pytest.raises(ValueError, match="explicit user request"):
         run_canonical_job(job, execution_id="fire-unsupported")
     assert len(HomeInbox().pending()) == 3
     job.pop("base_url")

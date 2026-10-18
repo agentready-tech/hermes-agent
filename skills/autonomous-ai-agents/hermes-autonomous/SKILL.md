@@ -1,7 +1,7 @@
 ---
 name: hermes-autonomous
 description: "Run schedules and project work in the main session."
-version: 1.2.1
+version: 1.3.0
 author: Mihail Arlashkin, Hermes Agent
 license: MIT
 platforms: [linux, macos]
@@ -15,6 +15,8 @@ metadata:
 
 Use the fork's durable main inbox for reminders and external events. Reuse
 persistent project subagents when a long-running task receives new information.
+Schedules target the main conversation by default. A separate execution session
+requires the user's explicit instruction; a request to schedule work alone does not imply it.
 
 ## When to Use
 
@@ -37,9 +39,19 @@ hermes-autonomous schedule --when 'every 1h' --name 'Order review' 'Review outst
 ```
 
 For a one-time reminder, pass the native Hermes schedule syntax to `--when`.
-Manage existing schedules through native cron commands. An ordinary `cronjob`
-task keeps native separate-session execution; use this CLI when the reminder
-must enter the main conversation.
+First inspect `hermes cron list` and reuse an appropriate existing schedule. Manage
+main-inbox jobs through native cron commands, preserving their routing:
+
+```sh
+hermes cron edit JOB_ID --schedule 'every 2h' --prompt 'Review outstanding supplier orders'
+hermes cron pause JOB_ID
+hermes cron resume JOB_ID
+hermes cron remove JOB_ID
+```
+
+Read the job back after changing it. An ordinary `cronjob_manage` create runs in
+a separate session; use it only when the user explicitly requests that scope.
+Do not convert existing jobs to another scope implicitly.
 
 ## Quick Reference
 
@@ -84,8 +96,10 @@ must enter the main conversation.
 
 - Successful schedule admission means queued, not completed. Find the result in
   main history and the corresponding project child.
-- Keep schedules as prompts. Jobs requiring scripts, per-job models or skill
-  overrides use ordinary native cron execution.
+- Keep main schedules as prompts; the main agent performs required tool/script
+  work when they fire. Script, model or delivery preferences do not authorize a
+  separate session. If a required option is unsupported, report the limitation
+  rather than silently switching to ordinary cron.
 - Do not create another scheduler, inbox database or replacement main session.
 - Host image updates use the operator's matching backup/rollback commands.
 
