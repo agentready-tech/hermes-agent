@@ -1,7 +1,7 @@
 ---
 name: hermes-autonomous
 description: "Run schedules and project work in the main session."
-version: 1.2.0
+version: 1.2.1
 author: Mihail Arlashkin, Hermes Agent
 license: MIT
 platforms: [linux, macos]
@@ -64,11 +64,21 @@ must enter the main conversation.
 3. Create new children on demand with their goal, relevant source evidence and
    workspace. All are persistent by default, even without a project name. Use a
    stable key when it helps reuse; no pre-created specialist is needed.
-4. Send later facts to that child with the source event ID for deduplication.
-   Keep overall decisions and the user-facing result in the main conversation.
-5. Let native completion delivery wake the parent. Inspect existing outcomes
-   before repeating actions after a restart. A coordination message is not task
-   completion; answer useful questions and keep working. Avoid acknowledgement loops.
+4. Use `message` for a blocker needing a decision, conflicting evidence, a sourced
+   finding useful to another agent, or substantial progress affecting coordination.
+   Include the concrete question/finding, source references and needed answer/action.
+   Peers can communicate directly. Parents answer with decisions or constraints and
+   route relevant evidence to the responsible child. Keep overall decisions and the
+   user-facing result in the main conversation.
+5. Reply to a running task with `message`; `send` queues a separate follow-up turn
+   and cannot unblock a task waiting for that reply. Use stable source event IDs
+   for deduplication. Use `wait` only when a reply is needed to proceed; otherwise
+   keep working. A timeout is not a reply or completion: reassess the blocker
+   without resending the same request. Avoid empty acknowledgements and log polling.
+6. Return a final summary when the assigned input is complete; report unresolved
+   blockers honestly. Intermediate mail does not complete the task. If only a
+   detached final result remains, yield to native completion delivery. Inspect
+   existing history/outcomes before repeating actions after a restart.
 
 ## Pitfalls
 

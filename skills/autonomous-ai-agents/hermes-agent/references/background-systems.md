@@ -11,15 +11,26 @@ Spawn a subagent with an isolated context + terminal session.
 - **Single:** `delegate_task(goal, context)`.
 - **Batch:** `delegate_task(tasks=[{goal, ...}, ...])` runs children in
   parallel, capped by `delegation.max_concurrent_children` (default 3).
-- **Background:** `delegate_task(background=true)` returns a handle
-  immediately and keeps the parent loop going; the child's result
-  re-enters the conversation as a new turn when it finishes.
-- **Roles:** `leaf` (default; cannot re-delegate) vs `orchestrator`
-  (can spawn its own workers, bounded by `delegation.max_spawn_depth`).
-- **Not durable.** A backgrounded child is still process-local — if the
-  parent process exits, the child is lost. For work that must outlive
-  the process, use `cronjob` or
-  `terminal(background=True, notify_on_complete=True)`.
+- **Delivery:** sessions with later-result delivery return saved child IDs
+  immediately; finite callers join the work. A join yields for coordination
+  mail so the parent can answer while its child keeps working. If only a detached
+  final result remains, yield the turn to native completion delivery.
+- **Roles:** Hermes derives `orchestrator` (may spawn) or `leaf` (no further
+  spawning) from depth/configuration. Both retain coordination at every depth;
+  the model does not select the role.
+- **Messages:** use `peers` to discover recipients and `message` for a blocker,
+  conflicting evidence, a useful sourced finding, a coordination milestone or
+  a reply. Parents answer decisions/constraints; peers can write directly.
+  Include source references and the needed answer/action. `message` does not
+  finish work. Use `wait` only when a reply is necessary; otherwise continue.
+  Reassess timeouts without repeating the request; avoid empty acknowledgements
+  and transcript polling. `send` queues a separate task turn, so replies needed
+  by a running task must use `message`.
+- **Durability:** children are persistent by default. Native history, accepted
+  work, pending mail and saved worktrees survive process loss; recovery resumes
+  the same child and checks uncertain external outcomes. Explicit pauses remain
+  paused. Only explicit `ephemeral=true` uses a disposable worker whose execution
+  cannot resume after process loss. Existing transcripts are retained.
 
 Config: `delegation.*` in `config.yaml`.
 

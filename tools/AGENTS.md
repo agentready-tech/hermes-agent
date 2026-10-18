@@ -124,10 +124,11 @@ it is never the first signal a live parent receives.
 
 ## Delegation (`tools/delegate_tool.py`)
 
-Spawns a subagent with isolated context + terminal session; the parent waits for the summary unless
-`background=true`, which returns a delegation id and re-enters the result via the async-delegation
-completion queue. Shapes: single (`goal` + optional `context`, `toolsets`) or batch (`tasks: [...]`,
-concurrency capped by `delegation.max_concurrent_children`, default 3). A background batch returns as ONE
+Spawns a subagent with isolated context + terminal session. Model-facing calls return saved child IDs
+where the host supports later-result delivery; finite callers join in the current turn. Joins yield
+for coordination mail so the parent can reply while a child continues. Shapes: single (`goal` + optional
+`context`) or batch (`tasks: [...]`, concurrency capped by `delegation.max_concurrent_children`, default 3).
+Persistent children deliver independently. An explicitly ephemeral background batch returns as ONE
 completion by default; with `delegation.independent_completions` it is split into completion **units**
 (`delegate_tool_dispatch._units_of`): tasks sharing a `group` join and report together; each ungrouped
 task reports alone as it finishes. Units of one call share ONE pool slot (`slot_key` in
@@ -135,7 +136,7 @@ task reports alone as it finishes. Units of one call share ONE pool slot (`slot_
 and the stall clock arms when the runner starts, so a queued unit is never judged stalled. Roles: `leaf` (no spawning; retains `delegate_task` for coordination, blocks
 `clarify`, `memory`, `send_message`, `cronjob`; keeps `execute_code`) and
 `orchestrator` (can spawn; gated by `delegation.orchestrator_enabled`, bounded by
-`delegation.max_spawn_depth`, default 2). Config knobs under `delegation:`:
+`delegation.max_spawn_depth`, default 1). Config knobs under `delegation:`:
 `max_concurrent_children, independent_completions, max_spawn_depth, child_timeout_seconds, orchestrator_enabled,
 subagent_auto_approve, inherit_mcp_toolsets, max_iterations`. **Child processes:** a child's background
 processes are killed at its teardown and their notices are suppressed in the parent; `process_manage(action="handoff")`
@@ -150,6 +151,13 @@ Grouped completion buckets require that explicit ephemeral mode.
 **Coordination:** the same tool's message/peers/wait actions let parents and siblings
 exchange intermediate text without finishing work. `delegation_mail` in `state.db`
 holds pending delivery; admitted text belongs to native history, with receipt IDs.
+`delegate_tool_progress._COORDINATION_INSTRUCTIONS` supplies the same protocol to
+new child prompts and the current tool description, including resumed saved children.
+It covers blockers, conflicting evidence, useful sourced findings, meaningful progress,
+parent decisions/replies, direct peer mail and waiting only for necessary replies.
+`message` unblocks a running task; `send` queues a separate follow-up turn. Avoid
+empty acknowledgements, duplicate requests after timeouts and transcript polling.
+Preserve saved system prefixes; updating guidance never rewrites native history.
 Children retain the tool at every depth; spawning is still checked by role/depth.
 Safe loop boundaries append attributed user rows, never mutate a cached prefix.
 A synchronous join yields on incoming coordination mail so the parent can answer;
@@ -161,8 +169,8 @@ process loss. Project children retain isolated worktrees between turns. Other wo
 `terminal(background=True, notify_on_complete=True)`. `heartbeat=N` on the same spawn emits a `heartbeat` event (type on the completion queue; delta output only, `HEARTBEAT_MIN_SECONDS` floor, one daemon timer thread for all sessions in `process_registry.py::ProcessRegistry._heartbeat_loop`) — every surface that renders `watch_match` must render `heartbeat` (`process_registry_notifications.py`, `gateway/run.py::_drain_gateway_watch_events`, `tui_gateway/session_notifications.py::_DEDUP_EXTRA_FIELDS`). **Stop fan-out:** a turn's hard interrupt reaches only
 `_active_children`; background units are detached at dispatch, so every stop surface (gateway `/stop` busy AND
 idle paths, TUI `session.interrupt`, ACP `cancel`, CLI `/stop` via `interrupt_all`) calls
-`async_delegation.interrupt_for_session` too. Depth>0 delegations are always synchronous
-(`_model_background_value`), so the stop recurses through the child's own `_active_children` fan-out; an
+`async_delegation.interrupt_for_session` too. Depth>0 delegations join with coordination yields
+(`_model_background_value`); the stop recurses through the child's own `_active_children` fan-out. An
 interrupted entry's `summary` is the child's last real assistant text (`_build_result_entry`). API: `website/docs/developer-guide/subagent-lifecycle-api.md`.
 
 ## Tests

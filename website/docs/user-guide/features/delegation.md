@@ -6,7 +6,7 @@ description: "Spawn isolated child agents for parallel workstreams with delegate
 
 # Subagent Delegation
 
-The `delegate_task` tool spawns child AIAgent instances with isolated context, inherited tool access, and their own terminal sessions. A new child gets its own conversation and works independently; later messages reuse that saved history. Only its final summary enters the parent's context. Children are persistent by default; `ephemeral=true` explicitly requests a one-off worker.
+The `delegate_task` tool spawns child AIAgent instances with isolated context, inherited tool access, and their own terminal sessions. A new child gets its own conversation and works independently; later messages reuse that saved history. Final summaries and addressed intermediate messages enter the recipient's context; entire child tool traces are not copied automatically. Children are persistent by default; `ephemeral=true` explicitly requests a one-off worker.
 
 Top-level model calls run in the background automatically. Hermes returns a handle immediately so the conversation can continue, then posts the result back as a new message. An orchestrator subagent waits for its own workers so it can synthesize their results before returning.
 
@@ -113,6 +113,19 @@ The runtime supplies sender identity. Messages are coordination data, not new
 user instructions. A peer can send a message but cannot take over the recipient's
 history or control another conversation. Spawning remains role/depth limited.
 Avoid replying merely to acknowledge every progress report.
+
+The parent and new children receive the same coordination rules. Write when a
+blocker needs a decision, conflicting evidence changes the plan, a sourced finding
+helps another agent, or substantial progress affects coordination. Include the
+concrete question/finding, source references and needed answer/action. Parents
+answer with decisions or constraints and route relevant evidence; peers can write
+directly. A reply needed by a running task uses `message`: `send` would queue a
+separate turn behind that task. Wait only for a necessary reply; on timeout,
+reassess without resending the same request. Final summaries complete assigned
+inputs; intermediate questions/statuses do not. Report unresolved blockers honestly.
+
+Existing saved child system prefixes remain unchanged on resume. Their current
+`delegate_task` description supplies the same protocol without rewriting history.
 
 `delegation_mail` in the existing `state.db` holds pending delivery receipts.
 The payload is retired only after native conversation history witnesses admission.
@@ -276,7 +289,7 @@ delegate_task(
 
 ## Batch Mode Details
 
-When a top-level agent provides a `tasks` array, Hermes returns saved child IDs and runs the subagents in parallel. Persistent children deliver their results independently. A caller without later-result delivery joins the parallel work in the current turn. Results are delivered only between the parent's turns: the parent should finish anything that does not depend on the children, then end its turn rather than polling transcripts, artifacts, or CI while it waits.
+When a top-level agent provides a `tasks` array, Hermes returns saved child IDs and runs the subagents in parallel. Persistent children deliver their results independently. A caller without later-result delivery joins the parallel work in the current turn. Detached final results arrive through the host's later-result delivery: if only a final result remains, yield the turn instead of polling transcripts, artifacts or CI. Intermediate coordination mail can enter the current turn, and a synchronous join yields so the parent can reply.
 
 ### Explicit ephemeral batches
 
@@ -303,7 +316,7 @@ This is off by default because every unit is a new turn for the orchestrator: a 
 ]}
 ```
 
-The dispatch handle lists each unit (`units[].delegation_id`, `group`, `task_indexes`); unit ids are the call's id suffixed `-1`, `-2`, …, and every unit of one call shares a single slot of `delegation.max_concurrent_children`, so grouping never changes capacity accounting (the worker pool grows to the number of live units so no unit waits behind a full pool). An orchestrator subagent waits for its whole batch in the current turn so it can synthesize the results.
+The dispatch handle lists each unit (`units[].delegation_id`, `group`, `task_indexes`); unit ids are the call's id suffixed `-1`, `-2`, …, and every unit of one call shares a single slot of `delegation.max_concurrent_children`, so grouping never changes capacity accounting (the worker pool grows to the number of live units so no unit waits behind a full pool). An orchestrator subagent joins its workers in the current turn, yielding for coordination mail while they run, and synthesizes their saved results before its final report.
 
 - **Maximum concurrency:** 10 tasks by default (configurable via `delegation.max_concurrent_children` or the `DELEGATION_MAX_CONCURRENT_CHILDREN` env var; floor of 1, no hard ceiling). Batches larger than the limit return a tool error rather than being silently truncated.
 - **Thread pool:** Uses `ThreadPoolExecutor` with the configured concurrency limit as max workers
@@ -428,8 +441,11 @@ Credentials resolve exactly like a `delegation.provider` pin (full runtime-provi
 
 `delegate_task` does not accept a model-facing `toolsets` parameter. Each subagent inherits the parent's enabled toolsets so the model cannot grant a child capabilities that the parent does not have. Configure the parent's tools before starting the conversation if delegated work needs additional capabilities.
 
+Every child retains `delegate_task` for coordination. Further spawning is checked
+against its depth-derived role — see [Depth Limit and Nested Orchestration](#depth-limit-and-nested-orchestration).
+
 Certain tools are blocked for subagents even when the parent has them:
-- `delegate_task` — blocked for leaf subagents (the default). Retained for `role="orchestrator"` children, bounded by `max_spawn_depth` — see [Depth Limit and Nested Orchestration](#depth-limit-and-nested-orchestration) below.
+
 - `clarify` — subagents cannot interact with the user
 - `memory` — no writes to shared persistent memory
 - `send_message` — no cross-platform side effects
@@ -629,21 +645,22 @@ Each line is timestamped and shows the child's assistant text, thinking snippets
 
 ## Depth Limit and Nested Orchestration
 
-By default, delegation is **flat**: a parent (depth 0) spawns children (depth 1), and those children cannot delegate further. This prevents runaway recursive delegation.
-
-For multi-stage workflows (research → synthesis, or parallel orchestration over sub-problems), a parent can spawn **orchestrator** children that *can* delegate their own workers:
+Hermes derives each child's role from the current depth and delegation configuration.
+When orchestration is enabled and depth remains, the child can spawn workers:
 
 ```python
 delegate_task(
     goal="Survey three code review approaches and recommend one",
-    role="orchestrator",  # Allows this child to spawn its own workers
     context="...",
 )
 ```
 
-- `role="leaf"` (default): child cannot delegate further — identical to the flat-delegation behavior.
-- `role="orchestrator"`: child retains the `delegation` toolset. Gated by `delegation.max_spawn_depth` (default **1** = flat, so `role="orchestrator"` is a no-op at defaults). Raise `max_spawn_depth` to 2 to allow orchestrator children to spawn leaf grandchildren; 3+ for deeper trees. There is no upper ceiling — cost is the practical limit.
-- `delegation.orchestrator_enabled: false`: global kill switch that forces every child to `leaf` regardless of the `role` parameter.
+- `leaf`: cannot spawn further, but retains `message`, `peers` and `wait`.
+- `orchestrator`: can spawn while below `delegation.max_spawn_depth` (default **1**, flat spawning).
+  With a depth limit of 2, depth-1 children may spawn depth-2 leaf grandchildren.
+- `delegation.orchestrator_enabled: false` or `max_spawn_depth: 1` makes first-level
+  children leaves. Coordination remains available.
+- The model does not choose a role; the legacy Python `role` argument does not override depth/configuration.
 
 **Cost warning:** With `max_spawn_depth: 3` and `max_concurrent_children: 3`, the tree can reach 3×3×3 = 27 concurrent leaf agents. Each extra level multiplies spend — raise `max_spawn_depth` intentionally.
 
@@ -671,35 +688,33 @@ final response before the CLI exits.
   required for joining. `terminal.oneshot_completion_wait_seconds` is not a
   delegation timeout. Canonical terminal notifications remain gateway-owned.
 
-Closing the CLI detaches rather than terminating its gateway-owned turn. Child
-execution is still process-local to that owner: use a durable scheduler for work
-that must survive an owner restart.
+Closing the CLI detaches rather than terminating its gateway-owned turn. Persistent
+children retain accepted work and native history for recovery after an owner restart.
+Explicitly ephemeral workers cannot resume their execution after process loss.
 
 ## Lifetime and Durability
 
-:::warning Background completion durability is not durable execution
-Top-level model-facing `delegate_task` calls run in the background automatically where the session supports later delivery. Hermes returns a handle immediately, and the result re-enters the conversation after the child or batch finishes. Orchestrator subagents wait for their workers in the current turn because they must synthesize those results before returning. Stateless request/response endpoints fall back to synchronous execution when they cannot deliver a detached result later.
+Top-level model-facing `delegate_task` calls run in the background automatically where the session supports later delivery. Hermes returns a handle immediately, and final results re-enter the conversation after the child or batch finishes. Orchestrator subagents join their workers in the current turn and handle coordination mail before returning a final synthesis. Stateless request/response endpoints fall back to synchronous execution when they cannot deliver a detached result later.
 
 - Normal follow-up messages do not cancel background children. `/stop` on any surface (gateway `/stop` — also when the session is idle after the dispatching turn ended — CLI `/stop`, the Desktop/TUI Stop button, an ACP cancel) ends the session's running background delegations, and closing or resetting the owning session does the same.
 - Explicit session close/reset interrupts that session's background children. Closing a TUI viewer of a gateway-owned session does not kill the gateway's work.
-- A Hermes process restart does **not** resume a running child. Its attempt becomes `unknown` because Hermes cannot prove which side effects happened.
+- A persistent child's accepted work, pending coordination mail, native history and saved worktree survive a process restart. Recovery continues the same child and inspects uncertain external outcomes before repeating actions; it does not guarantee exactly-once external effects. Only explicit `ephemeral=true` uses a process-local worker whose execution cannot resume after process loss.
 - A child that completed before restart but whose result was not delivered is restored and routed back through the owning session's normal checks.
 - Stopped children return a structured result (`status="interrupted"`, `exit_reason="interrupted"`) whose `summary` is the last text the child produced before the stop (the interrupt placeholder moves to `error`). The stop recurses down the spawn tree — an orchestrator child's synchronous workers are interrupted first and their partial results roll up into the child's own interrupted result — and each background unit's result re-enters the conversation right away as its normal completion notice (`Subagent Task Interrupted: …`), so nothing waits for the child to exhaust its budget.
 
-For **durable execution** that must survive session closure or process restart, use:
+For schedules or shell work independent of the delegated task lifecycle, use:
 
 - `cronjob` (action=`create`) — schedules a separate agent run; immune to parent-turn interrupts.
 - `terminal(background=True, notify_on_complete=True)` — long-running shell commands that keep running while the agent does other things.
-:::
 
 ## Key Properties
 
 - Each subagent gets its **own terminal session** (separate from the parent)
 - Subagents inherit the parent's enabled toolsets; the model cannot select or widen them per call
-- **Nested delegation is opt-in** — only `role="orchestrator"` children can delegate further, and only when `max_spawn_depth` is raised from its default of 1 (flat). Disable globally with `orchestrator_enabled: false`.
-- Leaf subagents **cannot** call: `delegate_task`, `clarify`, `memory`, `send_message`, `cronjob`. Orchestrator subagents retain `delegate_task` but keep the other blocks. Both roles retain `execute_code` (programmatic tool calling) so children can batch mechanical work instead of burning reasoning iterations.
+- **Spawning is depth-derived** — orchestration configuration and remaining depth determine whether a child may spawn. Leaves retain coordination.
+- Both roles retain `delegate_task`; leaves use it for coordination and cannot spawn. `clarify`, `memory`, `send_message` and `cronjob` remain blocked. Both roles retain `execute_code` (programmatic tool calling) so children can batch mechanical work instead of burning reasoning iterations.
 - **Cancellation follows ownership** — `/stop` or closing/resetting the owning session ends its background children and the synchronous descendants beneath them; each returns an interrupted completion carrying its partial output
-- Only the final summary enters the parent's context, keeping token usage efficient
+- Final summaries and addressed coordination messages enter the parent's context; full child tool traces are not copied automatically
 - Subagents inherit the parent's **API key, provider configuration, and credential pool** (enabling key rotation on rate limits)
 
 ## Worktree Isolation

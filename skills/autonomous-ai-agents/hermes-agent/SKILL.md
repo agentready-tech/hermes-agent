@@ -1,7 +1,7 @@
 ---
 name: hermes-agent
 description: "Use, configure, theme, extend, and orchestrate Hermes Agent."
-version: 3.2.0
+version: 3.2.1
 author: Hermes Agent + Teknium
 license: MIT
 platforms: [linux, macos, windows]
@@ -125,10 +125,10 @@ Run additional Hermes processes as fully independent subprocesses — separate s
 | | `delegate_task` | Spawning `hermes` process |
 |-|-----------------|--------------------------|
 | Isolation | Separate conversation, shared process | Fully independent process |
-| Duration | Minutes (bounded by parent loop) | Hours/days |
+| Duration | Persistent across turns/restarts; each attempt has limits | Independent process lifetime |
 | Tool access | Subset of parent's tools | Full tool access |
-| Interactive | No | Yes (PTY mode) |
-| Use case | Quick parallel subtasks | Long autonomous missions |
+| Interactive | Parent/peer messages during work; user exchange via parent | Yes (PTY mode) |
+| Use case | Reusable projects and parallel subtasks | Missions needing a separate process |
 
 ### One-Shot Mode
 
@@ -188,7 +188,7 @@ terminal(command="tmux new-session -d -s resumed 'hermes --resume 20260225_14305
 
 ### Tips
 
-- **Prefer `delegate_task` for quick subtasks** — less overhead than spawning a full process
+- **Prefer `delegate_task` for subtasks and reusable project work** — saved child histories and parent/peer coordination without spawning a separate Hermes process. See `references/background-systems.md` for `message`, `wait` and queued `send` semantics.
 - **Use `-w` (worktree mode)** when spawning agents that edit code — prevents git conflicts
 - **Set timeouts** for one-shot mode — complex tasks can take 5-10 minutes
 - **Use `hermes chat -q` for fire-and-forget** — no PTY needed
