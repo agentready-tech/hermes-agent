@@ -80,15 +80,16 @@ def _build_child(parent, store, project, message):
     pending = next((m for m in reversed(history) if m.get("role") == "user" and m.get("message_id") == message["message_id"]), None)
     text = message["content"]
     options = json.loads(message["options_json"])
+    mail_metadata = None
+    if options.get("agent_mail_wake") and not pending:
+        from tools.delegate_mail_work import stage_mail_input
+        text, mail_metadata = stage_mail_input(child, message, history)
     child._delegate_output_schema = options.get("output_schema")
     if options.get("output_schema"):
         from tools.delegation_output_schema import append_output_contract
         text = append_output_contract(text, options["output_schema"])
     if not pending:
         child._delegate_images = options.get("images")
-    if pending:
-        text = ("Continue the interrupted project task below. Review the existing tool outcomes and check actual "
-                "external state before repeating actions whose outcome is unknown.\n\n" + text)
     manager = getattr(parent, "_memory_manager", None)
     if manager and not pending:
         try:
@@ -99,6 +100,11 @@ def _build_child(parent, store, project, message):
             logger.warning("Project memory recall failed", exc_info=True)
     child._delegate_resume_kwargs = {"conversation_history": history,
                                    "persist_user_platform_id": message["message_id"]}
+    if mail_metadata:
+        child._delegate_resume_kwargs.update(persist_user_display_kind="agent_message", persist_user_display_metadata=mail_metadata)
+    if pending:
+        from tools.delegate_project_resume import resume_input
+        text = resume_input(child, history, text)
     return child, text
 
 
@@ -110,6 +116,8 @@ def _run(parent, store, project, message, child, text):
         result.update(subagent_id=project["subagent_id"], session_id=child.session_id,
                       project=project["project_key"], message_id=message["message_id"])
         store.settle(project, message, result)
+        from tools.delegate_mail_work import result_mail
+        result_mail(parent, project, message, result)
         return result
     except Exception as exc:
         logger.debug("Persistent project execution failed", exc_info=True)
@@ -136,21 +144,26 @@ def _recover_projects(parent, store):
     from concurrent.futures import wait
     from tools.daemon_pool import DaemonThreadPoolExecutor
     projects = store.projects()
-    if len(projects) < 2:
-        return _recover_project(parent, store, projects[0]) if projects else []
+    if not projects:
+        return []
     executor = DaemonThreadPoolExecutor(max_workers=_get_max_concurrent_children())
     futures = [executor.submit(_recover_project_scoped, parent, project) for project in projects]
     pending = set(futures)
     interrupted = False
+    mail_ready = False
+    from agent.delegation_mail import has_mail
     try:
         while pending:
             if getattr(parent, "_interrupt_requested", False):
                 interrupted = True
                 break
-            _, pending = wait(pending, timeout=0.5)
+            if has_mail(parent, ordinary_only=True):
+                mail_ready = True
+                break
+            _, pending = wait(pending, timeout=0.1)
         return [result for future in futures if future.done() and not future.cancelled() for result in future.result()]
     finally:
-        executor.shutdown(wait=not interrupted, cancel_futures=interrupted)
+        executor.shutdown(wait=not (interrupted or mail_ready), cancel_futures=interrupted)
 
 
 def _recover_project_scoped(parent, project):
@@ -161,16 +174,20 @@ def _recover_project_scoped(parent, project):
 def _recover_project(parent, store, project):
     from tools.async_delegation import dispatch_async_delegation
     from tools.delegate_tool import _get_max_concurrent_children
+    from tools.delegate_mail_work import recover_result_mail
+    recover_result_mail(parent, store, project)
     outcomes = []
     for receipt in store.receipts(project["subagent_id"]):
         _publish_completed(store, project, receipt, json.loads(receipt["result_json"]))
     if project["archived"]:
         return outcomes
-    while not getattr(parent, "_interrupt_requested", False) and (message := store.claim(project)) is not None:
+    while not getattr(parent, "_interrupt_requested", False) and (message := _claim_project_input(parent, store, project)) is not None:
         result = store.committed_result(project, message)
         if result:
             store.settle(project, message, result)
             _publish_completed(store, project, message, result)
+            from tools.delegate_mail_work import result_mail
+            result_mail(parent, project, message, result)
             outcomes.append(result)
             continue
         try:
@@ -202,6 +219,12 @@ def _recover_project(parent, store, project):
         result = _run(parent, store, project, message, child, text)
         outcomes.append(result)
     return outcomes
+
+
+def _claim_project_input(parent, store, project):
+    from tools.delegate_mail_work import ensure_mail_input
+    ensure_mail_input(parent, store, project)
+    return store.claim(project)
 
 
 def include_projects(parent, payload, query=""):
@@ -239,6 +262,8 @@ def _project_action(parent, store, action, tasks, subagent_id, message, query, e
     if getattr(parent, "_delegate_depth", 0) > 0:
         # Nested owners need results in their current turn, not in the root UI's inbox.
         origin = {**origin, "wake": False}
+    if not origin.get("wake"):
+        origin["mail_results"] = True
     entries = []
     if action == "spawn":
         if not tasks or any(not isinstance(t.get("goal"), str) or not t["goal"].strip() for t in tasks):
@@ -295,7 +320,7 @@ def _save_workspace(parent, subagent_id, info):
 
 def recover_project_work(parent):
     """Root turn entry: replay accepted inputs even when the model does not call delegation."""
-    if getattr(parent, "_delegate_depth", 0) or getattr(parent, "_session_db", None) is None:
+    if getattr(parent, "_session_db", None) is None:
         return
     names = getattr(parent, "valid_tool_names", ())
     if not isinstance(names, (set, list, tuple, frozenset)) or "delegate_task" not in names:

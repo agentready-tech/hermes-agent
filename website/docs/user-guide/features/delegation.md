@@ -89,6 +89,41 @@ sessions continue to recover on resume. A managed home's interrupted-turn marker
 survives long outages; explicit cancellation and native crash-loop attempt guards
 remain effective. Existing compression and archive recovery are unchanged.
 
+## Messages during work
+
+Every child, including a leaf at the spawning-depth limit, can exchange
+intermediate messages with its parent and peers in the same delegation tree:
+
+```python
+delegate_task(action="peers")
+delegate_task(action="message", subagent_id="parent",
+              message="The supplier changed the deadline. Which date should I use?")
+delegate_task(action="message", subagent_id="project-...",
+              message="Here is the finding you asked for; source: ...")
+delegate_task(action="wait", timeout_seconds=30)
+```
+
+`message` acknowledges durable acceptance and returns immediately. It does not
+finish the sender's task or wait for a reply. `wait` waits up to 60 seconds for
+mail; the messages enter the same conversation after the tool returns. Otherwise
+the agent can continue independent work. `send` retains its existing meaning: a
+new queued task turn for a persistent child.
+
+The runtime supplies sender identity. Messages are coordination data, not new
+user instructions. A peer can send a message but cannot take over the recipient's
+history or control another conversation. Spawning remains role/depth limited.
+Avoid replying merely to acknowledge every progress report.
+
+`delegation_mail` in the existing `state.db` holds pending delivery receipts.
+The payload is retired only after native conversation history witnesses admission.
+Restart replay repairs the admission/acknowledgement gap without another insertion.
+Idle persistent children resume through their existing task queue and history;
+paused or archived children are not automatically resumed by coordination mail.
+A synchronous join yields for an incoming question so its parent can reply while
+the child keeps running. If mail arrives during a final model response, the same
+turn continues before returning a final answer. Wake notifications are labelled as
+coordination rather than falsely reporting that a subagent completed its task.
+
 ## Single Task
 
 ```python

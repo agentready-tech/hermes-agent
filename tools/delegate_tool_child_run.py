@@ -780,7 +780,8 @@ class _ChildRun:
             # The child's context is already built; carry the isolation contract on
             # the goal message instead (same turn, no system-prompt mutation).
             from tools.subagent_worktree import build_worktree_context_note
-            self.goal = self.goal + build_worktree_context_note(self.worktree_info)
+            if not getattr(self.child, "_delegate_replaying_input", False):
+                self.goal = self.goal + build_worktree_context_note(self.worktree_info)
         self.wall_start = time.time()
         self.parent_reads_snapshot = list(file_state.known_reads(self.parent_task_id)) if self.parent_task_id else []
 

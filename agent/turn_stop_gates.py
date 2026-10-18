@@ -112,6 +112,10 @@ def apply_stop_gates(
     holds. Hook lookups are imported lazily from their origin modules (tests patch them
     there)."""
 
+    from agent.delegation_mail import deliver
+    if deliver(agent, messages, final_message=final_msg):
+        return StopGateVerdict(True, None, pending_verification_response, pending_verification_response_previewed)
+
     def _continue(nudge: str, flag: str) -> StopGateVerdict:
         """Append the synthetic nudge row and hand the turn back to the loop."""
         append_message(messages, {"role": "user", "content": nudge, flag: True})

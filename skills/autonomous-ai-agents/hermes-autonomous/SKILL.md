@@ -1,7 +1,7 @@
 ---
 name: hermes-autonomous
 description: "Run schedules and project work in the main session."
-version: 1.1.0
+version: 1.2.0
 author: Mihail Arlashkin, Hermes Agent
 license: MIT
 platforms: [linux, macos]
@@ -49,6 +49,10 @@ must enter the main conversation.
 - A task without `project` also gets a persistent child and a saved ID.
 - Use `ephemeral=true` explicitly for a disposable check or comparison batch.
 - Continue its history: `delegate_task(action='send', subagent_id='returned-id', message='New evidence', event_id='source-event-id')`.
+- Find the parent and peer IDs: `delegate_task(action='peers')`.
+- Send a question, finding or reply without ending work: `delegate_task(action='message', subagent_id='parent', message='Concrete question or evidence')`.
+- Address a sibling with its ID from `peers`; wait only when its reply is required: `delegate_task(action='wait', timeout_seconds=30)`.
+- Use `send` for a queued follow-up turn; `message` can enter an already-running turn.
 - Read the child's result/history: `delegate_task(action='read', subagent_id='returned-id')`.
 
 ## Procedure
@@ -63,7 +67,8 @@ must enter the main conversation.
 4. Send later facts to that child with the source event ID for deduplication.
    Keep overall decisions and the user-facing result in the main conversation.
 5. Let native completion delivery wake the parent. Inspect existing outcomes
-   before repeating actions after a restart.
+   before repeating actions after a restart. A coordination message is not task
+   completion; answer useful questions and keep working. Avoid acknowledgement loops.
 
 ## Pitfalls
 

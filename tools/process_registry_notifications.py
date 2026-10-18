@@ -281,6 +281,8 @@ def _format_async_delegation(evt: dict) -> str:
     """Self-contained re-injection for an async-delegation completion: the FULL
     original task source (goal, context, toolsets, role, model), dispatch time, status
     and result, so an agent deep in unrelated context can act on it or re-dispatch."""
+    if evt.get("agent_message"):
+        return "[AGENT COORDINATION MESSAGE]\n" + str(evt.get("summary") or "Coordination mail is waiting.")
     deleg_id = evt.get("delegation_id", "unknown")
     completed_at = evt.get("completed_at") or time.time()
     if evt.get("task_failure_notice"):
@@ -318,6 +320,8 @@ def _format_async_delegation(evt: dict) -> str:
 
 def async_delegation_display_text(evt: dict) -> str:
     """Compact UI title; the separate model notification retains all task evidence."""
+    if evt.get("agent_message"):
+        return "Agent coordination message"
     raw_results = evt.get("results")
     results = [r for r in raw_results if isinstance(r, dict)] if isinstance(raw_results, list) else []
     results = results or [evt]
@@ -399,6 +403,8 @@ class TimelineNotification(str):
     @classmethod
     def for_delegation(cls, text: str, event: dict) -> "TimelineNotification":
         from agent.notification_presentation import diagnostic_process_event
+        if event.get("agent_message"):
+            return cls(text, async_delegation_display_text(event), "agent_message")
         return cls(text, async_delegation_display_text(event), "async_delegation_complete",
                    "diagnostic" if diagnostic_process_event(event) else "result")
 

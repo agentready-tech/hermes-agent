@@ -207,6 +207,9 @@ def _build_child_system_prompt(
         if _ctx_files.strip():
             parts.append(_CONTEXT_FILES_INTRO + _ctx_files.strip())
     parts.append(_COMPLETION_INSTRUCTIONS)
+    parts.append("During work, use delegate_task(action='peers') to discover your parent and siblings. "
+                 "Send intermediate findings, questions or replies with action='message', subagent_id='parent' or a peer ID. "
+                 "This does not finish your task. Use action='wait' when a reply is required; otherwise continue working.")
     if role == "orchestrator":
         child_note = _LEAF_CHILDREN_NOTE if child_depth + 1 >= max_spawn_depth else _NESTED_CHILDREN_NOTE
         parts.append(

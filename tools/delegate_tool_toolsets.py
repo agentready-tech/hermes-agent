@@ -13,7 +13,6 @@ logger = logging.getLogger("tools.delegate_tool")  # log-record parity with the 
 # Tools that children must never have access to
 DELEGATE_BLOCKED_TOOLS = frozenset(
     [
-        "delegate_task",  # no recursive delegation
         "clarify",  # no user interaction
         "memory",  # no writes to shared MEMORY.md
         "send_message",  # no cross-platform side effects
@@ -68,8 +67,6 @@ def _blocked_toolsets_for_role(role: str) -> list[str]:
     """One-tool deny toolsets for the role; passed as ``disabled_toolsets`` so
     blocked names inside mixed bundles are subtracted AFTER composite expansion."""
     blocked_names = set(DELEGATE_BLOCKED_TOOLS)
-    if role == "orchestrator":
-        blocked_names.discard("delegate_task")
     return sorted(
         name for name, defn in TOOLSETS.items() if defn.get("tools") and set(defn.get("tools", ())).issubset(blocked_names)
     )
@@ -81,8 +78,8 @@ def _resolve_child_toolsets(
     ``toolsets`` are intersected with the parent's (composite-expanded) set, else the parent's enabled set is
     inherited. Blocked tools are stripped twice — whole blocked toolsets here, and exact one-tool deny toolsets via
     ``disabled_toolsets`` so blocked names inside mixed bundles (hermes-cli) are subtracted AFTER composite
-    expansion and survive registry refreshes. Orchestrators get ``delegation`` re-added unconditionally
-    (role-granted, not inherited)."""
+    expansion and survive registry refreshes. All children regain ``delegation`` for coordination;
+    spawn permission is still enforced by the facade using the depth-derived role."""
     # enabled_toolsets=None means "all tools", so derive from loaded tool names.
     parent_enabled = getattr(parent_agent, "enabled_toolsets", None)
     if parent_enabled is not None:
@@ -113,7 +110,7 @@ def _resolve_child_toolsets(
     inherited_disabled = (
         [str(name) for name in raw_parent_disabled] if isinstance(raw_parent_disabled, (list, tuple, set)) else []
     )
-    if effective_role == "orchestrator":
+    if effective_role in ("orchestrator", "leaf"):
         inherited_disabled = [name for name in inherited_disabled if name != "delegation"]
         if "delegation" not in child_toolsets:
             child_toolsets.append("delegation")

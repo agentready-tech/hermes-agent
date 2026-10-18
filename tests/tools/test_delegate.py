@@ -108,7 +108,6 @@ class TestStripBlockedTools(unittest.TestCase):
         for toolset_name in (
             "clarify",
             "cronjob",
-            "delegation",
             "memory",
         ):
             self.assertIn(toolset_name, disabled)
@@ -1186,7 +1185,7 @@ class TestChildCredentialPoolResolution(unittest.TestCase):
 
         self.assertEqual(
             MockAgent.call_args[1]["enabled_toolsets"],
-            ["web", "browser"],
+            ["web", "browser", "delegation"],
         )
 
 
@@ -1751,7 +1750,7 @@ class TestOrchestratorRoleBehavior(unittest.TestCase):
             MockAgent.return_value = mock_child
             delegate_task(ephemeral=True, goal="test", role="orchestrator", parent_agent=parent)
             kwargs = MockAgent.call_args[1]
-            self.assertNotIn("delegation", kwargs["enabled_toolsets"])
+            self.assertIn("delegation", kwargs["enabled_toolsets"])
             self.assertEqual(mock_child._delegate_role, "leaf")
 
 
@@ -1855,9 +1854,9 @@ class TestOrchestratorEndToEnd(unittest.TestCase):
         self.assertIn("delegation", built_agents[0]["enabled_toolsets"])
         self.assertTrue(built_agents[0]["is_orchestrator_prompt"])
         # Next two = leaves (grandchildren)
-        self.assertNotIn("delegation", built_agents[1]["enabled_toolsets"])
+        self.assertIn("delegation", built_agents[1]["enabled_toolsets"])
         self.assertFalse(built_agents[1]["is_orchestrator_prompt"])
-        self.assertNotIn("delegation", built_agents[2]["enabled_toolsets"])
+        self.assertIn("delegation", built_agents[2]["enabled_toolsets"])
         self.assertFalse(built_agents[2]["is_orchestrator_prompt"])
 
 

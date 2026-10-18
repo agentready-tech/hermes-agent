@@ -59,32 +59,38 @@ class ProjectStore:
     def get(self, subagent_id):
         with _transaction() as conn:
             conn.row_factory = sqlite3.Row
-            return self._owned(conn.execute("SELECT * FROM delegated_projects WHERE subagent_id=?", (subagent_id,)).fetchone())
+            row = conn.execute("SELECT * FROM delegated_projects WHERE subagent_id=?", (subagent_id,)).fetchone()
+        return self._owned(row)
 
     def projects(self, query=""):
+        # Never take SessionDB's lock while holding SQLite's writer lock: live mail can
+        # arrive while a sibling is flushing its native transcript on the shared handle.
         with _transaction() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("SELECT * FROM delegated_projects ORDER BY updated_at DESC").fetchall()
-            result = []
+            snapshot = []
             for row in rows:
-                try:
-                    project = self._owned(row)
-                except ValueError:
-                    continue
-                if query:
-                    words = set(re.findall(r"\w+", query.casefold()))
-                    text = (project["project_key"] + " " + project["goal"] + " " + (project["context"] or "")).casefold()
-                    project["match_score"] = len(words & set(re.findall(r"\w+", text))) + 5 * (query.casefold() in text)
-                    if not project["match_score"]:
-                        continue
                 last = conn.execute("SELECT state,result_json,message_id FROM delegated_project_messages WHERE subagent_id=? ORDER BY accepted_at DESC LIMIT 1", (row["subagent_id"],)).fetchone()
                 live = conn.execute("SELECT state FROM delegated_project_messages WHERE subagent_id=? AND state IN ('pending','running') ORDER BY accepted_at LIMIT 1", (row["subagent_id"],)).fetchone()
-                project.update(status="archived" if project["archived"] else ("paused" if project["paused"] else (live[0] if live else "idle")))
-                if last:
-                    project.update(last_message_id=last["message_id"], last_status=last["state"],
-                                   last_summary=(json.loads(last["result_json"] or "{}").get("summary") or "")[:2000])
-                result.append(project)
-            return sorted(result, key=lambda p: p.get("match_score", 0), reverse=True)
+                snapshot.append((row, last, live))
+        result = []
+        for row, last, live in snapshot:
+            try:
+                project = self._owned(row)
+            except ValueError:
+                continue
+            if query:
+                words = set(re.findall(r"\w+", query.casefold()))
+                text = (project["project_key"] + " " + project["goal"] + " " + (project["context"] or "")).casefold()
+                project["match_score"] = len(words & set(re.findall(r"\w+", text))) + 5 * (query.casefold() in text)
+                if not project["match_score"]:
+                    continue
+            project.update(status="archived" if project["archived"] else ("paused" if project["paused"] else (live[0] if live else "idle")))
+            if last:
+                project.update(last_message_id=last["message_id"], last_status=last["state"],
+                               last_summary=(json.loads(last["result_json"] or "{}").get("summary") or "")[:2000])
+            result.append(project)
+        return sorted(result, key=lambda p: p.get("match_score", 0), reverse=True)
 
     def create(self, key, goal, context, cwd=None):
         if not isinstance(key, str) or not key.strip():

@@ -46,10 +46,18 @@ answers are not executed again, and explicit stops remain paused until a new sen
 No additional service or database is required.
 
 Existing named project identities, native histories and queue records stay valid;
-no data migration or history rewrite is needed. Existing transient runs and their
+no history rewrite is needed. The additive `delegation_mail` table is reconciled
+automatically in the same `state.db`; existing tables and session IDs stay intact. Existing transient runs and their
 saved native transcripts are left intact; they are not silently converted into
 project queues. `/review` deliberately selects the ephemeral path for its single
 independent assessment. Grouped transient fan-outs also require `ephemeral=true`.
+
+Intermediate coordination uses the existing tool's `message`, `peers` and `wait`
+actions. Children can message their parent and siblings without a final return;
+role/depth checks still govern spawning. Native history witnesses mailbox admission,
+so restart replay repairs acknowledgement gaps without inserting the message twice.
+A waiting synchronous parent yields to answer a child's question while the child
+keeps working; late results stay in the original project receipt.
 
 The fork retains its enhanced bundled Holographic provider and its regression tests.
 Upstream moved the stock provider to the external catalog; that migration must not

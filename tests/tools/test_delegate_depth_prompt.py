@@ -64,7 +64,7 @@ def test_dispatched_child_prompt_matches_depth_capability(
     can_delegate = enabled and depth < max_depth
     assert child._delegate_depth == depth
     assert child._delegate_role == ("orchestrator" if can_delegate else "leaf")
-    assert ("delegation" in kwargs["enabled_toolsets"]) == can_delegate
+    assert "delegation" in kwargs["enabled_toolsets"]  # Leaf workers retain coordination; spawning is checked separately.
     assert ("CAN spawn your own subagents" in prompt) == can_delegate
     # Neither sibling note may teach a nonexistent model-controlled role knob.
     assert "role=" not in prompt

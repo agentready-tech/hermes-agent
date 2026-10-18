@@ -250,6 +250,11 @@ def _setup_mcp_shim(agent, args: dict, ctx: InlineToolContext) -> Any:
 
 
 # Order is the historical if/elif order of ``execute_tool_calls_sequential``.
+
+def _call_delegate(agent, args, ctx):
+    from agent.delegation_mail import dispatch
+    return dispatch(agent, args, ctx)
+
 _RAW_INLINE_TOOL_EXECUTORS: dict[str, InlineToolExecutor] = {
     "todo_list": _tool(
         "tools.todo_tool", "todo_tool", ("todos", "todos"), ("merge", "merge", False),
@@ -298,7 +303,7 @@ _RAW_INLINE_TOOL_EXECUTORS: dict[str, InlineToolExecutor] = {
     "manage_connections": _manage_connections,
     "manage_catalog": _manage_catalog,
     "setup_mcp": _setup_mcp_shim,
-    "delegate_task": lambda agent, args, ctx: agent._dispatch_delegate_task(args),
+    "delegate_task": _call_delegate,
 }
 
 

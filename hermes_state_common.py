@@ -699,6 +699,23 @@ CREATE TABLE IF NOT EXISTS delegated_project_messages (
 );
 CREATE INDEX IF NOT EXISTS delegated_project_inbox ON delegated_project_messages(subagent_id, state, accepted_at);
 
+CREATE TABLE IF NOT EXISTS delegation_mail (
+    message_id TEXT PRIMARY KEY,
+    root_session_id TEXT NOT NULL,
+    sender_session_id TEXT NOT NULL,
+    target_session_id TEXT NOT NULL,
+    event_key TEXT,
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'message',
+    origin_json TEXT NOT NULL,
+    accepted_at REAL NOT NULL,
+    delivery_id TEXT,
+    delivered_at REAL,
+    UNIQUE(sender_session_id, target_session_id, event_key)
+);
+CREATE INDEX IF NOT EXISTS delegation_mail_inbox ON delegation_mail(target_session_id, delivered_at);
+
 CREATE TABLE IF NOT EXISTS async_delegations (
     delegation_id TEXT PRIMARY KEY,
     origin_session TEXT NOT NULL,
@@ -760,6 +777,7 @@ CREATE INDEX IF NOT EXISTS idx_async_delegations_delivery
 # otherwise dies on the bare FK with no hint. It prints the RAISE text verbatim and buckets errors by phrase,
 # so the text must stay free of the words it reads as storage damage, lock contention or disk trouble.
 DEFERRED_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS messages_platform_id ON messages(platform_message_id) WHERE platform_message_id IS NOT NULL;
 DROP TRIGGER IF EXISTS sessions_runtime_ledger_delete_guard;
 CREATE TRIGGER IF NOT EXISTS sessions_runtime_ledger_delete_guard
 BEFORE DELETE ON sessions

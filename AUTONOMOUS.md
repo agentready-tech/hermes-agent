@@ -9,6 +9,13 @@ Delegation creates reusable persistent children by default; only an explicit
 an automatic saved identity. Use `send` with its returned subagent ID to continue
 the same history; `project` is an optional stable name for finding/reusing it.
 
+Parents and subagents can exchange intermediate questions, findings and replies
+through `delegate_task(action='message')`; `peers` discovers recipients and `wait`
+waits for replies without finishing the task. Use `subagent_id='parent'` for the
+immediate parent. Coordination mail is durable in `state.db` and enters the same
+native history at a safe boundary. Idle persistent recipients reuse their saved
+session and queue; explicit pauses and archives remain effective.
+
 ## Start
 
 Use Python 3.14 and the native Hermes PM installation, or the fork's Docker

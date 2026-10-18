@@ -9,16 +9,18 @@ from tools.delegate_project_store import _transaction
 
 
 def publish_recovery_wakeups():
+    from tools.delegate_mail import publish_pending_mail
+    mail_count = publish_pending_mail()
     alive = _owner_liveness()
     if alive is None:
-        return 0
+        return mail_count
     with _transaction() as conn:
         rows = conn.execute("SELECT p.parent_session_id,p.project_key,p.subagent_id,m.message_id,m.origin_json,"
             "COALESCE(m.owner_pid,a.owner_pid),CASE WHEN m.owner_pid IS NOT NULL THEN m.owner_started_at ELSE a.owner_started_at END "
             "FROM delegated_project_messages m JOIN delegated_projects p USING(subagent_id) "
             "LEFT JOIN async_delegations a ON a.delegation_id=m.message_id "
             "WHERE (m.state IN ('pending','running') OR m.published=0) AND p.archived=0 AND p.paused=0").fetchall()
-    count = 0
+    count = mail_count
     live_projects = {sid for _, _, sid, _, _, pid, started in rows if pid and alive(pid, started)}
     for parent, key, sid, mid, raw_origin, pid, started in rows:
         if sid in live_projects:
@@ -35,7 +37,7 @@ def publish_recovery_wakeups():
     return count
 
 
-def publish_wakeup(identity, parent, origin, summary):
+def publish_wakeup(identity, parent, origin, summary, *, agent_message=False):
     # One deterministic recovery notice per abandoned owner/input, including across
     # the managed serve and messaging gateway processes sharing this profile.
     with _transaction() as conn:
@@ -43,7 +45,7 @@ def publish_wakeup(identity, parent, origin, summary):
             return False
         now = time.time()
         event = {"type": "async_delegation", "delegation_id": identity, "parent_session_id": parent,
-            "durable_recovery": True,
+            "durable_recovery": True, "agent_message": agent_message,
             "origin_session_id": parent, "status": "completed", "summary": summary,
             "goal": "Restore accepted work after restart", "dispatched_at": now, "completed_at": now,
             **{k: v for k, v in origin.items() if k != "wake"}}
