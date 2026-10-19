@@ -91,9 +91,12 @@ def test_rdp_reinstall_preserves_configuration_and_remembers_the_mode(tmp_path):
 
 
 @pytest.mark.platforms("posix")
-def test_old_xrdp_is_rejected_before_any_privileged_change(tmp_path, monkeypatch):
+def test_provisioning_must_leave_a_supported_xrdp_binary(tmp_path, monkeypatch):
     from hermes_runtime.standalone import rdp
+    from hermes_runtime.standalone import rdp_packages, rdp_session
 
+    monkeypatch.setattr(rdp_packages, "ensure", lambda: None)
+    monkeypatch.setattr(rdp_session, "xfce_sessions", list)
     monkeypatch.setattr(rdp, "command", lambda name: [name])
     monkeypatch.setattr(rdp.subprocess, "run", lambda *args, **kwargs:
         subprocess.CompletedProcess(args, 0, stdout="xrdp 0.9.24\n", stderr=""))
@@ -142,3 +145,37 @@ def test_rdp_start_refuses_to_create_a_second_desktop_beside_a_console(tmp_path,
     monkeypatch.setattr(rdp_session, "xfce_sessions", lambda: [{"DISPLAY": ":0", "XDG_CURRENT_DESKTOP": "XFCE"}])
     with pytest.raises(ValueError, match="console"):
         rdp_session.start(tmp_path)
+
+
+@pytest.mark.platforms("posix")
+def test_default_tls_key_gets_service_group_access_without_changing_the_key(tmp_path, monkeypatch):
+    import grp
+    import pwd
+    from hermes_runtime.standalone import rdp
+
+    key = tmp_path / "snakeoil.key"
+    key.write_text("private key stays untouched")
+    (tmp_path / "key.pem").symlink_to(key)
+    config = tmp_path / "xrdp.ini"
+    config.write_text("[Globals]\nruntime_user=xrdp\nkey_file=\n")
+    monkeypatch.setattr(pwd, "getpwnam", lambda name: SimpleNamespace(pw_name=name, pw_gid=99))
+    monkeypatch.setattr(grp, "getgrnam", lambda name: SimpleNamespace(gr_name=name, gr_gid=100))
+    monkeypatch.setattr(rdp.os, "getgrouplist", lambda *args: [99])
+    monkeypatch.setattr(rdp, "command", lambda name: [name])
+    calls = []
+    monkeypatch.setattr(rdp, "root_run", lambda *args: calls.append(args))
+    assert rdp.prepare_tls(config, key)
+    assert calls == [("usermod", "-a", "-G", "ssl-cert", "--", "xrdp")]
+    monkeypatch.setattr(rdp.os, "getgrouplist", lambda *args: [99, 100])
+    assert not rdp.prepare_tls(config, key)
+    assert len(calls) == 1 and key.read_text() == "private key stays untouched"
+
+
+@pytest.mark.platforms("posix")
+def test_custom_tls_key_permissions_are_preserved(tmp_path, monkeypatch):
+    from hermes_runtime.standalone import rdp
+
+    config = tmp_path / "xrdp.ini"
+    config.write_text(f"[Globals]\nruntime_user=my-daemon\nkey_file={tmp_path / 'custom.key'}\n")
+    monkeypatch.setattr(rdp, "root_run", lambda *args: pytest.fail("custom key permissions changed"))
+    assert not rdp.prepare_tls(config, tmp_path / "snakeoil.key")

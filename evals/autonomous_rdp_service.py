@@ -1,7 +1,8 @@
 """Disposable Linux xrdp proof: bootstrap without a viewer, reconnect twice, preserve history.
 
 Requires root in a disposable container, the hermesrdp test account with
-passwordless sudo, xrdp >= 0.10, xorgxrdp, Xfce, Xvfb and xfreerdp3. Never run on
+passwordless sudo, Xfce, Xvfb and xfreerdp3. The installer provisions the RDP
+packages automatically. Never run on
 a deployed host: it configures the container's real /etc/xrdp and starts daemons.
 """
 
@@ -33,10 +34,10 @@ def binary(name):
     return list(result)
 
 
-def as_user(*args, **kwargs):
+def as_user(*args, timeout=90, **kwargs):
     try:
         return subprocess.run([*binary("runuser"), "-u", ACCOUNT, "--", *args],
-            check=True, capture_output=True, text=True, timeout=90, **kwargs)
+            check=True, capture_output=True, text=True, timeout=timeout, **kwargs)
     except subprocess.CalledProcessError as error:
         print(error.stdout, error.stderr, file=sys.stderr)
         raise
@@ -134,7 +135,7 @@ def prove():
     runtime.chmod(0o700)
     action("seed")
     result = as_user(sys.executable, "-m", "hermes_runtime.standalone.cli", "--home", str(HOME),
-        "install-service", "--rdp")
+        "install-service", "--rdp", timeout=1800)
     installed = json.loads(result.stdout)
     assert installed["rdp"]["backend"] == "Xorg"
     subprocess.run([*binary("systemd-analyze"), "verify", "--man=no", installed["rdp"]["unit"]], check=True, timeout=20)

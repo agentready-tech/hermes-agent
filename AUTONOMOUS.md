@@ -57,11 +57,21 @@ hermes-autonomous install-service --rdp --enable
 ```
 
 Run this as the same local Unix account that will log in through RDP. This mode
-requires systemd, xrdp 0.10 or newer, xorgxrdp, Xfce (`startxfce4`, `xfce4-session`,
-`xfconf-query`) and `xdpyinfo` already installed. On Debian/Ubuntu these come from
-`xrdp xorgxrdp xfce4-session xfce4-settings x11-utils` alongside the VM's Xfce
-desktop. Older xrdp versions are rejected before changing service files. The
-installer uses `sudo` for host configuration; do not run the whole command as a
+requires systemd and an existing Xfce installation (`startxfce4`, `xfce4-session`,
+`xfconf-query`). Xfce is the desktop; xrdp is the RDP server and xorgxrdp is its
+Xorg display driver. They are separate packages and need not come with Xfce.
+On Ubuntu/Debian the command automatically installs compatible xrdp/xorgxrdp
+0.10+ and the X11/D-Bus utilities. A compatible installed stack is reused.
+If the OS repository only offers 0.9, it builds xrdp 0.10.6.1 and xorgxrdp 0.10.5
+as native `.deb` packages against that VM's libraries. Both upstream sources and
+Debian packaging are pinned and SHA256 checked before extraction. This fallback
+installs build dependencies and needs several minutes and internet access; it
+does not add a PPA or mix repositories from other OS releases. Package upgrades
+preserve existing configuration and back up the original RDP INI files first.
+For the standard Debian/Ubuntu certificate, it grants the unprivileged xrdp daemon
+membership in `ssl-cert` and refreshes the daemon when needed, so TLS works too.
+Custom certificate permissions are preserved.
+The installer uses `sudo` for host configuration; do not run the whole command as a
 different account or it will install that account's desktop and Hermes home.
 
 The installer adds one `hermes-xfce-rdp-<uid>.service` system unit per Unix account.

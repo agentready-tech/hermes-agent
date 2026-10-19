@@ -79,7 +79,7 @@ def install_service(home, enable, *, rdp=None):
             subprocess.run(["loginctl", "enable-linger"], env=environment, check=True, timeout=30)
         subprocess.run(["systemctl", "--user", "daemon-reload"], env=environment, check=True, timeout=30)
         if user:
-            desktop_rdp.enable(user)
+            desktop_rdp.enable(user, restart_rdp=managed["tls_group_added"])
             from hermes_runtime.standalone.rdp_session import wait_for_desktop
             live = wait_for_desktop(home)
             session = {"captured": True, "display": live["DISPLAY"]}

@@ -17,7 +17,7 @@ from hermes_platform.resolver import locate_command
 def command(name):
     value = locate_command(name).command
     if not value:
-        raise ValueError(f"RDP setup requires {name}; install xrdp >= 0.10, xorgxrdp and Xfce first")
+        raise ValueError(f"RDP setup requires the command {name}")
     return list(value)
 
 
@@ -67,6 +67,7 @@ def preflight(home):
     import pwd
     from hermes_runtime.standalone.config import read_config
     from hermes_runtime.standalone.rdp_session import check_sessions, xfce_sessions
+    from hermes_runtime.standalone.rdp_packages import ensure
 
     config = read_config(home)
     for section in ("terminal", "browser", "bot_desktop"):
@@ -75,7 +76,13 @@ def preflight(home):
     user = pwd.getpwuid(os.getuid())
     if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_.-]*\$?", user.pw_name):
         raise ValueError("Unsupported Unix account name for the RDP service")
-    for name in ("xrdp-sesrun", "startxfce4", "xfce4-session", "xdpyinfo", "xfconf-query"):
+    for name in ("startxfce4", "xfce4-session", "xfconf-query"):
+        command(name)
+    check_sessions(xfce_sessions())
+    if os.geteuid() != 0:
+        command("sudo")
+    ensure()
+    for name in ("xrdp-sesrun", "xdpyinfo"):
         command(name)
     version = subprocess.run([*command("xrdp"), "--version"], capture_output=True, text=True, check=True, timeout=15)
     match = re.search(r"\bxrdp\s+(\d+)\.(\d+)", version.stdout + version.stderr)
@@ -86,15 +93,12 @@ def preflight(home):
     if "Xorg" not in ini or ini["Xorg"].get("code") != "20":
         raise ValueError("RDP setup requires the native [Xorg] backend in /etc/xrdp/xrdp.ini and xorgxrdp")
     Path("/etc/xrdp/sesman.ini").read_text()
-    check_sessions(xfce_sessions())
-    if os.geteuid() != 0:
-        command("sudo")
     return user
 
 
-def root_run(*args, **kwargs):
+def root_run(*args, timeout=90, **kwargs):
     prefix = [] if os.geteuid() == 0 else [*command("sudo"), "--"]
-    return subprocess.run([*prefix, *args], check=True, timeout=90, **kwargs)
+    return subprocess.run([*prefix, *args], check=True, timeout=timeout, **kwargs)
 
 
 def write_system_file(path, text, *, backup=False):
@@ -153,6 +157,26 @@ def prepare_desktop(user):
         atomic_write_text(path, value, mode=0o600)
 
 
+def prepare_tls(config_path, standard_key):
+    """Allow the unprivileged daemon to read Debian's default TLS certificate key."""
+    import grp
+    import pwd
+
+    ini = configparser.ConfigParser(interpolation=None, strict=False)
+    ini.read_string(config_path.read_text())
+    runtime_user = ini["Globals"].get("runtime_user", "root").strip()
+    if runtime_user in ("", "root"):
+        return False
+    key = Path(ini["Globals"].get("key_file") or config_path.with_name("key.pem"))
+    if key.resolve() != standard_key.resolve():
+        return False
+    user, group = pwd.getpwnam(runtime_user), grp.getgrnam("ssl-cert")
+    if group.gr_gid in os.getgrouplist(user.pw_name, user.pw_gid):
+        return False
+    root_run(*command("usermod"), "-a", "-G", group.gr_name, "--", user.pw_name)
+    return True
+
+
 def install(home, user):
     from utils import atomic_write_text
 
@@ -165,6 +189,7 @@ def install(home, user):
     write_system_file(sesman, updated, backup=True)
     xrdp = Path("/etc/xrdp/xrdp.ini")
     write_system_file(xrdp, configure_ini(xrdp.read_text(), "Globals", {"autorun": "Xorg"}), backup=True)
+    tls_group_added = prepare_tls(xrdp, Path("/etc/ssl/private/ssl-cert-snakeoil.key"))
     write_system_file(unit, render_unit(home, sys.executable, user))
     prepare_desktop(user)
     config = str(Path(os.environ.get("XDG_CONFIG_HOME") or Path(user.pw_dir) / ".config").resolve())
@@ -172,11 +197,15 @@ def install(home, user):
         f"export XDG_CONFIG_HOME={shlex.quote(config)}\nexec {shlex.quote(command('startxfce4')[0])}\n")
     atomic_write_text(Path(home) / "autonomous" / "rdp-xfce.sh", launcher, mode=0o700)
     remember(home)
-    return {"unit": str(unit), "user": user.pw_name, "backend": "Xorg", "reconnect": "same user, Xorg"}
+    return {"unit": str(unit), "user": user.pw_name, "backend": "Xorg", "reconnect": "same user, Xorg",
+            "tls_group_added": tls_group_added}
 
 
-def enable(user):
+def enable(user, *, restart_rdp=False):
     root_run("systemctl", "daemon-reload")
     root_run("systemctl", "enable", "--now", "xrdp.service")
+    if restart_rdp:
+        # Apply newly granted supplementary groups to an already-running daemon.
+        root_run("systemctl", "restart", "xrdp.service")
     root_run("systemctl", "reload", "xrdp-sesman.service")
     root_run("systemctl", "enable", "--now", unit_name(user.pw_uid))

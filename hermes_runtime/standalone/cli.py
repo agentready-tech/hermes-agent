@@ -30,7 +30,7 @@ def parser():
     commands.add_parser("gmail-worker", help=argparse.SUPPRESS)
     service = commands.add_parser("install-service", help="Install a Linux systemd user service")
     service.add_argument("--enable", action="store_true", help="Enable and start the installed service")
-    service.add_argument("--rdp", action="store_true", default=None, help="Start one persistent Xfce RDP desktop at boot (xrdp >= 0.10)")
+    service.add_argument("--rdp", action="store_true", default=None, help="Install xrdp/xorgxrdp and start one persistent Xfce RDP desktop at boot (Ubuntu/Debian)")
     commands.add_parser("service-run", help=argparse.SUPPRESS)
     commands.add_parser("desktop-session", help=argparse.SUPPRESS)
     commands.add_parser("rdp-start", help=argparse.SUPPRESS)
