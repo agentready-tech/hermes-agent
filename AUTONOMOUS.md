@@ -20,7 +20,9 @@ session and queue; explicit pauses and archives remain effective.
 
 Use Python 3.14 and the native Hermes PM installation, or the fork's Docker
 image. An installed fork exposes `hermes-autonomous`; from a checkout the
-equivalent is `python -m hermes_runtime.standalone.cli`.
+equivalent is `python -m hermes_runtime.standalone.cli`. The source installer
+publishes `hermes-autonomous` on PATH alongside `hermes`; updates and launcher
+repair refresh the same command automatically.
 Foreground supervision supports Linux and macOS; use the Linux container on Windows.
 
 ```sh

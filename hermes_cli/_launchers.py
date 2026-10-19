@@ -99,13 +99,14 @@ def installation_command(repo_root: Path, args=(), *, module: str = "hermes_cli.
 
 #: Launcher command names — keep in lockstep with scripts/install.ps1
 #: Publish-UserCommand and hermes_cli/_install_repair.py.
-WINDOWS_BIN_LAUNCHERS = ("hermes", "hermes-acp")
+WINDOWS_BIN_LAUNCHERS = ("hermes", "hermes-acp", "hermes-autonomous")
 
 #: command name -> (entry module, callable) — mirrors pyproject.toml
 #: [project.scripts].
 ENTRY_POINTS = {
     "hermes": ("hermes_cli.main", "main"),
     "hermes-acp": ("acp_adapter.entry", "main"),
+    "hermes-autonomous": ("hermes_runtime.standalone.cli", "main"),
 }
 
 
@@ -513,7 +514,7 @@ def _owns_launcher(target: Path, root: Path) -> bool:
     paths = {str(root / p) for p in (
         "hermes", "run_agent.py", "venv/bin/python", "venv/bin/python3",
         "venv/bin/hermes",
-        ".hermes/bin/hermes", ".hermes/bin/hermes-acp",
+        ".hermes/bin/hermes", ".hermes/bin/hermes-acp", ".hermes/bin/hermes-autonomous",
     )}
     # Current store launchers pass this Python bootstrap as one shell argument.
     bootstrap = f"sys.path.insert(0, {str(root)!r})"
@@ -979,7 +980,7 @@ def _is_bundled_payload(root: Path) -> bool:
 
 
 def _symlink_sealed_launchers(payload_bin) -> dict:
-    """Link ~/.local/bin/{hermes,hermes-agent,hermes-acp} at a sealed
+    """Link the available Hermes commands in ~/.local/bin at a sealed
     bundle's own prebuilt shims (macOS only).
 
     Symlinks, not copies: the shims are signed as part of the app bundle,
@@ -997,7 +998,7 @@ def _symlink_sealed_launchers(payload_bin) -> dict:
     written: list[str] = []
     try:
         link_dir.mkdir(parents=True, exist_ok=True)
-        for name in ("hermes", "hermes-agent", "hermes-acp"):
+        for name in (*ENTRY_POINTS, "hermes-agent"):
             source = payload_bin / name
             if not source.is_file():
                 continue

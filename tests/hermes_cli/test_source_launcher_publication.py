@@ -40,7 +40,9 @@ def fixture_tree(tmp_path, monkeypatch):
         "    return 7\n"
         "if __name__ == '__main__':\n    sys.exit(main())\n"
     )
-    for path in (repo / "hermes_cli/main.py", repo / "acp_adapter/entry.py"):
+    for module, _ in _launchers.ENTRY_POINTS.values():
+        path = repo / (module.replace(".", "/") + ".py")
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(entry, encoding="utf-8")
     # Windows resolves its default under LOCALAPPDATA, not HOME.
     if os.name == "nt":
@@ -67,6 +69,45 @@ def select_generation(repo, name, value):
     (install_state_dir(repo) / 'facts.json').write_text(
         json.dumps({'packages': {'venv': {'environment': str(selected)}}}), encoding='utf-8')
     return selected
+
+
+@pytest.mark.platforms("posix")
+def test_install_and_update_publish_working_autonomous_command_on_path(tmp_path, monkeypatch):
+    from hermes_cli.venv_sync import publish_launchers
+
+    repo, _home, _interpreter = fixture_tree(tmp_path, monkeypatch)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    entry = repo / "hermes_runtime/standalone/cli.py"
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / "hermes_runtime/standalone/cli.py", entry)
+    select_generation(repo, "installed", "ready")
+    command = tmp_path / ".local/bin/hermes-autonomous"
+    local = repo / ".hermes/bin/hermes-autonomous"
+    for _ in range(2):
+        publish_launchers(repo)
+        assert command.is_file() and os.access(command, os.X_OK)
+        result = subprocess.run([str(command), "--home", str(tmp_path / "persistent data"),
+            "install-service", "--help"], cwd=tmp_path, capture_output=True, text=True, timeout=30, check=False)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "--rdp" in result.stdout and "--enable" in result.stdout
+        command.unlink()
+        local.unlink()
+
+
+@pytest.mark.platforms("posix")
+def test_autonomous_publication_preserves_an_existing_foreign_command(tmp_path, monkeypatch):
+    from hermes_cli.venv_sync import publish_launchers
+
+    repo, _home, _interpreter = fixture_tree(tmp_path, monkeypatch)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    select_generation(repo, "installed", "ready")
+    command = tmp_path / ".local/bin/hermes-autonomous"
+    command.parent.mkdir(parents=True)
+    original = "#!/bin/sh\nexec /opt/another-install/hermes-autonomous \"$@\"\n"
+    command.write_text(original)
+    publish_launchers(repo)
+    assert command.read_text() == original
+    assert (repo / ".hermes/bin/hermes-autonomous").is_file()
 
 
 @pytest.mark.platforms("windows", "posix")
@@ -261,8 +302,8 @@ def test_boot_migrates_legacy_conveniences_to_selected_runtime(tmp_path, monkeyp
 
     result = _launchers.expose_cli()
     assert result["ok"], result
-    assert set(result["written"]) == {"hermes", "hermes-acp"}
-    for name in ("hermes", "hermes-acp"):
+    assert set(result["written"]) == set(_launchers.ENTRY_POINTS)
+    for name in _launchers.ENTRY_POINTS:
         run = subprocess.run([str(out / name), "quoted argument"], cwd=tmp_path,
                              capture_output=True, text=True, timeout=30, encoding="utf-8", check=False)
         assert run.returncode == 7, run.stderr
@@ -533,7 +574,8 @@ def test_sync_migrates_old_store_wrapper_before_python_collection(tmp_path, monk
                             capture_output=True, text=True, timeout=30, encoding="utf-8", check=False)
     assert result.returncode == 7, result.stderr
     assert json.loads(result.stdout)["value"] == "ready"
-    assert Path(json.loads(result.stdout)["exe"]) == store / "python-B/bin/python3"
+    # Some Python builds report the resolved executable instead of its symlink.
+    assert Path(json.loads(result.stdout)["exe"]).samefile(store / "python-B/bin/python3")
 
 def _torn_by_a_killed_merge(tmp_path, monkeypatch):
     """A git install whose update was killed mid-merge while git rewrote ``hermes_constants.py``.
