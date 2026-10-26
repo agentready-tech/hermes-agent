@@ -850,9 +850,8 @@ DEFAULT_CONFIG = {
         "tui_agents_nudge": True,
         "bell_on_complete": False,
         "bell_on_prompt": False,   # bell when a blocking prompt opens (clarify/approval/sudo)
-        # Stream reasoning live before the response; otherwise thinking models show only a spinner
-        # for tens of seconds.
-        "show_reasoning": True,
+        # Reasoning is opt-in in this fork; unattended chat shows answers and progress.
+        "show_reasoning": False,
         # Post-response "Reasoning" recap collapses to 10 lines; true prints it all (live streaming
         # is always full).
         "reasoning_full": False,
@@ -1676,7 +1675,8 @@ DEFAULT_CONFIG = {
         # Shared by the CLI prompt and gateway/messaging waits. Messaging approvals arrive as a push
         # notification the user may not see immediately — 60s proved too tight on Telegram/Discord (the
         # prompt expired before the user reached their phone), so the default is 300.
-        "mode": "smart",
+        # Autonomous execution is the fork default; profiles can opt into smart/manual approval.
+        "mode": "off",
         "timeout": 300,
         "cron_mode": "deny",
         "single_query_mode": "deny",

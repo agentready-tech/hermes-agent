@@ -2,7 +2,7 @@
 
 Two contracts:
 
-* With nobody able to answer (no interactive CLI, no gateway, yolo off) a destructive action is REFUSED and
+* With approvals enabled and nobody able to answer (no interactive CLI, no gateway, yolo off) a destructive action is REFUSED and
   never reaches the backend; under yolo it runs. Historically the tool default-allowed whenever no CLI callback
   was wired, which made every headless host (cron, api_server, tui_gateway, gateway turns) run desktop input
   ungated.
@@ -16,6 +16,12 @@ reset in ``tests/conftest.py`` stays and the polluter/observer pair below keeps 
 import json
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _manual_approvals(monkeypatch):
+    """Exercise approval enforcement independently of the autonomous fork default."""
+    monkeypatch.setattr("tools.approval_context._get_approval_mode", lambda: "manual")
 
 
 def _install_backend(cu_tool):

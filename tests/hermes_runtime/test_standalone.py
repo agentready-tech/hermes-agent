@@ -57,6 +57,32 @@ def test_fresh_init_selects_holographic(tmp_path):
     assert config.read_config(home)["database"]["journal_mode"] == "delete"
 
 
+def test_fresh_init_uses_unattended_approval_and_private_reasoning_defaults(tmp_path, monkeypatch):
+    from tools.approval import request_tool_approval
+    from gateway.run import GatewayRunner
+
+    home = tmp_path / "fresh-unattended-home"
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    config.initialize(home)
+    stored = config.read_config(home)
+    assert stored["approvals"]["mode"] == "off"
+    assert stored["display"]["show_reasoning"] is False
+    assert GatewayRunner._load_show_reasoning() is False
+    ask = lambda *_args, **_kwargs: pytest.fail("An autonomous default must not ask for approval")
+    assert request_tool_approval("computer_use", "foreground input", approval_callback=ask)["approved"]
+
+
+def test_init_preserves_explicit_approval_and_reasoning_preferences(tmp_path):
+    home = tmp_path / "configured-home"
+    home.mkdir()
+    (home / "config.yaml").write_text(
+        "approvals:\n  mode: manual\n  timeout: 17\ndisplay:\n  show_reasoning: true\n")
+    config.initialize(home)
+    stored = config.read_config(home)
+    assert stored["approvals"] == {"mode": "manual", "timeout": 17}
+    assert stored["display"]["show_reasoning"] is True
+
+
 def test_host_event_uses_container_stdin_without_opening_live_database(home, tmp_path, monkeypatch):
     from hermes_runtime.standalone.cli import parser, execute
     from hermes_runtime.standalone.deployment import Docker

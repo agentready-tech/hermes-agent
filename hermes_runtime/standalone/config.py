@@ -42,6 +42,12 @@ def initialize(home):
                        "gmail": {"enabled": False, "query": "in:inbox", "poll_seconds": 60,
                                  "allowed_senders": []}}.items():
         autonomous.setdefault(key, value)
+    # Persist these defaults for native consumers that read raw YAML, while
+    # retaining any policy the operator explicitly selected for this home.
+    for section, key in (("approvals", "mode"), ("display", "show_reasoning")):
+        values = config.setdefault(section, {})
+        if isinstance(values, dict):
+            values.setdefault(key, DEFAULT_CONFIG[section][key])
     existing_state = (home / "state.db").exists() or (home / "memory_store.db").exists()
     existing_notes = any(p.stat().st_size for p in (home / "memories").glob("*.md"))
     if not existing_state and not existing_notes:

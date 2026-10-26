@@ -156,7 +156,9 @@ class ActiveHomeTurn:
 
 
 def run_conversation(self, proceed, *args, **kwargs):
-    if not belongs_to_home_lineage(getattr(self, "session_id", None)):
+    # Cache-sharing review/side-question forks retain the parent's session ID,
+    # but deliberately own neither its transcript nor its incoming messages.
+    if getattr(self, "_persist_disabled", False) or not belongs_to_home_lineage(getattr(self, "session_id", None)):
         return proceed(*args, **kwargs)
     depth = int(getattr(_LOCK_DEPTH, "value", 0))
     if depth:
