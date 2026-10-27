@@ -2,10 +2,7 @@
 
 import logging
 import sqlite3
-from hermes_runtime.sessions import (
-    HOME_SESSION_ID,
-    HOME_SESSION_TITLE,
-)
+from hermes_runtime.sessions import HOME_SESSION_ID
 from hermes_runtime.adapters.hermes import managed_home
 
 
@@ -104,7 +101,9 @@ def ensure_home_session():
                 source="agentready",
                 cwd=str(managed_home() / "workspace"),
             )
-        db.set_session_title(HOME_SESSION_ID, HOME_SESSION_TITLE)
+        from hermes_runtime.adapters.bot_chat import adopt_home_as_bot_chat
+
+        adopt_home_as_bot_chat(db)
     finally:
         close = getattr(db, "close", None)
         if callable(close):

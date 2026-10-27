@@ -29,6 +29,21 @@ Your profiles keep working exactly as they did; Bot Mode adds the parts a profil
 
 Nothing moves: config, memory, skills, and credentials stay in `~/.hermes/profiles/<name>/`, and `hermes -p <bot> chat` still opens the same agent.
 
+### Autonomous fork: use the existing main conversation
+
+In this fork, the autonomous service's existing main conversation is also the
+native **Bot Chat**. Upgrading adopts the former **AgentReady Home** conversation:
+its durable `agentready_home` identity, transcript, compression lineage, incoming
+Telegram/mail queue, schedules, delegated projects, and recovery state stay in
+place. Clicking the Bot opens that same history.
+
+If Desktop already created a separate Bot Chat, adoption gives that conversation
+a **Previous Bot Chat (…)** title and makes it visible in Sessions. Its messages
+are preserved separately. The title transfer is one SQLite transaction and is
+safe to repeat after a restart. An existing canonical compression continuation
+is retained. Like native Bot Chats, the adopted main conversation is hidden
+from ordinary session lists and remains accessible through **Bots**.
+
 ## The Bots pane
 
 The roster shows one row per agent profile: avatar, latest-message preview, and timestamp.
