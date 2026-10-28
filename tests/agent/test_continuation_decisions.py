@@ -9,7 +9,7 @@ import pytest
 
 from agent import continuation_guard
 from agent.secret_scope import reset_secret_scope, set_secret_scope
-from hermes_cli.config import atomic_config_write
+from hermes_cli.config import atomic_config_write, read_user_config_raw
 from hermes_constants import get_hermes_home
 
 
@@ -54,10 +54,17 @@ def review(agent):
 
 
 @pytest.mark.parametrize("choice", ["stop", "continue"])
-def test_profile_config_routes_binary_decision_without_a_text_next_action(runtime, monkeypatch, choice):
+@pytest.mark.parametrize("model", [None, "typesafe/jev-1.13"])
+def test_profile_config_routes_binary_decision_without_a_text_next_action(runtime, monkeypatch, choice, model):
     agent, legacy = runtime
+    expected_model = model or "openai/gpt-6-luna-decisions"
+    if model:
+        path = get_hermes_home() / "config.yaml"
+        config = read_user_config_raw(path)
+        config["agent"]["continuation_guard"]["model"] = model
+        atomic_config_write(path, config)
     calls = install_response(monkeypatch, lambda request: httpx.Response(200, json={
-        "model": "openai/gpt-6-luna-decisions-snapshot", "provider": "OpenAI", "id": "decision-1",
+        "model": expected_model + "-snapshot", "id": "decision-1",
         "answers": {"verdict": {"type": "choice", "choice": choice}},
         "usage": {"input_tokens": 500, "output_tokens": 0, "cost": 0.00005},
     }))
@@ -70,7 +77,7 @@ def test_profile_config_routes_binary_decision_without_a_text_next_action(runtim
     assert calls[0].headers["Authorization"] == "Bearer owning-profile-key"
     assert 0 < calls[0].extensions["timeout"]["read"] <= 10
     body = json.loads(calls[0].content)
-    assert body["model"] == "openai/gpt-6-luna-decisions"
+    assert body["model"] == expected_model
     assert set(body["questions"]["verdict"]["criteria"]) == {"stop", "continue"}
     assert body["state"]["recent_messages"][-1]["tool_call_id"] == "push"
     legacy.assert_not_called()
@@ -117,7 +124,7 @@ def review_without_key(agent):
         reset_secret_scope(token)
 
 
-@pytest.mark.parametrize("change", ["disable", "pause", "judge"])
+@pytest.mark.parametrize("change", ["disable", "pause", "judge", "model"])
 def test_inflight_decision_respects_operator_changes(runtime, monkeypatch, change):
     agent, _legacy = runtime
 
@@ -126,6 +133,8 @@ def test_inflight_decision_respects_operator_changes(runtime, monkeypatch, chang
             agent._interrupt_requested = True
         else:
             settings = {"enabled": change != "disable", "judge": "goal_judge" if change == "judge" else "openrouter_decisions"}
+            if change == "model":
+                settings["model"] = "typesafe/jev-1.13"
             atomic_config_write(get_hermes_home() / "config.yaml", {"agent": {"continuation_guard": settings}})
         return httpx.Response(200, json={"answers": {"verdict": {"type": "choice", "choice": "continue"}}})
 

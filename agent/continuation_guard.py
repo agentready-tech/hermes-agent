@@ -59,6 +59,7 @@ class GuardConfig:
     enabled: bool = False
     max_continuations: int = 3
     judge: str = "goal_judge"
+    model: str = ""
 
 
 def _config() -> GuardConfig:
@@ -73,7 +74,8 @@ def _config() -> GuardConfig:
     except (TypeError, ValueError):
         maximum = 3
     return GuardConfig(is_truthy_value(value.get("enabled")), maximum,
-                       str(value.get("judge", "goal_judge")).strip().lower())
+                       str(value.get("judge", "goal_judge")).strip().lower(),
+                       str(value.get("model") or "").strip())
 
 
 def _next_action(settings: GuardConfig, payload: dict[str, Any]) -> str | None:
@@ -82,7 +84,7 @@ def _next_action(settings: GuardConfig, payload: dict[str, Any]) -> str | None:
     if settings.judge == "openrouter_decisions":
         from agent.continuation_decisions import judge_continuation
 
-        verdict = judge_continuation(payload, _REVIEW_RULES, _goal_judge_timeout())
+        verdict = judge_continuation(payload, _REVIEW_RULES, _goal_judge_timeout(), settings.model)
         return _DECISIONS_ACTION if verdict == "continue" else None
     if settings.judge != "goal_judge":
         raise ValueError("Unknown continuation guard judge")
@@ -189,7 +191,7 @@ def build_continuation_nudge(
             return None
         current = _config()
         if (
-            not current.enabled or current.judge != settings.judge or not _eligible(agent)
+            not current.enabled or current.judge != settings.judge or current.model != settings.model or not _eligible(agent)
             or getattr(agent, "_continuation_guard_nudges", 0) >= current.max_continuations
         ):
             return None

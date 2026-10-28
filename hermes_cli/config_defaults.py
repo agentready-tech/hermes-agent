@@ -218,7 +218,7 @@ DEFAULT_CONFIG = {
         "verify_on_stop": False,
         # Optional stop review: goal_judge or openrouter_decisions; no call while disabled.
         # Rechecks config at each stop; bounded per ordinary top-level turn, independent of /goal.
-        "continuation_guard": {"enabled": False, "max_continuations": 3, "judge": "goal_judge"},
+        "continuation_guard": {"enabled": False, "max_continuations": 3, "judge": "goal_judge", "model": "openai/gpt-6-luna-decisions"},
         # Inactivity warning (seconds), once per run before gateway_timeout; no interrupt. 0 = off.
         "gateway_timeout_warning": 900,
         # Max seconds any surface (CLI, TUI/Desktop, messaging gateway) blocks an agent awaiting a

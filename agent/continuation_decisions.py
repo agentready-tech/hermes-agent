@@ -14,7 +14,6 @@ from agent.secret_scope import get_secret_str
 
 logger = logging.getLogger(__name__)
 
-MODEL = "openai/gpt-6-luna-decisions"
 _BASE_URL = "https://openrouter.ai"
 _MAX_TIMEOUT_SECONDS = 10.0
 _CRITERIA = {
@@ -28,7 +27,7 @@ def _submit(client: httpx.Client, request: dict[str, Any], key: str) -> Any:
     started = time.monotonic()
     response = client.post(
         "/api/alpha/decisions", headers={"Authorization": "Bearer " + key},
-        json={"model": MODEL, "state": json.loads(messages[1]["content"]), "questions": {
+        json={"model": request["model"], "state": json.loads(messages[1]["content"]), "questions": {
             "verdict": {"type": "choice", "instructions": messages[0]["content"], "criteria": _CRITERIA},
         }},
     )
@@ -49,13 +48,13 @@ def _submit(client: httpx.Client, request: dict[str, Any], key: str) -> Any:
     usage = body.get("usage") or {}
     logger.info(
         "Continuation Decisions verdict=%s model=%s request_id=%s latency_ms=%d input_tokens=%s cost=%s",
-        verdict, body.get("model", MODEL), body.get("id", ""),
+        verdict, body.get("model", request["model"]), body.get("id", ""),
         round((time.monotonic() - started) * 1000), usage.get("input_tokens"), usage.get("cost"),
     )
     # The shared auxiliary relay observes a chat-shaped result, just as it does for
     # native Responses/Messages adapters. The actual wire remains Decisions-only.
     return SimpleNamespace(
-        id=body.get("id", ""), model=body.get("model", MODEL),
+        id=body.get("id", ""), model=body.get("model", request["model"]),
         choices=[SimpleNamespace(message=SimpleNamespace(
             role="assistant", content=json.dumps({"verdict": verdict}), tool_calls=None,
         ), finish_reason="stop")],
@@ -65,7 +64,7 @@ def _submit(client: httpx.Client, request: dict[str, Any], key: str) -> Any:
     )
 
 
-def judge_continuation(payload: dict[str, Any], instructions: str, timeout: float) -> str:
+def judge_continuation(payload: dict[str, Any], instructions: str, timeout: float, model: str) -> str:
     """One profile-scoped, observed attempt. No retries or fallback to another model."""
     from agent.auxiliary_client import (
         _relay_aux_call_scope, _relay_sync_completion, _set_relay_auxiliary_route,
@@ -75,7 +74,9 @@ def judge_continuation(payload: dict[str, Any], instructions: str, timeout: floa
     key = get_secret_str("OPENROUTER_API_KEY").strip()
     if not key:
         raise ValueError("OPENROUTER_API_KEY is not configured for the owning profile")
-    request = {"model": MODEL, "messages": [
+    if not model:
+        raise ValueError("A continuation guard Decisions model must be configured")
+    request = {"model": model, "messages": [
         {"role": "system", "content": instructions},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
     ]}
@@ -83,7 +84,7 @@ def judge_continuation(payload: dict[str, Any], instructions: str, timeout: floa
         _relay_aux_call_scope((), {"task": "goal_judge"}),
         httpx.Client(base_url=_BASE_URL, timeout=min(timeout, _MAX_TIMEOUT_SECONDS), follow_redirects=False) as client,
     ):
-        _set_relay_auxiliary_route("openrouter", MODEL, "decisions")
+        _set_relay_auxiliary_route("openrouter", model, "decisions")
         response = _relay_sync_completion(
             client, request, provider="openrouter", api_mode="decisions",
             create=lambda prepared: _submit(client, prepared, key),

@@ -247,7 +247,7 @@ next step, including checking/registering a missing wakeup, or allow the turn to
 not execute tools itself or create schedules. Questions to the user and evidenced external waits
 are valid stops. Unusable decisions and reviewer errors allow the stop instead of starting retries.
 
-To use **GPT-6 Luna Decisions through OpenRouter** for this guard, store
+To use a **Decisions model through OpenRouter** for this guard, store
 `OPENROUTER_API_KEY` in the owning profile's `.env` and select:
 
 ```yaml
@@ -256,9 +256,15 @@ agent:
     enabled: true
     max_continuations: 3
     judge: openrouter_decisions
+    model: openai/gpt-6-luna-decisions
 ```
 
-This uses `openai/gpt-6-luna-decisions` at OpenRouter's `/api/alpha/decisions` endpoint,
+`model` accepts an OpenRouter Decisions model ID that supports `choice` questions; Luna is
+the default, not a restriction. Changing it takes effect at the next review without a restart.
+This setting applies only to `judge: openrouter_decisions`; the text judge continues to use
+`auxiliary.goal_judge.model`.
+
+The selected model is called at OpenRouter's `/api/alpha/decisions` endpoint,
 with a typed choice between **stop** and **continue**, not a chat-completions request.
 `continue` adds a fixed instruction to identify and handle the remaining authorized step;
 this includes ensuring a missing wakeup or preparing a blocking explanation/question for
@@ -270,7 +276,7 @@ retry or model fallback. Decision/model, request ID, latency, input tokens and c
 and the existing auxiliary observation hooks still fire. The HTTP timeout uses
 `auxiliary.goal_judge.timeout`, capped at 10 seconds per network phase for this stop check.
 This selection does not redirect `/goal` evaluation or completion
-contract drafting. Changing `judge` while a review is running discards that review's correction.
+contract drafting. Changing `judge` or `model` while a review is running discards that review's correction.
 
 Corrections stay inside the existing turn and its iteration budget, with at most
 `max_continuations` corrections (default 3). At the cap the proposed answer is allowed through
