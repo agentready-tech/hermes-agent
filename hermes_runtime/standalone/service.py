@@ -16,8 +16,16 @@ def _systemd_quote(value, *, exec_line=True):
     return '"' + (value.replace("$", "$$") if exec_line else value) + '"'
 
 
+def _command(module, *args, interpreter=None, home=None):
+    from hermes_cli._launchers import installation_command
+
+    return installation_command(Path(__file__).resolve().parents[2], args,
+        module=module, python=interpreter, home=home)
+
+
 def _argv(home, interpreter, action):
-    return [interpreter, "-m", "hermes_runtime.standalone.cli", "--home", str(Path(home).resolve()), action]
+    return _command("hermes_runtime.standalone.cli", "--home", str(Path(home).resolve()), action,
+        interpreter=interpreter, home=home)
 
 
 def render_service(home, interpreter):

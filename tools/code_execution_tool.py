@@ -151,7 +151,7 @@ def _missing_hermes_tools_import_hint(m, enabled_tools) -> str:
                 "If that import failed, the generated module may be stale or another "
                 "hermes_tools may be first on sys.path. Check hermes_tools.__file__ "
                 "and retry with reset=true.")
-    available = sorted(SANDBOX_ALLOWED_TOOLS & set(enabled_tools or SANDBOX_ALLOWED_TOOLS))
+    available = sorted(SANDBOX_ALLOWED_TOOLS & set(SANDBOX_ALLOWED_TOOLS if enabled_tools is None else enabled_tools))
     return (f"'{missing}' is not available inside the execute_code sandbox. "
             f"Importable tools here: {', '.join(available)}. For anything "
             "else, use the normal tool call instead of execute_code.")
@@ -219,6 +219,21 @@ def json_parse(text: str):
         text = text[1:]
     return json.loads(text, strict=False)
 
+def search_tools(query, limit=5):
+    """Find tools in this agent's scoped catalog without loading every schema."""
+    return _call("__code_search__", {"query": query, "limit": limit})
+
+def describe_tools(names):
+    """Get argument schemas for selected scoped tools."""
+    return _call("__code_describe__", {"names": names})
+
+def call_tool(name, arguments=None, *, step=None):
+    """Call a scoped tool. Give loop steps stable item-specific names for replay."""
+    result = _call("__code_call__", {"name": name, "arguments": arguments or {}, "step": step})
+    if isinstance(result, dict) and result.get("error"):
+        raise RuntimeError(str(result["error"]))
+    return result
+
 
 def shell_quote(s: str) -> str:
     """Shell-escape a string for safe interpolation into commands.
@@ -249,7 +264,7 @@ def retry(fn, max_attempts=3, delay=2):
 
 _UDS_TRANSPORT_HEADER = '''\
 """Auto-generated Hermes tools RPC stubs."""
-import json, os, socket, shlex, threading, time
+import json, os, socket, shlex, threading, time, uuid
 
 _sock = None
 # The RPC server handles a single client connection serially and has no
@@ -290,6 +305,7 @@ def _call(tool_name, args):
         "tool": tool_name,
         "args": args,
         "token": os.environ.get("HERMES_RPC_TOKEN", ""),
+        "request_id": uuid.uuid4().hex,
     }) + "\\n"
     # Session kernels outlive the RPC server's 300s idle window, so their
     # connection can be legitimately gone by the next cell. The server
@@ -334,7 +350,7 @@ def _call(tool_name, args):
 
 _FILE_TRANSPORT_HEADER = '''\
 """Auto-generated Hermes tools RPC stubs (file-based transport)."""
-import json, os, shlex, tempfile, threading, time
+import json, os, shlex, tempfile, threading, time, uuid
 
 _RPC_DIR = os.environ.get("HERMES_RPC_DIR") or os.path.join(tempfile.gettempdir(), "hermes_rpc")
 _seq = 0
@@ -367,6 +383,7 @@ def _call(tool_name, args):
             "tool": tool_name,
             "args": args,
             "seq": seq,
+            "request_id": uuid.uuid4().hex,
             "token": os.environ.get("HERMES_RPC_TOKEN", ""),
         }, f)
     os.rename(tmp, req_file)
@@ -588,8 +605,12 @@ def _finish_remote_kernel_result(kernel_result: dict[str, Any], *,
 
 
 def _sandbox_tools_for(enabled_tools: Optional[list[str]]) -> frozenset:
-    """Enabled ∩ SANDBOX_ALLOWED_TOOLS, or every sandbox tool when the intersection is empty."""
-    return frozenset(SANDBOX_ALLOWED_TOOLS & set(enabled_tools or ())) or SANDBOX_ALLOWED_TOOLS
+    """Use the explicit cell authority, never a process-global tool selection."""
+    from tools.code_execution_context import BRIDGE_TOOLS, current_scope
+    scope = current_scope()
+    if scope is not None:
+        return frozenset(scope.definitions) | BRIDGE_TOOLS
+    return SANDBOX_ALLOWED_TOOLS if enabled_tools is None else SANDBOX_ALLOWED_TOOLS & frozenset(enabled_tools)
 
 
 def _run_remote_per_call(env, env_type: str, code: str, effective_task_id: str,
@@ -701,7 +722,37 @@ def _execute_remote(code: str, task_id: Optional[str], enabled_tools: Optional[l
 # ---- Main entry point ----
 
 
-def execute_code(
+def execute_code(code: str = "", task_id: Optional[str] = None, enabled_tools: Optional[list[str]] = None,
+                 reset: bool = False, resume_run_id: Optional[str] = None) -> str:
+    """Execute or resume a saved script under the calling agent's cell authority."""
+    from tools.code_execution_context import current_scope
+    scope = current_scope()
+    if scope is None:
+        if resume_run_id:
+            return tool_error("Resuming a code run requires its owning agent/session")
+        return _execute_code(code, task_id, enabled_tools, reset)
+    if not code and not resume_run_id:
+        return tool_error("Provide code or resume_run_id")
+    from tools.code_execution_runs import CodeRun
+    try:
+        run = CodeRun(scope.session_id, code, scope.uid, resume_run_id)
+    except (ValueError, TypeError) as exc:
+        return tool_error(str(exc))
+    if run.cached_result:
+        return run.cached_result
+    scope.run = run
+    try:
+        try:
+            result = _execute_code(run.code, task_id, enabled_tools, reset or bool(resume_run_id))
+        except Exception as exc:
+            logger.exception("Code Mode run failed: %s", run.run_id)
+            result = tool_error(str(exc))
+        return run.finish(result)
+    finally:
+        scope.run = None
+
+
+def _execute_code(
     code: str,
     task_id: Optional[str] = None,
     enabled_tools: Optional[list[str]] = None,
@@ -911,6 +962,17 @@ def build_execute_code_schema(enabled_sandbox_tools: set | None = None,
         "large outputs before they enter context, branching, or loops "
         "(N pages/files, retry on failure). Use normal tool calls for "
         "single calls, results you must reason over in full, or anything needing user interaction.\n\n"
+        "Code Mode SDK: `from hermes_tools import search_tools, describe_tools, call_tool`. "
+        "search_tools(query) returns scoped tool names; describe_tools([names]) returns their schemas. "
+        "call_tool(name, arguments, step='stable-item-specific-key') calls any eligible enabled native, MCP, "
+        "or browser tool through normal policy. Keep large intermediate results in Python; print only the final "
+        "selection and source links. Tool errors stop call_tool chains. Session-control, interactive and recursive "
+        "code execution tools are excluded. The catalog is scoped to this agent, including subagents.\n\n"
+        "Managed steps and script source are saved in state.db with code_run_id. After a crash or resource-busy "
+        "failure, resume with resume_run_id and no new code: completed steps reuse saved results; unknown outcomes "
+        "are never retried automatically. Scripts must be self-contained and Python outside tool calls replay-safe; "
+        "perform external effects through call_tool. Do not use retry() to repeat uncertain writes. A completed run "
+        "returns its saved final result. New incoming events do not require rerunning a script that is still active.\n\n"
         "Calls run in a persistent session kernel: variables, imports, and "
         "loaded data survive across execute_code calls, so build on earlier "
         "work instead of re-loading it. A timed-out or interrupted call loses that state.\n\n"
@@ -936,8 +998,10 @@ def build_execute_code_schema(enabled_sandbox_tools: set | None = None,
                     "and print your final result to stdout.")},
                 "reset": {"type": "boolean", "description": (
                     "Discard the kernel's persistent state and start fresh before running this code.")},
+                "resume_run_id": {"type": "string", "description": (
+                    "Resume this session's saved code run unchanged, reusing recorded tool results. Omit code.")},
             },
-            "required": ["code"],
+            "anyOf": [{"required": ["code"]}, {"required": ["resume_run_id"]}],
         },
     }
 
@@ -959,7 +1023,8 @@ def _execute_code_handler(args: dict, **kwargs) -> str:
         return tool_error(f"execute_code received a {type(code).__name__} in 'code', but it "
                           "requires Python source as a string. Retry as execute_code(code=\"...\").")
     return execute_code(code=code or "", task_id=kwargs.get("task_id"),
-                        enabled_tools=kwargs.get("enabled_tools"), reset=bool(args.get("reset", False)))
+                        enabled_tools=kwargs.get("enabled_tools"), reset=bool(args.get("reset", False)),
+                        resume_run_id=args.get("resume_run_id"))
 
 
 registry.register(

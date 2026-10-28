@@ -52,6 +52,12 @@ in `assistant_msg["reasoning"]`.
 `INLINE_TOOL_EXECUTORS` table in `agent/inline_tool_executors.py` before `handle_function_call()`.
 Adding one: register in that table (no `if name == ...` chain); `tools/todo_tool.py` is the pattern.
 
+Managed main-session registry calls use `tool_operation_lifecycle.py` for durable receipts and
+event-driven return of control. `tool_concurrent_batch.py` owns concurrent workers, and
+`tool_resource_cleanup.py` preserves resources used by deferred operations. A background worker
+never appends parent conversation rows; its result enters the durable home inbox. Keep native
+middleware, approvals, per-call occurrence identities and segment barriers intact.
+
 ## Message-flow invariants (every change is reviewed against these)
 
 - **Prompt caching must not break.** Never alter past context, change toolsets, reload memories,

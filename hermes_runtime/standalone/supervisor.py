@@ -170,7 +170,8 @@ def run(home, *, host=None, port=None):
         raise ValueError("Set autonomous.enabled: true in config.yaml to run the autonomous service")
     host, port = host or config["host"], port or config["port"]
     environment = child_environment(home)
-    native = [sys.executable, "-m", "hermes_runtime"]
+    from hermes_runtime.standalone.service import _argv, _command
+    native = _command("hermes_runtime", home=home)
     import hermes_cli
     frontend = "dashboard" if (Path(hermes_cli.__file__).parent / "web_dist" / "index.html").is_file() else "serve"
     specs = {
@@ -178,7 +179,7 @@ def run(home, *, host=None, port=None):
         "gateway": [*native, "gateway", "run", "--no-supervise", "--external-supervisor"],
     }
     if config.get("gmail", {}).get("enabled"):
-        specs["gmail"] = [sys.executable, "-m", "hermes_runtime.standalone.cli", "gmail-worker"]
+        specs["gmail"] = _argv(home, sys.executable, "gmail-worker")
     owner = Supervisor(home, specs, port=port, environment=environment)
     def prepare():
         from hermes_runtime.standalone.config import activate_home

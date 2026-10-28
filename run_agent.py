@@ -748,7 +748,7 @@ class AIAgent(
 
     _looks_like_codex_intermediate_ack = _forward("agent.agent_runtime_helpers", "looks_like_codex_intermediate_ack")
     _extract_reasoning = _forward("agent.agent_runtime_helpers", "extract_reasoning")
-    _cleanup_task_resources = _forward("agent.chat_completion_helpers", "cleanup_task_resources")
+    _cleanup_task_resources = _forward("agent.tool_resource_cleanup", "cleanup_task_resources")
 
     # Background memory/skill review — prompts live in agent.background_review.
     from agent.background_review import _MEMORY_REVIEW_PROMPT, _SKILL_REVIEW_PROMPT, _COMBINED_REVIEW_PROMPT
@@ -1303,11 +1303,16 @@ class AIAgent(
         targets, opted-in MCP) separated by sequential barriers, run in emission order.
         """
         tool_calls = assistant_message.tool_calls
+        from agent.tool_operation_lifecycle import begin_group, finish_group, incoming_event, skip_after_defer
+        begin_group(self, messages)
         args = (assistant_message, messages, effective_task_id, api_call_count)
         self._executing_tools = True  # allow _vprint during tool execution even with stream consumers
         try:
             with scoped_connection_surface(agent_connection_surface(self)):
-                if len(tool_calls) <= 1:
+                if incoming_event(self):
+                    self._managed_tools_deferred = True
+                    skip_after_defer(self, messages, tool_calls)
+                elif len(tool_calls) <= 1:
                     self._execute_tool_calls_sequential(*args)
                 else:
                     from agent.tool_dispatch_helpers import _plan_tool_batch_segments
@@ -1322,6 +1327,7 @@ class AIAgent(
                         execute_tool_calls_segmented(self, *args, segments=segments)
         finally:
             self._executing_tools = False
+            finish_group(self)
         # getattr: test stubs built without _set_defaults drive this method too
         if getattr(self, "_trim_after_tool_batch", False):
             # Only on normal completion: every executor frame that held a >=1 MB raw result has

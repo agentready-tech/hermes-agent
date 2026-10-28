@@ -713,6 +713,9 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayPluginInjectionMixin)
         Returns True when the text already landed inside the running turn (steer / redirect), so it
         must NOT also be admitted as its own turn; False when the caller should admit it (queue mode,
         a demotion, or an interrupt — the ended turn lets the FIFO run the follow-up next)."""
+        from hermes_runtime.adapters.gateway import admit_busy_event
+        if (accepted := await admit_busy_event(self, event, _quick_key)) is not None:
+            return accepted
         from gateway.run import _AGENT_PENDING_SENTINEL
         mode = self._effective_busy_input_mode(source)
         state = self._peek_session_state(_quick_key)
@@ -729,9 +732,13 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayPluginInjectionMixin)
     async def _hm_handle_running_session_message(
         self, event: MessageEvent, source: SessionSource, _quick_key: str
     ) -> Optional[str]:
-        """Fast-path while this session's agent is running: interrupt by default (minimal latency);
-        busy_input_mode queue/steer, subagent and compression protection demote to queue."""
+        """Managed events join the active inbox; other sessions retain native busy policy."""
         from gateway.run import _AGENT_PENDING_SENTINEL
+        from hermes_runtime.adapters.gateway import admit_busy_event
+        if (accepted := await admit_busy_event(self, event, _quick_key)) is not None:
+            if not accepted:
+                self._queue_or_replace_pending_event(_quick_key, event)
+            return None
         if getattr(event, "internal", False) and not event.get_command():
             # Main's rule (run_busy's busy handler, which the shared runtime's busy dispatch skips):
             # an internal synthetic event never interrupts or steers the running turn.

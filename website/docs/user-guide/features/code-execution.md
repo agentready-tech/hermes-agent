@@ -27,7 +27,61 @@ for r in results["data"]["web"]:
 print(summary)
 ```
 
-**Available tools inside scripts:** `web_search`, `web_extract`, `read_file`, `write_file`, `search_files`, `patch`, `terminal` (foreground only).
+**Named helpers:** `web_search`, `web_extract`, `read_file`, `write_file`, `search_files`, `patch`, `terminal` (foreground only), when enabled.
+
+## Code Mode: native, MCP and browser tools
+
+Agent-owned calls also expose `search_tools(query)`, `describe_tools([names])` and
+`call_tool(name, arguments, step="stable-key")` from `hermes_tools`. The SDK uses
+the calling agent's live tool catalog, including deferred MCP and browser tools;
+subagents keep their own scope. It does not expose recursive execution,
+delegation, interactive tools or tools that require direct access to the live
+conversation. Every call uses native middleware, hooks, approvals and guardrails.
+
+Discover the required schemas, then write one self-contained script that loops,
+paginates, branches and filters large results. Return only the relevant selection
+and its source references. For example, after discovering a pipeline status tool:
+
+```python
+from hermes_tools import call_tool
+import json
+
+# tool_name and item_ids are literals chosen from discovery and the task input.
+tool_name = "mcp_demo_pipeline"
+item_ids = [1, 2, 3]
+failed = []
+for item_id in item_ids:
+    result = call_tool(tool_name, {"id": item_id}, step=f"pipeline-{item_id}")
+    if result["failed"]:
+        failed.append({"id": item_id, "url": result["url"]})
+print(json.dumps(failed))
+```
+
+`call_tool` raises on tool errors so a dependent chain stops. The ordinary call
+budget, output cap and timeout still apply; SDK calls are sequential. Shared
+desktop, workspace and MCP resource leases also cover calls inside the script.
+
+### Recovery and incoming events
+
+Script source, run status and individual tool arguments/results are saved in the
+existing `state.db`; no extra queue or conversation is created. Results include
+`code_run_id`. Resume a stopped run with `execute_code(resume_run_id="code-...")`,
+omitting `code`. The saved program restarts in a fresh kernel and managed steps
+reuse recorded results, including completed writes. Changed arguments for an
+existing step are rejected. A completed run returns its saved final result.
+
+This is replay of managed calls, not a snapshot of Python memory: scripts must
+be self-contained, step names stable, and ordinary Python outside tool calls
+replay-safe. Perform external effects through `call_tool`; direct filesystem or
+network effects in Python are not journaled. A call interrupted after dispatch
+with no confirmed result remains uncertain and is never automatically retried.
+Verify that external outcome before deciding how to continue. Do not wrap writes
+in blind retries.
+
+In the durable main session, an incoming Telegram/cron event can return control
+to the main agent while the script continues. The existing operation mechanism
+delivers its final result into that same session. Intermediate steps remain in
+the operation journal rather than filling the model's conversation history.
 
 ## When the Agent Uses This
 
@@ -150,7 +204,7 @@ Fallback behavior in `project` mode: if `VIRTUAL_ENV` / `CONDA_PREFIX` is unset,
 Security-critical invariants are identical across both modes:
 
 - environment scrubbing (API keys, tokens, credentials stripped)
-- tool whitelist (scripts cannot call `execute_code` recursively, `delegate_task`, or MCP tools)
+- per-agent tool scope (MCP/browser calls retain native policy; recursive execution and delegation are excluded)
 - resource limits (timeout, stdout cap, tool-call cap)
 
 Switching mode changes where scripts run and which interpreter runs them, not what credentials they can see or which tools they can call.

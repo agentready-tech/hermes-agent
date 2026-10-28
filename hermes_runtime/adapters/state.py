@@ -104,11 +104,14 @@ def ensure_home_session():
         from hermes_runtime.adapters.bot_chat import adopt_home_as_bot_chat
 
         adopt_home_as_bot_chat(db)
+        ensure_home_head()
+        from hermes_runtime.adapters.gateway_routes import repair_local_home_routes
+
+        repair_local_home_routes(db)
     finally:
         close = getattr(db, "close", None)
         if callable(close):
             close()
-    ensure_home_head()
 
 
 def belongs_to_home_lineage(session_id):

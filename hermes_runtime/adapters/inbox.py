@@ -8,11 +8,14 @@ from hermes_runtime.adapters.hermes import managed_home
 
 
 class HomeInbox:
+    def __init__(self, home=None):
+        self.home = home if home is not None else managed_home()
+
     def transaction(self):
         from hermes_cli.sqlite_util import open_db, transaction
         from hermes_state import _secure_state_db_files
         from tools.async_delegation import _initialize_schema
-        path = managed_home() / "state.db"
+        path = self.home / "state.db"
         _secure_state_db_files(path, create_main=True)
         return transaction(open_db(path, db_label="state.db (managed inbox)", wal=False,
                                    busy_timeout_ms=10000, initialize=_initialize_schema), immediate=True)

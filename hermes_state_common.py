@@ -665,6 +665,40 @@ CREATE TABLE IF NOT EXISTS agentready_inbox (
     delivered_at REAL
 );
 
+CREATE TABLE IF NOT EXISTS tool_operations (
+    operation_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    tool_call_uid TEXT NOT NULL UNIQUE,
+    tool_call_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    arguments_json TEXT NOT NULL,
+    origin_json TEXT NOT NULL DEFAULT '{}',
+    resource_key TEXT NOT NULL,
+    group_id TEXT NOT NULL,
+    owner_pid INTEGER NOT NULL,
+    owner_birth REAL NOT NULL,
+    state TEXT NOT NULL,
+    deferred INTEGER NOT NULL DEFAULT 0,
+    result_json TEXT,
+    created_at REAL NOT NULL,
+    finished_at REAL,
+    delivered_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_tool_operations_pending ON tool_operations(delivered_at,state);
+
+CREATE TABLE IF NOT EXISTS code_execution_runs (
+    run_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    tool_call_uid TEXT,
+    code TEXT NOT NULL,
+    state TEXT NOT NULL,
+    owner_pid INTEGER NOT NULL,
+    owner_birth REAL NOT NULL,
+    result_json TEXT,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_code_execution_runs_call ON code_execution_runs(session_id,tool_call_uid);
+
 CREATE TABLE IF NOT EXISTS delegated_projects (
     subagent_id TEXT PRIMARY KEY,
     parent_session_id TEXT NOT NULL,

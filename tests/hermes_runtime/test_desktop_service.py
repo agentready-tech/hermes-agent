@@ -5,10 +5,33 @@ import json
 import os
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+
+def test_service_command_bootstraps_its_installation_from_another_directory(tmp_path, monkeypatch):
+    from hermes_runtime.standalone import service
+
+    root = tmp_path / "source install"
+    package = root / "hermes_runtime" / "standalone"
+    package.mkdir(parents=True)
+    (package.parent / "__init__.py").write_text("")
+    (package / "__init__.py").write_text("")
+    dependencies = root / "dependencies"
+    dependencies.mkdir()
+    (dependencies / "hermes_install_probe.py").write_text("VALUE = 'selected installation dependencies'\n")
+    (root / "hermes_bootstrap.py").write_text(
+        f"import sys\nsys.path.insert(0, {str(dependencies)!r})\n")
+    (package / "cli.py").write_text("import hermes_install_probe\nprint(hermes_install_probe.VALUE)\n")
+    monkeypatch.setattr(service, "__file__", str(package / "service.py"))
+    environment = {**os.environ, "PYTHONPATH": str(tmp_path / "unrelated")}
+    result = subprocess.run(service._argv(tmp_path / "data", sys.executable, "status"),
+        cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=30, check=False)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "selected installation dependencies"
 
 
 def test_service_and_xfce_autostart_use_the_same_home_and_interpreter(tmp_path):
@@ -25,7 +48,8 @@ def test_service_and_xfce_autostart_use_the_same_home_and_interpreter(tmp_path):
     entry = configparser.ConfigParser(interpolation=None)
     entry.read_string(render_autostart(home, interpreter))
     command = shlex.split(entry["Desktop Entry"]["Exec"].replace("%%", "%"))
-    assert command == [interpreter, "-m", "hermes_runtime.standalone.cli", "--home", str(home), "desktop-session"]
+    assert command[-3:] == ["--home", str(home), "desktop-session"]
+    assert any("hermes_runtime.standalone.cli" in arg for arg in command)
     assert entry["Desktop Entry"]["OnlyShowIn"] == "XFCE;"
     assert service_name(home) == service_name(home.resolve())
 

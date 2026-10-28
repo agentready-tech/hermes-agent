@@ -255,15 +255,15 @@ class CellAuthority:
     def retire(self) -> None:
         self.active = False
 
-    def dispatch(self, tool_name: str, tool_args: dict) -> str:
+    def dispatch(self, tool_name: str, tool_args: dict, *, request_id=None) -> str:
         """Run one tool call under THIS cell's context and callbacks."""
         from tools.registry import tool_error
         if not self.active:
             return tool_error("No active execute_code cell: the cell this kernel call "
                               "belonged to has settled, so its tool authority is retired.")
-        return self.ctx.run(self._invoke, tool_name, tool_args)
+        return self.ctx.run(self._invoke, tool_name, tool_args, request_id)
 
-    def _invoke(self, tool_name: str, tool_args: dict) -> str:
+    def _invoke(self, tool_name: str, tool_args: dict, request_id=None) -> str:
         from model_tools import handle_function_call
         previous = None
         if self._callbacks:
@@ -274,6 +274,10 @@ class CellAuthority:
             except Exception:
                 previous = None
         try:
+            from tools.code_execution_context import current_scope
+            scope = current_scope()
+            if scope is not None:
+                return scope.dispatch(tool_name, tool_args, request_id=request_id)
             return handle_function_call(tool_name, tool_args, task_id=self.task_id)
         finally:
             if previous is not None:
@@ -485,11 +489,12 @@ def _rpc_forever(kernel: SessionKernel, max_tool_calls: int,
     authority — every dispatch routes through the CURRENT cell's ``CellAuthority``."""
     from tools.code_execution_rpc import _rpc_server_loop
     from tools.registry import tool_error
-    def _dispatch(tool_name: str, tool_args: dict) -> str:
+    def _dispatch(tool_name: str, tool_args: dict, *, request_id=None) -> str:
         authority = kernel.cell_authority
         if authority is None:
             return tool_error("No active execute_code cell: this kernel has no cell authority installed.")
-        return authority.dispatch(tool_name, tool_args)
+        return authority.dispatch(tool_name, tool_args, request_id=request_id)
+    _dispatch.accepts_request_id = True
     while not kernel.stop_event.is_set():
         _rpc_server_loop(kernel.server_sock, "", kernel.tool_call_log, kernel.tool_call_counter,
                          max_tool_calls, sandbox_tools, kernel.stop_event, kernel.rpc_token,

@@ -135,4 +135,6 @@ def run_service(home):
         logger.info("Autonomous service using Xfce display %s", environment["DISPLAY"])
     else:
         logger.info("Autonomous service started; Xfce login hook will attach the desktop when available")
-    os.execvpe(sys.executable, [sys.executable, "-m", "hermes_runtime.standalone.cli", "--home", str(home), "run"], environment)
+    from hermes_runtime.standalone.service import _argv
+    command = _argv(home, sys.executable, "run")
+    os.execvpe(command[0], command, environment)

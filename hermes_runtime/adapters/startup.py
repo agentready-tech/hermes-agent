@@ -13,12 +13,28 @@ from hermes_runtime.adapters.state import current_home_session_id
 logger = logging.getLogger(__name__)
 
 
-def _wake_inbox(inbox):
+def _wake_inbox(inbox, *, reconcile=True):
     from tools.delegate_project_recovery import publish_wakeup
+    from hermes_runtime.adapters.tool_operations import ToolOperationStore
+    from hermes_runtime.adapters.turns import home_turn_active
+    if reconcile:
+        ToolOperationStore(inbox.home).recover()
     inbox.acknowledge_recorded()
+    if home_turn_active():
+        return False
     if pending := inbox.pending():
         identity = "home-recovery-" + hashlib.sha256(json.dumps([i for i, _ in pending]).encode()).hexdigest()
-        return publish_wakeup(identity, current_home_session_id(), {"session_key": "", "origin_ui_session_id": ""},
+        origin = {"session_key": "", "origin_ui_session_id": ""}
+        for _, content in pending:
+            if isinstance(content, str) and content.startswith("[AgentReady event]\n"):
+                try:
+                    header = json.loads(content.split("\n", 1)[1].split("\n\n", 1)[0])
+                except (ValueError, TypeError):
+                    continue
+                if header.get("source") == "tool_operation" and (route := header.get("metadata", {}).get("origin")):
+                    origin = route
+                    break
+        return publish_wakeup(identity, current_home_session_id(), origin,
             "Accepted messages remain in the managed inbox. Continue the home conversation; "
             "the saved messages will be delivered at a normal turn boundary. Check existing outcomes before repeating actions.")
     return False

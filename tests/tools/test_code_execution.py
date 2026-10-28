@@ -733,21 +733,20 @@ class TestExecuteCodeEdgeCases(unittest.TestCase):
 
 
     @unittest.skipIf(sys.platform == "win32", "UDS not available on Windows")
-    def test_nonoverlapping_tools_fallback(self):
-        """When enabled_tools has no overlap with SANDBOX_ALLOWED_TOOLS,
-        should fall back to all allowed tools."""
+    def test_nonoverlapping_tools_do_not_expand_authority(self):
+        """An explicit scope without helpers must never regain all helpers."""
         code = (
             "from hermes_tools import terminal\n"
-            "print('fallback ok')\n"
+            "terminal('unexpected')\n"
         )
         with patch("model_tools.handle_function_call",
-                    return_value=json.dumps({"ok": True})):
+                    return_value=json.dumps({"ok": True})) as dispatch:
             result = json.loads(execute_code(
                 code, task_id="test-nonoverlap",
                 enabled_tools=["vision_analyze", "browser_snapshot"],
             ))
-        self.assertEqual(result["status"], "success")
-        self.assertIn("fallback ok", result["output"])
+        self.assertNotEqual(result["status"], "success")
+        dispatch.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

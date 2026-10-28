@@ -67,7 +67,7 @@ threading.Event().wait()
         return conn.execute("SELECT session_id FROM delegated_projects WHERE project_key='order-42'").fetchone()[0]
 
 
-@pytest.mark.parametrize("work", ["home", "project", "receipt", "outbox", "inbox"])
+@pytest.mark.parametrize("work", ["home", "project", "receipt", "outbox", "inbox", "tool-running", "tool-completed"])
 def test_boot_resumes_interrupted_home_through_native_websocket(monkeypatch, work):
     from openai.types.chat import ChatCompletion
     from run_agent import AIAgent
@@ -94,6 +94,22 @@ def test_boot_resumes_interrupted_home_through_native_websocket(monkeypatch, wor
             marker_file.write_text(json.dumps(marker))
         elif work in ("project", "receipt", "outbox"):
             project_sid = _crash_project_process(home, "tool" if work == "project" else work)
+        elif work.startswith("tool-"):
+            script = '''
+import os, sys
+from pathlib import Path
+from hermes_runtime.adapters.tool_operations import ToolOperationStore
+store = ToolOperationStore(Path(os.environ['HERMES_HOME']))
+row, execute = store.admit('agentready_home', 'restart-call-uid', 'restart-call',
+    'mcp_orders_write', {'order': 42}, 'mcp:orders', 'restart-group')
+assert execute
+if sys.argv[1] == 'tool-completed':
+    store.complete(row['operation_id'], {'remote_job_id': 'order-job-42'})
+os._exit(23)
+'''
+            crashed = subprocess.run([sys.executable, "-c", script, work],
+                env={**os.environ, "HERMES_HOME": str(home)}, capture_output=True, text=True, timeout=15, check=False)
+            assert crashed.returncode == 23, crashed.stderr
         else:
             from hermes_runtime.adapters.inbox import HomeInbox
             HomeInbox().enqueue("Supplier changed delivery to Monday")
@@ -146,7 +162,12 @@ def test_boot_resumes_interrupted_home_through_native_websocket(monkeypatch, wor
                     assert conn.execute("SELECT state FROM delegated_project_messages").fetchone()[0] == "completed"
                     assert conn.execute("SELECT session_id FROM delegated_projects").fetchone()[0] == project_sid
             else:
-                assert "Supplier changed delivery to Monday" in json.dumps(calls)
+                if work.startswith("tool-"):
+                    expected = "outcome_unknown" if work == "tool-running" else "order-job-42"
+                    assert expected in json.dumps(calls)
+                    assert {sid for sid, _ in calls} == {"agentready_home"}
+                else:
+                    assert "Supplier changed delivery to Monday" in json.dumps(calls)
                 from hermes_runtime.adapters.inbox import HomeInbox
                 assert HomeInbox().pending() == []
             assert read_turn_marker(home, "agentready_home") is None

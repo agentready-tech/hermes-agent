@@ -71,6 +71,20 @@ def prepare_event(event, source):
 
 
 async def busy_event(self, proceed, event, session_key):
+    accepted = await admit_busy_event(self, event, session_key)
+    return await proceed(event, session_key) if accepted is None else accepted
+
+
+async def admit_busy_event(self, event, session_key):
+    """Join the one managed inbox; ordinary events never redirect or cancel its writer.
+
+    None leaves native sessions/control commands alone. False means the managed
+    owner cannot take this event now: preserve it in native admission/queue.
+    """
+    from hermes_runtime.adapters.hermes import enabled
+    if not enabled() or session_key != HOME_SESSION_KEY:
+        return None
+    from hermes_cli.commands import resolve_command
     from tools.approval import has_blocking_approval
 
     # Leave authorization, explicit commands and approval responses with
@@ -78,10 +92,11 @@ async def busy_event(self, proceed, event, session_key):
     if (
         not self._is_user_authorized_for_source(event.source)
         or self._draining
-        or str(event.text or "").lstrip().startswith("/")
-        or has_blocking_approval(session_key)
+        or (event.get_command() and resolve_command(event.get_command()) is not None)
     ):
-        return await proceed(event, session_key)
+        return None
+    if has_blocking_approval(session_key):
+        return False
     text = await self._prepare_profile_scoped_inbound_message_text(
         event=event,
         source=event.source,
@@ -112,6 +127,9 @@ async def busy_event(self, proceed, event, session_key):
     import asyncio
 
     if await asyncio.to_thread(forward_to_active_turn, content):
+        state = self._peek_session_state(session_key)
+        if state is not None and state.turn.agent is not None:
+            self._fold_into_running_turn(state.turn.agent, session_key, event)
         return True
     # No active owner yet (agent startup), or it has already closed its
     # mailbox. Preserve the original event for ordinary next-turn routing.

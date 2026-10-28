@@ -20,6 +20,20 @@ def lock_path():
     return managed_home() / "state/agentready-home-session.lock"
 
 
+def home_turn_active():
+    """A live writer drains its own inbox; recovery must not queue extra model turns."""
+    try:
+        with lock_path().open("a+") as handle:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except FileNotFoundError:
+        return False
+    return False
+
+
 def steer_socket_path():
     from gateway.control_socket import _home_hash, _private_directory, _private_runtime_dir
     # A Docker Desktop bind mount can create sockets but rejects chmod on them.
@@ -82,6 +96,9 @@ class ActiveHomeTurn:
         self.inbox = HomeInbox()
         self.inbox.acknowledge_recorded()
         self.pending = self.inbox.pending()
+        self.wakeup = threading.Event()
+        if self.pending:
+            self.wakeup.set()
         self._known_inputs = {identity for identity, _ in self.pending}
         self._taken_inputs = set()
         self.accepting = True
@@ -120,6 +137,7 @@ class ActiveHomeTurn:
                         if pending and identity not in self._known_inputs:
                             self._known_inputs.add(identity)
                             self.pending.append((identity, content))
+                            self.wakeup.set()
                 stream.write((json.dumps({"accepted": accepted}) + "\n").encode())
                 stream.flush()
                 if accepted and request.get("wait"):
@@ -133,6 +151,7 @@ class ActiveHomeTurn:
     def take_records(self, *, close_if_empty=False):
         with self.lock:
             pending, self.pending = self.pending, []
+            self.wakeup.clear()
             self._taken_inputs.update(identity for identity, _ in pending)
             if close_if_empty and not pending:
                 self.accepting = False

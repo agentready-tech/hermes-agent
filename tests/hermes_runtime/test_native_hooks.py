@@ -2,7 +2,6 @@
 
 import asyncio
 from pathlib import Path
-from types import SimpleNamespace
 
 
 def test_managed_gate_is_home_scoped_and_native_mode_is_unchanged(
@@ -52,7 +51,11 @@ def test_managed_gate_is_home_scoped_and_native_mode_is_unchanged(
 def test_busy_gateway_preserves_control_guard_and_event_envelope(tmp_path, monkeypatch):
     from hermes_runtime.adapters import hermes, gateway
     from gateway.run_busy import GatewayBusySessionMixin
+    from gateway.config import Platform
+    from gateway.platforms.event import MessageEvent
+    from gateway.session import SessionSource
     from hermes_constants import get_hermes_home
+    from hermes_runtime.sessions import HOME_SESSION_KEY
     import tools.approval
 
     monkeypatch.setattr(hermes, "_home", Path(get_hermes_home()).resolve())
@@ -85,29 +88,32 @@ def test_busy_gateway_preserves_control_guard_and_event_envelope(tmp_path, monke
         def _consume_pending_native_image_paths(self, key):
             return []
 
+        def _peek_session_state(self, key):
+            return None
+
     host = Host()
-    source = SimpleNamespace(
-        platform=SimpleNamespace(value="telegram"),
+    source = SessionSource(
+        platform=Platform.TELEGRAM,
         chat_id="room",
         thread_id="topic",
         user_id="user",
     )
-    event = SimpleNamespace(
+    event = MessageEvent(
         text="business event", message_id="42", source=source, internal=False
     )
 
     async def scenario():
-        assert await host._handle_active_session_busy_message(event, "home") is True
+        assert await host._handle_active_session_busy_message(event, HOME_SESSION_KEY) is True
         assert '"event_id": "telegram:42"' in received[0]
         host.allowed = False
         assert (
-            await host._handle_active_session_busy_message(event, "home")
+            await host._handle_active_session_busy_message(event, HOME_SESSION_KEY)
             == "native-control"
         )
         host.allowed = True
         event.text = "/stop"
         assert (
-            await host._handle_active_session_busy_message(event, "home")
+            await host._handle_active_session_busy_message(event, HOME_SESSION_KEY)
             == "native-control"
         )
         assert host.prepared == 1 and len(received) == 1

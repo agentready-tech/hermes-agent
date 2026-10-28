@@ -312,6 +312,11 @@ class InterruptControlMixin:
         # process to the background registry and returns; tools that don't yield are unaffected.
         if getattr(self, "_executing_tools", False):
             accepted = self.steer(cleaned)
+            if accepted and getattr(self, "_agentready_active_turn", None) is not None:
+                # The managed executor detaches its wait on the durable inbox
+                # signal. Native Terminal yielding would finish the outer call
+                # early and bypass its generic operation/completion receipt.
+                return True
             if accepted:
                 tracker = getattr(self, "_tool_worker_threads", None)
                 tracker_lock = getattr(self, "_tool_worker_threads_lock", None)

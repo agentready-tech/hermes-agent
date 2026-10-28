@@ -27,7 +27,14 @@ _TERMINAL_BLOCKED_PARAMS = {"background", "pty", "notify", "notify_on_complete",
 
 def _default_dispatch(task_id):
     from model_tools import handle_function_call
-    return lambda tool_name, tool_args: handle_function_call(tool_name, tool_args, task_id=task_id)
+    from tools.code_execution_context import current_scope
+    scope = current_scope()
+    def dispatch(tool_name, tool_args, *, request_id=None):
+        if scope is not None:
+            return scope.dispatch(tool_name, tool_args, request_id=request_id)
+        return handle_function_call(tool_name, tool_args, task_id=task_id)
+    dispatch.accepts_request_id = True
+    return dispatch
 
 
 def _private_dirs_cmd(root: str, *subdirs: str) -> str:
@@ -103,7 +110,10 @@ def _handle_rpc_request(request: dict, *, allowed_tools: frozenset, tool_call_co
     # Silence handler status prints so they don't leak into the CLI spinner.
     try:
         with thread_scoped_silence():
-            result = dispatch(tool_name, tool_args)
+            if getattr(dispatch, "accepts_request_id", False):
+                result = dispatch(tool_name, tool_args, request_id=request.get("request_id"))
+            else:
+                result = dispatch(tool_name, tool_args)
     except Exception as exc:
         logger.error("Tool call failed in %s: %s", where, exc, exc_info=True)
         result = tool_error(str(exc))

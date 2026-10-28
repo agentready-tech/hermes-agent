@@ -152,6 +152,38 @@ Return result string (or JSON error)
 [Plugin post-hook] → invoke_hook("post_tool_call", ...)
 ```
 
+### Incoming events during managed main-session tools
+
+The autonomous main session records registry tool calls in `state.db.tool_operations`
+before dispatch. `agent/tool_operation_lifecycle.py` uses each persisted tool-call
+occurrence UID as its replay identity. Native authorization, middleware, timeouts
+and parallel/sequential segment planning still govern execution.
+
+When a new durable inbox event arrives during a tool wait, the owner appends a
+`status: running` receipt with an `operation_id` for outstanding calls and handles
+the event. The workers continue without writing the conversation. Later results
+enter the same inbox as attributed `tool_operation` events, rather than second
+tool responses. With no incoming event, results follow the normal tool-result
+path without an extra model request. Calls beyond an unfinished segment barrier
+receive `status: not_started`; the model re-evaluates them after completion.
+
+An outstanding operation reserves its workspace, desktop or MCP server against
+conflicting later groups. Independent resources remain available. Native Terminal
+background sessions and saved subagents retain their existing execution and
+notification mechanisms. Inline tools that mutate live agent/context state and
+interactive setup tools keep their synchronous path. Managed main turns use
+per-command terminal approval instead of preparing later commands ahead of time.
+
+Startup recovery reconciles results with canonical history before replaying inbox
+receipts. Operations retain their dispatching chat/topic so late results wake
+the same conversation through its original messaging transport. A live owner
+drains its own inbox without redundant recovery wakeups.
+A dead worker yields `outcome_unknown`; external writes are never
+automatically retried. A cancellation request alone is not a confirmed cancellation.
+`agent/tool_concurrent_batch.py` owns concurrent workers; `agent/tool_resource_cleanup.py`
+preserves environments while registered operations still run. Existing session
+identity, history, compression, memory and delegated-project recovery are retained.
+
 ### Error wrapping
 
 All tool execution is wrapped in error handling at two levels:
