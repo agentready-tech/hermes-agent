@@ -1,8 +1,9 @@
 """Text-response stop gates for the conversation turn loop.
 
-When the model stops with a text answer, three gates may instead append the answer as an
+When the model stops with a text answer, stop gates may instead append the answer as an
 interim row plus a synthetic user-role nudge and continue the turn: verify-on-stop (#65919),
-the ``pre_verify`` plugin hook after code edits, and the kanban worker terminal-tool guard.
+the ``pre_verify`` plugin hook after code edits, the kanban worker terminal-tool guard,
+and the opt-in semantic continuation guard.
 Each keeps the candidate answer as a budget-exhaustion fallback
 (``pending_verification_response``) and clears ``final_response`` so the finalizer can tell
 this gate from error exits (#61631). Nothing here imports ``agent.conversation_loop`` at
@@ -105,9 +106,9 @@ def _append_interim_answer(agent, final_msg, messages, conversation_history, flu
 def apply_stop_gates(
     agent: Any, final_msg: dict[str, Any], *, final_response: Any, messages: list[dict[str, Any]],
     conversation_history: Any, pending_verification_response: Any,
-    pending_verification_response_previewed: Any,
+    pending_verification_response_previewed: Any, user_message: Any = None,
 ) -> StopGateVerdict:
-    """Run verify-on-stop → pre_verify hook → kanban stop guard, in that order. Nudges
+    """Run code verification, kanban closure, then optional continuation review. Nudges
     are user-role rows appended only after the assistant answer row, so role alternation
     holds. Hook lookups are imported lazily from their origin modules (tests patch them
     there)."""
@@ -174,6 +175,18 @@ def apply_stop_gates(
             "(kanban_complete/kanban_request_review/kanban_block) — nudging to finish"
         )
         return verdict
+    from agent.continuation_guard import build_continuation_nudge
+
+    _continuation = build_continuation_nudge(agent, messages, final_response or "", user_message=user_message)
+    if _continuation:
+        agent._continuation_guard_nudges = getattr(agent, "_continuation_guard_nudges", 0) + 1
+        final_msg["finish_reason"] = "continuation_required"
+        _append_interim_answer(
+            agent, final_msg, messages, conversation_history, "continuation guard interim flush failed",
+        )
+        # Reuse the existing ephemeral verification-nudge lifecycle (DB, compression, finalizer).
+        return _continue(_continuation, "_verification_stop_synthetic")
+
     return StopGateVerdict(
         continue_turn=False, final_response=final_response,
         pending_verification_response=pending_verification_response,

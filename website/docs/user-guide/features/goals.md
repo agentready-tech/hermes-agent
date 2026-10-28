@@ -222,6 +222,39 @@ Goal state lives in `SessionDB.state_meta` keyed by `goal:<session_id>`. That me
 
 The continuation prompt is a plain user-role message appended to history. It does **not** mutate the system prompt, swap toolsets, or touch the conversation in any way that invalidates Hermes' prompt cache. Running a 20-turn goal costs the same cache-wise as 20 turns of normal conversation.
 
+## Optional continuation guard without `/goal`
+
+For ordinary top-level turns, an opt-in stop reviewer can catch a concrete unfinished step
+without creating a persistent goal or task journal:
+
+```yaml
+agent:
+  continuation_guard:
+    enabled: true
+    max_continuations: 3
+```
+
+The default is **disabled**. To disable it again, set
+`agent.continuation_guard.enabled` to `false`. The guard reads this setting at each proposed
+stop and rechecks it after reviewing, so an in-flight review cannot continue work after the
+feature is switched off. Disabling this guard does not cancel tools already running.
+
+When enabled, the normal model/tool loop sends the accepted request, a bounded recent transcript
+(including tool calls/results), and the proposed answer to the existing `auxiliary.goal_judge`
+route. This adds an auxiliary model call at a reviewed stop. The reviewer can return a concrete
+next step, including checking/registering a missing wakeup, or allow the turn to finish. It does
+not execute tools itself or create schedules. Questions to the user and evidenced external waits
+are valid stops. Unusable decisions and reviewer errors allow the stop instead of starting retries.
+
+Corrections stay inside the existing turn and its iteration budget, with at most
+`max_continuations` corrections (default 3). At the cap the proposed answer is allowed through
+and the guard logs a warning; this is not proof the request was completed. The setting is
+independent of `/goal`: an active or paused goal keeps its existing continuation policy. The
+guard skips delegated children, side agents, isolated cron runs, explicit interruption and
+global emergency pause. Exhausted iteration/run budgets and tool guardrail halts also skip
+the review. It does not recover unrelated obligations lost from the available
+context, and scheduled/event-driven wakeups remain necessary for later work.
+
 ## Configuration
 
 Add to `~/.hermes/config.yaml`:

@@ -331,7 +331,7 @@ def finish_text_response(
 
     _sg = apply_stop_gates(
         agent, final_msg, final_response=final_response, messages=messages,
-        conversation_history=conversation_history,
+        conversation_history=conversation_history, user_message=user_message,
         pending_verification_response=_pending_verification_response,
         pending_verification_response_previewed=_pending_verification_response_previewed,
     )

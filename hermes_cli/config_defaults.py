@@ -207,18 +207,18 @@ DEFAULT_CONFIG = {
         # stable system block — project-wide workflow rules, e.g. "Don't run tsc/lint until I
         # approve." Cache-safe: takes effect next session.
         "coding_instructions": "",
-        # When verify-on-stop finds edits without fresh verification evidence, add guidance for
-        # creative UI work (no broad tsc/lint/test before visual approval) and clean-diff
-        # expectations. false = keep the evidence nudge terse.
+        # When edits lack fresh verification evidence, add visual-approval and clean-diff
+        # guidance to verify-on-stop. false keeps the evidence nudge terse.
         "verify_guidance": True,
         # Max consecutive `pre_verify` "continue" nudges per turn (hooks can't trap the loop).
         "max_verify_nudges": 3,
-        # Verification closure: after code edits in a workspace, refuse a final answer until fresh
-        # verification evidence exists or the agent explains why it can't check (bounded loop,
-        # passive ledger). False (default) because the nudges proved more noise than signal; true =
-        # force on everywhere; "auto" = on for interactive coding surfaces and programmatic callers,
-        # off for messaging surfaces. Doc/markdown/skill-only edits never fire.
+        # Bounded verification closure: require fresh evidence after code edits, or explain why
+        # checking is impossible. Off by default (noisy); true = everywhere; "auto" = interactive
+        # coding/programmatic callers, not messaging. Doc/markdown/skill-only edits never fire.
         "verify_on_stop": False,
+        # Optional semantic stop review, using auxiliary.goal_judge. No judge call while disabled.
+        # Rechecks config at each stop; bounded per ordinary top-level turn, independent of /goal.
+        "continuation_guard": {"enabled": False, "max_continuations": 3},
         # Inactivity warning (seconds), once per run before gateway_timeout; no interrupt. 0 = off.
         "gateway_timeout_warning": 900,
         # Max seconds any surface (CLI, TUI/Desktop, messaging gateway) blocks an agent awaiting a
