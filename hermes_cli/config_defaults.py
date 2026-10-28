@@ -216,9 +216,9 @@ DEFAULT_CONFIG = {
         # checking is impossible. Off by default (noisy); true = everywhere; "auto" = interactive
         # coding/programmatic callers, not messaging. Doc/markdown/skill-only edits never fire.
         "verify_on_stop": False,
-        # Optional semantic stop review, using auxiliary.goal_judge. No judge call while disabled.
+        # Optional stop review: goal_judge or openrouter_decisions; no call while disabled.
         # Rechecks config at each stop; bounded per ordinary top-level turn, independent of /goal.
-        "continuation_guard": {"enabled": False, "max_continuations": 3},
+        "continuation_guard": {"enabled": False, "max_continuations": 3, "judge": "goal_judge"},
         # Inactivity warning (seconds), once per run before gateway_timeout; no interrupt. 0 = off.
         "gateway_timeout_warning": 900,
         # Max seconds any surface (CLI, TUI/Desktop, messaging gateway) blocks an agent awaiting a

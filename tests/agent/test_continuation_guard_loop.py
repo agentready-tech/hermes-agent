@@ -10,9 +10,11 @@ from hermes_constants import get_hermes_home
 from run_agent import AIAgent
 
 
-def configure(enabled=True):
+def configure(enabled=True, *, judge="goal_judge", max_continuations=1):
     atomic_config_write(get_hermes_home() / "config.yaml", {
-        "agent": {"continuation_guard": {"enabled": enabled, "max_continuations": 1}},
+        "agent": {"continuation_guard": {
+            "enabled": enabled, "max_continuations": max_continuations, "judge": judge,
+        }},
     })
 
 
@@ -95,3 +97,34 @@ def test_exhausted_iteration_budget_does_not_pay_for_an_unusable_review(agent, m
     assert result["final_response"] == "The commit is pushed; CI is unchecked."
     assert agent._interruptible_api_call.call_count == 1
     reviewer.assert_not_called()
+
+
+@pytest.mark.parametrize("choice,expected_calls", [("stop", 1), ("continue", 2)])
+def test_decisions_stop_avoids_another_main_call_and_continue_injects_the_prompt(agent, monkeypatch, choice, expected_calls):
+    import httpx
+
+    configure(judge="openrouter_decisions", max_continuations=3)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    replies = iter([response("The fix is pushed; CI still needs checking."), response("CI passed.")])
+    agent._interruptible_api_call = Mock(side_effect=lambda _kwargs: next(replies))
+    decisions = iter([choice, "stop"])
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={"answers": {"verdict": {"type": "choice", "choice": next(decisions)}}})
+
+    original = httpx.Client
+    class Client(original):
+        def __init__(self, **kwargs):
+            kwargs.setdefault("transport", httpx.MockTransport(handler))
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(httpx, "Client", Client)
+    result = agent.run_conversation("Push the fix and verify CI passes.")
+
+    assert agent._interruptible_api_call.call_count == expected_calls
+    assert len(calls) == expected_calls
+    assert result["final_response"] == ("CI passed." if choice == "continue" else "The fix is pushed; CI still needs checking.")
+    assert agent._cached_system_prompt == "Stable instructions."
+    assert all(not row.get("_verification_stop_synthetic") for row in result["messages"])

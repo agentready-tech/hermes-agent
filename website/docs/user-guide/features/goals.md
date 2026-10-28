@@ -240,11 +240,37 @@ stop and rechecks it after reviewing, so an in-flight review cannot continue wor
 feature is switched off. Disabling this guard does not cancel tools already running.
 
 When enabled, the normal model/tool loop sends the accepted request, a bounded recent transcript
-(including tool calls/results), and the proposed answer to the existing `auxiliary.goal_judge`
-route. This adds an auxiliary model call at a reviewed stop. The reviewer can return a concrete
+(including tool calls/results), and the proposed answer to the selected judge. The default
+`judge: goal_judge` uses the existing `auxiliary.goal_judge` route. This adds an auxiliary model
+call at a reviewed stop. The text reviewer can return a concrete
 next step, including checking/registering a missing wakeup, or allow the turn to finish. It does
 not execute tools itself or create schedules. Questions to the user and evidenced external waits
 are valid stops. Unusable decisions and reviewer errors allow the stop instead of starting retries.
+
+To use **GPT-6 Luna Decisions through OpenRouter** for this guard, store
+`OPENROUTER_API_KEY` in the owning profile's `.env` and select:
+
+```yaml
+agent:
+  continuation_guard:
+    enabled: true
+    max_continuations: 3
+    judge: openrouter_decisions
+```
+
+This uses `openai/gpt-6-luna-decisions` at OpenRouter's `/api/alpha/decisions` endpoint,
+with a typed choice between **stop** and **continue**, not a chat-completions request.
+`continue` adds a fixed instruction to identify and handle the remaining authorized step;
+this includes ensuring a missing wakeup or preparing a blocking explanation/question for
+the user. A valid `stop` does not call the main model again. A wait is a valid stop only when
+a concrete notification or schedule ensures a return; a block is a valid stop only when the
+necessary explanation/question is ready to deliver. The judge does not create schedules or
+send messages itself. API failures or malformed choices allow the proposed stop without a
+retry or model fallback. Decision/model, request ID, latency, input tokens and cost are logged,
+and the existing auxiliary observation hooks still fire. The HTTP timeout uses
+`auxiliary.goal_judge.timeout`, capped at 10 seconds per network phase for this stop check.
+This selection does not redirect `/goal` evaluation or completion
+contract drafting. Changing `judge` while a review is running discards that review's correction.
 
 Corrections stay inside the existing turn and its iteration budget, with at most
 `max_continuations` corrections (default 3). At the cap the proposed answer is allowed through
