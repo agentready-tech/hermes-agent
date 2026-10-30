@@ -57,6 +57,19 @@ def test_fresh_init_selects_holographic(tmp_path):
     assert config.read_config(home)["database"]["journal_mode"] == "delete"
 
 
+def test_terminal_default_is_persistent_docker_and_preserves_explicit_backend(tmp_path):
+    home = tmp_path / "sandbox-home"
+    config.initialize(home)
+    terminal = config.read_config(home)["terminal"]
+    assert terminal["backend"] == "docker"
+    assert terminal["docker_image"] == "nousresearch/hermes-sandbox:desktop"
+    assert terminal["container_persistent"] and terminal["docker_persist_across_processes"]
+    (home / "config.yaml").write_text("terminal:\n  backend: ssh\n  ssh_host: existing-host\n")
+    config.initialize(home)
+    terminal = config.read_config(home)["terminal"]
+    assert terminal["backend"] == "ssh" and terminal["ssh_host"] == "existing-host"
+
+
 def test_fresh_init_uses_unattended_approval_and_private_reasoning_defaults(tmp_path, monkeypatch):
     from tools.approval import request_tool_approval
     from gateway.run import GatewayRunner

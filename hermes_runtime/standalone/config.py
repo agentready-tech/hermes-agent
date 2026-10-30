@@ -44,6 +44,12 @@ def initialize(home):
         autonomous.setdefault(key, value)
     # Persist these defaults for native consumers that read raw YAML, while
     # retaining any policy the operator explicitly selected for this home.
+    terminal = config.setdefault("terminal", {})
+    if isinstance(terminal, dict):
+        terminal.setdefault("backend", "docker")
+        terminal.setdefault("docker_image", DEFAULT_CONFIG["terminal"]["docker_image"])
+        terminal.setdefault("container_persistent", True)
+        terminal.setdefault("docker_persist_across_processes", True)
     for section, key in (("approvals", "mode"), ("display", "show_reasoning")):
         values = config.setdefault(section, {})
         if isinstance(values, dict):

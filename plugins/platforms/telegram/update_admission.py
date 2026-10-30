@@ -293,6 +293,9 @@ class TelegramApplication(Application):
         pending[key] = claim
         token = self._current_claim.set(claim)
         try:
+            if await self.adapter._secret_prompts.consume(update):
+                claim.completed = True
+                return
             await super().process_update(update)
         except BaseException:
             claim.failed = True

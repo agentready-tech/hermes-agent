@@ -511,7 +511,10 @@ class _PollingStallError(RuntimeError):
     """
 
 
-class TelegramAdapter(TelegramHeldInboundMixin, BasePlatformAdapter):
+from plugins.platforms.telegram.secret_prompt import TelegramSecretPromptMixin
+
+
+class TelegramAdapter(TelegramSecretPromptMixin, TelegramHeldInboundMixin, BasePlatformAdapter):
     """Telegram bot adapter: users/groups, MarkdownV2 replies, forum topics, media."""
 
     # Bound for the per-(chat_id, status_key) status-message cache; FIFO half-trim on overflow.
@@ -593,6 +596,8 @@ class TelegramAdapter(TelegramHeldInboundMixin, BasePlatformAdapter):
         self._update_receipts_dirty: set = set()
         self._update_receipt_flush: Optional[asyncio.Task] = None
         self._bot: Optional[Bot] = None
+        from plugins.platforms.telegram.secret_prompt import SecretPrompts
+        self._secret_prompts = SecretPrompts(self)
         self._webhook_mode: bool = False
         self._mention_patterns = self._compile_mention_patterns()
         self._reply_to_mode: str = getattr(config, 'reply_to_mode', 'first') or 'first'
@@ -3363,6 +3368,7 @@ class TelegramAdapter(TelegramHeldInboundMixin, BasePlatformAdapter):
 
     async def disconnect(self) -> None:
         """Stop polling/webhook, cancel pending delayed deliveries, and disconnect."""
+        self._secret_prompts.close()
         # Mark disconnected first so the drop guard short-circuits any flush that wins the race.
         self._mark_disconnected()
         self._polling_teardown_started = True
@@ -4044,23 +4050,6 @@ class TelegramAdapter(TelegramHeldInboundMixin, BasePlatformAdapter):
         last_id = continuation_ids[-1] if continuation_ids else message_id
         logger.debug("[%s] Overflow split delivered %d chunks; last_id=%s", self.name, 1 + len(continuation_ids), last_id)
         return SendResult(success=True, message_id=last_id, continuation_message_ids=tuple(continuation_ids))
-
-    async def delete_message(self, chat_id: str, message_id: str) -> bool:
-        """Delete a bot-posted message (Bot API allows it within 48h); failures are non-fatal.
-
-        Used by the stream consumer's fresh-final cleanup path (ported from openclaw/openclaw#72038) to
-        remove long-lived preview messages after sending the completed reply as a fresh message. Telegram's
-        Bot API ``deleteMessage`` works for bot-posted messages in the last 48 hours. Failures are non-fatal
-        — the caller leaves the preview in place and logs at debug level.
-        """
-        if not self._bot:
-            return False
-        try:
-            await self._bot.delete_message(chat_id=normalize_telegram_chat_id(chat_id), message_id=int(message_id))
-            return True
-        except Exception as e:
-            logger.debug("[%s] Failed to delete Telegram message %s: %s", self.name, message_id, _redact_telegram_error_text(e))
-            return False
 
     def supports_draft_streaming(self, chat_type: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> bool:
         """sendMessageDraft works for private chats only (Bot API 9.5) and needs PTB >= 22.6; groups and

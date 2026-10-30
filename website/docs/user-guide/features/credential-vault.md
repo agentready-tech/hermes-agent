@@ -34,6 +34,35 @@ fills the password through Hermes. The tool result it sees is
 `{filled_fields: 1, origin: "https://github.com"}`; the password is also
 registered with the redactor so a later page read cannot echo it back.
 
+## Telegram (AgentReady fork)
+
+In a private chat, `browser_vault(action="save_login")` asks for the identifier
+and then the password using Telegram's normal **Reply** composer.
+`browser_vault(action="enter_code")` asks for the verification code. The identifier
+is visible to the model, as in the native vault; the password and code are not.
+
+Reply to the specific bot prompt. Text keeps its whitespace and line breaks;
+for values longer than Telegram's message limit, attach a UTF-8 file up to 20 MiB
+as a reply. The transport accepts arbitrary text, with no six-digit constraint.
+The browser OTP tool still applies its own code normalization. API/MCP consumers
+are not connected in this phase.
+
+The VM consumes matching replies before normal message handlers, plugins,
+session history and the LLM. It downloads secret files into memory, deletes the
+reply, and passes the value directly to the existing vault callback. A failed
+deletion produces a notice asking you to delete the message manually. SDK debug
+payload logging is suppressed. Login passwords use the existing encrypted local
+vault; manually entered one-time codes are used for the fill, not saved as logins.
+
+Requests expire after five minutes and have a Cancel button. Old replies remain
+excluded from the model even after a restart. Ordinary text sent during an open
+request without Reply is discarded and deleted, with instructions to reply to
+the prompt; `/stop` and `/new` can still cancel the turn. Group chats are unsupported.
+
+**Telegram transports these values through its servers.** Deleting the message
+does not turn this into end-to-end secret input. This route needs no Mini App,
+public HTTPS endpoint on the VM, or shared secret server.
+
 ## Two-factor codes
 
 Sites that ask for a code after the password are handled the same way:
