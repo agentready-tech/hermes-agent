@@ -125,6 +125,11 @@ def browser_profile_dir(env: Any) -> str:
     return f"{desktop_home(env).rstrip('/')}/.hermes/bot-desktop/browser-profile"
 
 
+def chromium_sandbox_bypass(env: Any) -> bool:
+    """Desktop Docker supports Chromium's own sandbox; retain other backends' existing policy."""
+    return not getattr(env, "chromium_sandbox_enabled", False)
+
+
 _CHROMIUM_PROBE = (
     'for d in "${PLAYWRIGHT_BROWSERS_PATH:-}" /opt/playwright "$HOME/.cache/ms-playwright"; do'
     ' [ -n "$d" ] || continue;'

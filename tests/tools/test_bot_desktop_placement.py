@@ -192,6 +192,48 @@ def test_refused_placement_never_falls_back_to_the_host(monkeypatch, isolated_ho
         cb.sandbox_mcp_invocation()
 
 
+@pytest.mark.parametrize("native_sandbox", [True, False])
+def test_browser_cli_uses_the_environment_sandbox_policy(monkeypatch, isolated_home, native_sandbox):
+    from tools import browser_tool_session as bts
+    from tools.bot_desktop import chromium_sandbox, sandbox_host
+
+    env = _FakeDocker()
+    env.chromium_sandbox_enabled = native_sandbox
+    env._bd_browser_dirs_ready = True
+    monkeypatch.setattr(bts, "_browser_in_sandbox", lambda: True)
+    monkeypatch.setattr(runtime, "_sandbox_env", lambda **kw: env)
+    monkeypatch.setattr(runtime, "published_env", lambda: {"DISPLAY": ":20"})
+    monkeypatch.setattr(sandbox_host, "browser_profile_dir", lambda e: "/home/pn/browser-profile")
+    monkeypatch.setattr(sandbox_host, "_user_for", lambda e: "pn")
+    monkeypatch.setattr(chromium_sandbox, "sandboxed_executable", lambda e: "/home/pn/chromium-sandbox")
+    captured = {}
+    monkeypatch.setattr(streams, "remote_command", lambda e, argv, **kw: captured.update(kw) or argv)
+
+    bts._sandbox_wrap(["agent-browser", "--json", "snapshot"],
+                      {"PATH": "/usr/bin", "AGENT_BROWSER_ARGS": "--no-sandbox"}, "/tmp/socket")
+    child = captured["child_env"]
+    assert ("--no-sandbox" in child["AGENT_BROWSER_ARGS"]) is not native_sandbox
+    assert (child.get("AGENT_BROWSER_EXECUTABLE_PATH") == "/home/pn/chromium-sandbox") is native_sandbox
+    assert captured["user"] == "pn"
+
+
+@pytest.mark.parametrize("native_sandbox", [True, False])
+def test_desktop_browser_launcher_uses_the_environment_sandbox_policy(monkeypatch, isolated_home, native_sandbox):
+    from tools.bot_desktop import sandbox_host
+
+    env = _FakeDocker()
+    env.chromium_sandbox_enabled = native_sandbox
+    monkeypatch.setattr(runtime, "_sandbox_env", lambda **kw: env)
+    monkeypatch.setattr(sandbox_host, "chromium_executable", lambda e: "/opt/chrome")
+    monkeypatch.setattr(sandbox_host, "browser_profile_dir", lambda e: "/home/pn/browser-profile")
+    seen = {}
+    monkeypatch.setattr(sandbox_host, "start", lambda *a, **kw: seen.update(kw) or {"DISPLAY": ":20"})
+    monkeypatch.setattr(runtime, "touch_activity", lambda: None)
+    monkeypatch.setattr(runtime, "status", lambda: None)
+    runtime._start_in_sandbox(1)
+    assert ("--no-sandbox" in seen["browser_exec_line"]) is not native_sandbox
+
+
 def test_sandbox_screen_that_cannot_come_up_is_an_error_not_a_host_browser(monkeypatch, isolated_home):
     from tools import browser_tool_session as bts
 

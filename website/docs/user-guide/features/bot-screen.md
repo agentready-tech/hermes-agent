@@ -273,6 +273,46 @@ terminal:
 With a plain image the Screen pane reports the missing binaries and names
 this tag.
 
+For the Docker desktop image, Hermes bundles and automatically applies a seccomp
+profile that allows Chromium to create its own nested namespace sandbox, including
+`chroot` inside that namespace. The agent browser and the desktop's Browser launcher
+run without `--no-sandbox`. Docker's capability dropping, `no-new-privileges`, AppArmor
+and syscall filtering remain in place; the profile does not grant `SYS_ADMIN`,
+`NET_ADMIN`, host networking or access to host devices. Host-wide restrictions on
+unprivileged user namespaces can still block Chromium; Hermes does not disable
+those restrictions or silently disable the browser sandbox.
+The agent-browser executable goes through a small launcher that removes the
+dependency's automatic `--no-sandbox` flag; the desktop launcher calls Chromium directly.
+
+An explicit `seccomp=...` in `terminal.docker_extra_args` takes precedence over the
+bundled profile. That policy must support Chromium's namespace sandbox. The bundled
+policy is specific to `nousresearch/hermes-sandbox:desktop` (including a digest-pinned
+desktop tag); other images keep their existing Docker policy.
+
+Corporate VPN clients can separately opt into container network administration:
+
+```yaml
+terminal:
+  backend: docker
+  docker_image: nousresearch/hermes-sandbox:desktop
+  docker_extra_args:
+    - --cap-add=NET_ADMIN
+    - --device=/dev/net/tun:/dev/net/tun
+```
+
+Keep the container on its own network namespace, without `--network=host`,
+`--privileged`, a Docker socket mount or unnecessary published ports. `NET_ADMIN`
+lets a VPN manage the container's routes and interfaces; traffic and corporate
+resources reachable through that VPN become available to software in the container.
+Containers still share the host kernel and are not VM-strength isolation.
+
+Security settings are immutable: a desktop container created with different extra
+Docker arguments or an older bundled policy is not reused. Before upgrading an
+existing sandbox, preserve state outside its persistent mounts, particularly
+`/home/pn` (the desktop user's browser profile); `/root` and `/workspace` persistence
+does not cover that directory. This security policy does not migrate writable-layer
+data or change the operator's mounts.
+
 Under Singularity/Apptainer the same image is converted to a SIF
 (`docker://nousresearch/hermes-sandbox:desktop`); Dockerfile `ENV` survives the
 conversion, the image's `USER` does not: everything runs as you, so the browser

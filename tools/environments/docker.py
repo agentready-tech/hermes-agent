@@ -34,6 +34,7 @@ from tools.environments.docker_egress import (
     check_forward_env_collisions, merge_egress_env,
 )
 from tools.environments.path_utils import sanitize_task_id_for_path
+from tools.environments.docker_security import desktop_image, desktop_seccomp_args, desktop_security_identity
 from tools.environments.remote_common import (
     bash_argv, client_env_with, load_hermes_env_vars, prepend_unset, resolve_passthrough_env, run_capture)
 
@@ -152,7 +153,8 @@ def _is_volatile_mount_spec(spec: str) -> bool:
         return False
 
 
-def _reuse_environment_fingerprint(*, image: str, mount_args: list[str], hermes_home: str) -> str:
+def _reuse_environment_fingerprint(*, image: str, mount_args: list[str], hermes_home: str,
+                                   security_identity: str = "") -> str:
     """Hash immutable configuration so reuse cannot silently attach to stale mounts.
 
     Hash requested values rather than exposing profile paths and volume sources in labels.
@@ -168,9 +170,10 @@ def _reuse_environment_fingerprint(*, image: str, mount_args: list[str], hermes_
         (f"<volatile-tempdir-mount>:{spec.split(':', 1)[1]}"
          if _is_volatile_mount_spec(spec) else spec)
         for spec in mount_args]
-    payload = json.dumps(
-        {"image": image, "mount_args": canonical_mounts, "hermes_home": normalized_home},
-        sort_keys=True, separators=(",", ":"))
+    identity = {"image": image, "mount_args": canonical_mounts, "hermes_home": normalized_home}
+    if security_identity:
+        identity["security"] = security_identity
+    payload = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
 
 
@@ -709,6 +712,8 @@ class DockerEnvironment(BaseEnvironment):
                 image)
         security_args = _build_security_args(
             run_as_host_user and bool(user_args), run_exec=image_uses_s6_init, snap_compat=snap_compat)
+        security_args.extend(desktop_seccomp_args(image, validated_extra))
+        self.chromium_sandbox_enabled = desktop_image(image)
         self._snap_compat = snap_compat
         if snap_compat:
             logger.warning(
@@ -738,7 +743,8 @@ class DockerEnvironment(BaseEnvironment):
         if not shared_container_key:
             self._labels[_ENVIRONMENT_LABEL_KEY] = _reuse_environment_fingerprint(
                 image=image, mount_args=[*writable_args, *volume_args],
-                hermes_home=str(get_hermes_home()))
+                hermes_home=str(get_hermes_home()),
+                security_identity=desktop_security_identity(image, validated_extra))
         # Saved for container recreation on "No such container" recovery.
         self._image = image
         self._image_pinned = image_pinned

@@ -697,7 +697,11 @@ def _sandbox_wrap(cmd_parts: list[str], browser_env: dict[str, str], task_socket
         streams.run_in(env, ["mkdir", "-p", _sandbox_socket_dir(env), f"{env.get_temp_dir().rstrip('/')}/hermes-bot-desktop/shots",
                              remote_env["AGENT_BROWSER_PROFILE"]], user=sandbox_host._user_for(env), timeout=15)
         env._bd_browser_dirs_ready = True
-    remote_env["AGENT_BROWSER_ARGS"] = ",".join(CHROMIUM_SANDBOX_BYPASS_ARGS)  # container: no userns for Chromium's own sandbox
+    remote_env["AGENT_BROWSER_ARGS"] = (",".join(CHROMIUM_SANDBOX_BYPASS_ARGS)
+                                        if sandbox_host.chromium_sandbox_bypass(env) else "--disable-dev-shm-usage")
+    if not sandbox_host.chromium_sandbox_bypass(env):
+        from tools.bot_desktop.chromium_sandbox import sandboxed_executable
+        remote_env["AGENT_BROWSER_EXECUTABLE_PATH"] = sandboxed_executable(env)
     # cmd_parts = <agent-browser argv0 (+npx spec)> + backend args + command; keep everything after argv0.
     tail = cmd_parts[len(_agent_browser_argv(cmd_parts[0])):]
     wrapped = streams.remote_command(env, [_SANDBOX_AGENT_BROWSER, *tail], child_env=remote_env,
