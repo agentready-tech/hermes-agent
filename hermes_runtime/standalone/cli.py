@@ -31,6 +31,12 @@ def parser():
     service = commands.add_parser("install-service", help="Install a Linux systemd user service")
     service.add_argument("--enable", action="store_true", help="Enable and start the installed service")
     service.add_argument("--rdp", action="store_true", default=None, help="Install xrdp/xorgxrdp and start one persistent Xfce RDP desktop at boot (Ubuntu/Debian)")
+    service.add_argument("--computer", action="store_true", help="Use the native persistent Docker sandbox with Bot Screen, Xfce and Chromium")
+    service.add_argument("--panel-url", help="Register an outbound computer connection to this HTTPS Panel origin")
+    service.add_argument("--environment-id", help="Existing Panel environment ID")
+    service.add_argument("--enrollment-token-stdin", action="store_true", help="Read the Panel's one-time code from stdin instead of a masked prompt")
+    commands.add_parser("panel-worker", help=argparse.SUPPRESS)
+    commands.add_parser("computer-worker", help=argparse.SUPPRESS)
     commands.add_parser("service-run", help=argparse.SUPPRESS)
     commands.add_parser("desktop-session", help=argparse.SUPPRESS)
     commands.add_parser("rdp-start", help=argparse.SUPPRESS)
@@ -108,8 +114,14 @@ def execute(args, home):
         print(json.dumps(value, ensure_ascii=False))
         raise SystemExit(0 if value["ok"] else 1)
     if args.command == "install-service":
-        from hermes_runtime.standalone.service import install_service
-        return install_service(home, args.enable, rdp=args.rdp)
+        from hermes_runtime.standalone.service import install_from_cli
+        return install_from_cli(args, home)
+    if args.command == "panel-worker":
+        from hermes_runtime.standalone.panel import run
+        return run(home)
+    if args.command == "computer-worker":
+        from hermes_runtime.standalone.computer import run
+        return run(home)
     if args.command == "rdp-start":
         from hermes_runtime.standalone.rdp_session import start
         return start(home)

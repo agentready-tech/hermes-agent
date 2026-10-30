@@ -67,8 +67,11 @@ def install_service(home, enable, *, rdp=None):
     rdp = autonomous.get("rdp", False) if rdp is None else rdp
     if not isinstance(rdp, bool):
         raise ValueError("autonomous.rdp must be true or false")
+    computer = autonomous.get("computer", {}).get("enabled", False)
+    if computer and rdp:
+        raise ValueError("Disable autonomous.computer before enabling the separate RDP desktop")
     user = desktop_rdp.preflight(home) if rdp else None
-    desktop = discover_session()
+    desktop = {} if computer else discover_session()
     name = service_name(home)
     config = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
     folder = config / "systemd" / "user"
@@ -76,8 +79,9 @@ def install_service(home, enable, *, rdp=None):
     atomic_write_text(folder / name, render_service(home, sys.executable), mode=0o600)
     autostart = config / "autostart" / (name.removesuffix(".service") + ".desktop")
     autostart.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(autostart, render_autostart(home, sys.executable), mode=0o600)
-    session = capture_session(home, desktop, notify=False)
+    if not computer:
+        atomic_write_text(autostart, render_autostart(home, sys.executable), mode=0o600)
+    session = {"captured": False, "managed_by": "bot_desktop"} if computer else capture_session(home, desktop, notify=False)
     managed = desktop_rdp.install(home, user) if user else None
     if enable:
         environment = systemd_user_bus_env()
@@ -94,5 +98,29 @@ def install_service(home, enable, *, rdp=None):
         subprocess.run(["systemctl", "--user", "enable", name], env=environment, check=True, timeout=30)
         # Reinstalling refreshes the running owner's display binding and interpreter too.
         subprocess.run(["systemctl", "--user", "restart", name], env=environment, check=True, timeout=90)
-    return {"unit": str(folder / name), "enabled": enable, "autostart": str(autostart), "desktop_session": session, "rdp": managed,
-            "boot_requirement": None if managed else "The VM must start this user's existing Xfce session at boot and keep it alive without a viewer (e.g. LightDM autologin)."}
+    return {"unit": str(folder / name), "enabled": enable, "autostart": None if computer else str(autostart), "desktop_session": session, "rdp": managed,
+            "boot_requirement": None if managed or computer else "The VM must start this user's existing Xfce session at boot and keep it alive without a viewer (e.g. LightDM autologin)."}
+
+
+def install_from_cli(args, home):
+    from hermes_runtime.standalone.config import initialize
+    if args.computer and args.rdp:
+        raise ValueError("Choose --computer or --rdp; they own different desktops")
+    if bool(args.panel_url) != bool(args.environment_id):
+        raise ValueError("--panel-url and --environment-id must be supplied together")
+    if args.panel_url and not args.computer:
+        raise ValueError("Panel installation requires --computer")
+    if not args.computer:
+        return install_service(home, args.enable, rdp=args.rdp)
+    if args.panel_url:
+        from hermes_runtime.standalone.panel import socket_url
+        socket_url(args.panel_url, args.environment_id, "agent")
+    initialize(home)
+    from hermes_runtime.standalone.computer import install
+    computer = install(home)
+    if args.panel_url:
+        import getpass
+        from hermes_runtime.standalone.panel import enroll
+        token = sys.stdin.readline() if args.enrollment_token_stdin else getpass.getpass("Panel enrollment code: ")
+        enroll(home, args.panel_url, args.environment_id, token)
+    return {**install_service(home, args.enable, rdp=False), "computer": computer}

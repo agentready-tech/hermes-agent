@@ -88,4 +88,13 @@ def activate_home(home):
 
 def child_environment(home):
     from tools.environments.local import served_profile_child_env
-    return served_profile_child_env(target_home=home, inherit_credentials=True)
+    environment = served_profile_child_env(target_home=home, inherit_credentials=True)
+    computer = settings(home).get("computer", {})
+    if computer.get("enabled"):
+        # The native sandbox selects its own Chromium and persistent profile inside the container.
+        for key in ("AGENT_BROWSER_EXECUTABLE_PATH", "AGENT_BROWSER_PROFILE"):
+            environment.pop(key, None)
+        # Never import the host's Xfce/RDP display into the sandbox worker.
+        from hermes_runtime.standalone.desktop_session import GUI_KEYS
+        environment = {key: value for key, value in environment.items() if key not in GUI_KEYS or key == "XDG_RUNTIME_DIR"}
+    return environment

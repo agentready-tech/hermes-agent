@@ -93,6 +93,10 @@ def _notify_service(home, changed, environment):
 
 def capture_session(home, environment=None, *, notify=True):
     from utils import atomic_json_write
+    from hermes_runtime.standalone.config import settings
+
+    if settings(home).get("computer", {}).get("enabled"):
+        return {"captured": False, "reason": "native Bot Screen owns this profile's desktop"}
 
     environment = dict(os.environ if environment is None else environment)
     if not _local_x11(environment) or not _xfce_environment(environment):
@@ -125,13 +129,17 @@ def run_service(home):
     # Only a current-boot hook or a live Xfce process can supply the binding.
     environment = {k: v for k, v in os.environ.items() if k not in GUI_KEYS or k == "XDG_RUNTIME_DIR"}
     from hermes_runtime.standalone.config import settings
-    if settings(home).get("rdp"):
+    computer = settings(home).get("computer", {}).get("enabled")
+    if settings(home).get("rdp") and not computer:
         from hermes_runtime.standalone.rdp_session import wait_for_desktop
         wait_for_desktop(home)
-    if not _read_snapshot(home):
+    if not computer and not _read_snapshot(home):
         capture_session(home, discover_session({}), notify=False)
-    environment = session_environment(home, environment)
-    if environment.get("DISPLAY"):
+    if not computer:
+        environment = session_environment(home, environment)
+    if computer:
+        logger.info("Autonomous service using native Bot Screen; no graphical login is required")
+    elif environment.get("DISPLAY"):
         logger.info("Autonomous service using Xfce display %s", environment["DISPLAY"])
     else:
         logger.info("Autonomous service started; Xfce login hook will attach the desktop when available")

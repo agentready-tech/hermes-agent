@@ -180,6 +180,10 @@ def run(home, *, host=None, port=None):
     }
     if config.get("gmail", {}).get("enabled"):
         specs["gmail"] = _argv(home, sys.executable, "gmail-worker")
+    if config.get("panel", {}).get("url"):
+        specs["computer"] = _argv(home, sys.executable, "panel-worker")
+    elif config.get("computer", {}).get("enabled"):
+        specs["computer"] = _argv(home, sys.executable, "computer-worker")
     owner = Supervisor(home, specs, port=port, environment=environment)
     def prepare():
         from hermes_runtime.standalone.config import activate_home
