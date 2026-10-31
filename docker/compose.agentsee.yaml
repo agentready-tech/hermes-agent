@@ -48,6 +48,9 @@ services:
       HERMES_ALLOW_ROOT_GATEWAY: "1"
       XDG_RUNTIME_DIR: /tmp/hermes-runtime
       XDG_CACHE_HOME: ${HERMES_DATA}/cache
+      XDG_STATE_HOME: ${HERMES_DATA}/state
+      XDG_DATA_HOME: ${HERMES_DATA}/data
+      XDG_CONFIG_HOME: ${HERMES_DATA}/xdg-config
       DOCKER_HOST: unix:///run/sandbox-api/docker.sock
     volumes:
       - ${HERMES_DATA}:${HERMES_DATA}
