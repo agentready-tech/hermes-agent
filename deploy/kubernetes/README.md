@@ -4,6 +4,28 @@ The renderer produces an **inactive migration plan**, not an automatic cutover.
 The additional terminal backend attaches to an existing Pod; Docker, SSH and other
 backends remain available. Cluster installation is a separate operational step.
 
+## Verified deployment — 2026-11-01 (Moscow)
+
+The existing client was migrated to `agentsee-mike/hermes-0` and `sandbox-0` on
+`hermes-vm`, with the control plane on Panel. Both Pods and both nodes were Ready;
+the Pods had zero restarts. Independent checks confirmed native runtime readiness,
+Telegram polling, the existing main reply route, scoped sandbox exec, the Panel
+connector and RFB stream, browser CDP and CUA. Chromium remained open as `pn` with
+the existing profile and its sandbox enabled after the temporary checker exited.
+
+All 4,308 pre-existing messages and the main conversation were preserved. Auth,
+vault decryptability, external SSH files and NetBird's private identity were also
+verified. NetBird Management and Signal were connected, and sandbox DNS worked.
+The 15 existing Panel application containers retained their IDs and start times.
+No tenant Service, host network or host port was introduced; protected public
+ports remained closed and UFW remained active.
+
+The original Docker containers, images and checkpoints remain stopped/intact for
+rollback through user acceptance. Redacted evidence is stored on both servers at
+`/root/k3s-stage-20261031/production-proof.json`, with independent Panel and worker
+proofs alongside it. No synthetic Telegram messages, cron tasks or model requests
+were sent. A real user task and the browser viewer remain user acceptance checks.
+
 ## Placement and installation gates
 
 | Host | Private address | Role |
