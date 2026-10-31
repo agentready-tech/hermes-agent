@@ -198,7 +198,14 @@ native-to-container migration; moving the owner does not require restarting
 Chromium or VPN.
 
 Before cutover, back up the complete native home and external credential
-files, record history/session identity and sandbox process start times, then
+files. Inventory external provider CLIs as well: preserving the home does not
+make its installed binaries discoverable on the image's PATH. For Claude
+DirectSDK, preserve the Claude login/config in a writable persistent directory,
+select it with the plugin's `claude_config_dir` setting, and set
+`CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND` in the private Compose override when
+needed. Verify CLI resolution and authenticated `setup_status` inside the image
+before switching; keep credentials out of the image and diagnostic output.
+Record history/session identity and sandbox process start times, then
 stop the old owner and take the final consistent copy. Start the Compose
 owner against the **same home**, verify native status, Telegram connectivity,
 history preservation and real terminal execution in the same sandbox. Disable
