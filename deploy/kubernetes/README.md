@@ -197,8 +197,10 @@ VPN session. Both original container IDs and StartedAt remained unchanged.
 
 1. Complete capacity, network, device, image and security gates. Smoke-test the
    **full runtime image** using an isolated home, fake tokens and no outbound
-   network; never a second real Telegram poller. Validate manifests with server
-   dry-run, then apply them with replicas still zero. Local test-cluster schema
+   network; never a second real Telegram poller. Create the empty client namespace
+   before server dry-run: a dry-run Namespace is not persisted, so namespaced
+   objects in the same List otherwise fail with NotFound. Validate manifests with
+   server dry-run, then apply them with replicas still zero. Local test-cluster schema
    validation does not prove production firewall or browser compatibility.
 2. Record a private baseline: exact container IDs/StartedAt, mounts/security,
    main session/head, SQLite integrity and row counts, hashes of config/auth,
