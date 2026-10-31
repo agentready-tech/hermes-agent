@@ -10,6 +10,9 @@ flannel-backend: vxlan
 cluster-cidr: 10.240.0.0/16
 service-cidr: 10.241.0.0/16
 cluster-dns: 10.241.0.10
-disable: [traefik, servicelb]
+disable: [traefik, servicelb, metrics-server, local-storage]
 node-taint: [node-role.kubernetes.io/control-plane=true:NoSchedule]
 write-kubeconfig-mode: "0600"
+kubelet-arg: [address=10.216.0.1]
+kube-proxy-arg: [nodeport-addresses=127.0.0.0/8]
+token-file: /etc/rancher/k3s/join-token

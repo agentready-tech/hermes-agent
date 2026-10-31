@@ -4,3 +4,6 @@ node-name: hermes-vm
 node-ip: 10.216.0.2
 flannel-iface: wg-agentsee
 node-label: [agentsee.io/worker=hermes-vm, agentsee.io/vpn=true]
+kubelet-arg: [address=10.216.0.2]
+kube-proxy-arg: [nodeport-addresses=127.0.0.0/8]
+token-file: /etc/rancher/k3s/join-token

@@ -1,8 +1,8 @@
 # Agentsee: Kubernetes preparation
 
-This is an **inactive migration plan**, not a provisioner or an automatic cutover.
+The renderer produces an **inactive migration plan**, not an automatic cutover.
 The additional terminal backend attaches to an existing Pod; Docker, SSH and other
-backends remain available. No production cluster has been installed by this change.
+backends remain available. Cluster installation is a separate operational step.
 
 ## Placement and installation gates
 
@@ -15,8 +15,10 @@ Use `k3s-panel.yaml` and `k3s-worker.yaml` as `/etc/rancher/k3s/config.yaml`
 on the respective hosts. Choose and verify a pinned K3s release in the tested
 Kubernetes minor (1.35); use the same release on both nodes. Keep join tokens in
 a separate root-only `token-file`, never in these files or Git. The server is
-tainted `NoSchedule`; only system workloads may tolerate that taint. Traefik and
-ServiceLB are disabled so existing Caddy/Panel retain ports 80/443. K3s network
+tainted `NoSchedule`; only system workloads may tolerate that taint. Traefik,
+ServiceLB, metrics-server and the local-path provisioner are disabled in this
+minimal cluster; storage uses explicit local Retain PVs. Existing Caddy/Panel
+retain ports 80/443. K3s network
 policy enforcement must remain enabled.
 
 Do not install before these gates pass:
@@ -48,6 +50,30 @@ Do not install before these gates pass:
 This stage does not implement Panel scheduling, node enrolment, VM creation,
 autoscaling, HA or a custom Kubernetes operator. The existing private network and
 Panel ownership/connector configuration are retained.
+
+### Node firewall
+
+`host_guard.py` installs a dedicated IPv4/IPv6 mangle PREROUTING chain without
+flushing other rules. This precedes Kubernetes/Docker filter ACCEPT rules.
+Private peers can reach API/kubelet/VXLAN over `wg-agentsee`; these node ports
+are dropped on public interfaces. New Pod-to-node connections are dropped,
+except the remote Panel/API and control-plane system metrics path. Private
+Docker/management/metadata destinations are blocked before DNAT/filter bypasses.
+Pod and Service CIDRs continue through the CNI's policy enforcement. The remote
+Panel/API allowance is further restricted by each tenant's NetworkPolicy/RBAC;
+customer Pods must never tolerate the control-plane taint.
+
+Install the guard as a root-owned oneshot service ordered before K3s and reapply
+it after node startup/firewall changes. Its fixed CIDRs must match the K3s config;
+`controller-cidr` must match the actual control-plane node's PodCIDR. Validate
+tables in an isolated network namespace first, retain complete firewall backups,
+then test actual traffic. Existing `AS-MGMT` restrictions remain for Docker;
+only Kubernetes Pod-source Panel443/API6443 exceptions are added. No Pod-IP
+allowlist or asynchronous address reconciliation is required.
+
+Kubelet binds the private address. kube-proxy NodePorts bind loopback only;
+no tenant Service is exposed. This guard complements NetworkPolicy, not a CNI
+replacement. Public-port and cross-tenant traffic tests are still required.
 
 ## Images, data and inactive manifests
 
