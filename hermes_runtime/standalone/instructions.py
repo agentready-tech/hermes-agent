@@ -13,6 +13,10 @@ MAIN_SCHEDULE_INSTRUCTIONS = (
     "Reuse an appropriate existing schedule. The same tool's update/pause/resume/remove actions manage its "
     "lifecycle; list again to verify execution_scope=main. Never change its main-inbox routing. "
     "Put script, skill and delivery requirements in the prompt so the main agent performs them when it fires.\n"
+    "A schedule retains the interface that created it: a messaging request receives its final reply through "
+    "that chat/topic, while a web or local request stays in the main interface. Do not run hermes send or "
+    "search for a separate sending command inside the Docker "
+    "sandbox just to return a scheduled result.\n"
     "Queue acceptance is not task completion: check the main history for the actual outcome. Preserve existing "
     "session history and recovery; never create a replacement main session to implement a schedule."
 )

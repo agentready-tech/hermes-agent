@@ -1,6 +1,7 @@
 """Hermes SQLite home-session routing and legacy lineage migration."""
 
 import logging
+import json
 import sqlite3
 from hermes_runtime.sessions import HOME_SESSION_ID
 from hermes_runtime.adapters.hermes import managed_home
@@ -18,6 +19,29 @@ _CONTINUATION_CHILD = """
 
 def state_db_path():
     return managed_home() / "state.db"
+
+
+def main_gateway_origin():
+    """Use the main conversation's committed gateway route for native proactive replies."""
+    from gateway.config import Platform, load_gateway_config
+    from gateway.session import SessionEntry
+    from hermes_runtime.sessions import HOME_SESSION_KEY
+
+    scope = str(load_gateway_config().sessions_dir.resolve())
+    with sqlite3.connect(state_db_path()) as connection:
+        row = connection.execute("SELECT entry_json FROM gateway_routing WHERE scope=? AND session_key=?",
+                                 (scope, HOME_SESSION_KEY)).fetchone()
+    if row is None:
+        return {}
+    entry = SessionEntry.from_dict(json.loads(row[0]))
+    source = entry.origin
+    if (entry.suspended or resolve_home(entry.session_id) is None or source is None
+            or source.platform in {Platform.LOCAL, Platform.API_SERVER} or not source.chat_id):
+        return {}
+    origin = {key: value for key, value in source.to_dict().items()
+              if key in {"platform", "chat_id", "chat_type", "thread_id", "user_id", "scope_id", "profile"}}
+    return {**origin, "session_key": HOME_SESSION_KEY, "origin_session_id": current_home_session_id(),
+            "origin_ui_session_id": ""}
 
 
 def find_home_tip(connection):

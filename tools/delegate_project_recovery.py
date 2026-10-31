@@ -37,7 +37,7 @@ def publish_recovery_wakeups():
     return count
 
 
-def publish_wakeup(identity, parent, origin, summary, *, agent_message=False):
+def publish_wakeup(identity, parent, origin, summary, *, agent_message=False, goal="Restore accepted work after restart"):
     # One deterministic recovery notice per abandoned owner/input, including across
     # the managed serve and messaging gateway processes sharing this profile.
     with _transaction() as conn:
@@ -47,7 +47,7 @@ def publish_wakeup(identity, parent, origin, summary, *, agent_message=False):
         event = {"type": "async_delegation", "delegation_id": identity, "parent_session_id": parent,
             "durable_recovery": True, "agent_message": agent_message,
             "origin_session_id": parent, "status": "completed", "summary": summary,
-            "goal": "Restore accepted work after restart", "dispatched_at": now, "completed_at": now,
+            "goal": goal, "dispatched_at": now, "completed_at": now,
             **{k: v for k, v in origin.items() if k != "wake"}}
         event["session_key"] = event.get("session_key") or parent
         # Persist both halves on the same admitted transaction, rather than holding

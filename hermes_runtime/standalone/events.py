@@ -1,6 +1,7 @@
 """Mail and native schedule admissions share the existing durable main inbox."""
 
 import asyncio
+import hashlib
 import logging
 import uuid
 
@@ -38,7 +39,21 @@ def main_schedule_options(arguments):
     if not main_scheduling_enabled():
         return {}
     validate_main_schedule(arguments)
-    return {"deliver": "local", "origin": {"platform": CRON_ORIGIN, "chat_id": "main"}}
+    return {"deliver": "local", "origin": main_schedule_origin()}
+
+
+def main_schedule_origin():
+    from gateway.session_context import get_session_env
+    from hermes_runtime.adapters.state import main_gateway_origin
+
+    platform = str(get_session_env("HERMES_SESSION_PLATFORM") or "")
+    chat = str(get_session_env("HERMES_SESSION_CHAT_ID") or "")
+    origin = main_gateway_origin() if platform and chat else {}
+    if origin and origin.get("platform") == platform and origin.get("chat_id") == chat:
+        reply_to = {"kind": "gateway", "origin": origin}
+    else:
+        reply_to = {"kind": "main"}
+    return {"platform": CRON_ORIGIN, "chat_id": "main", "reply_to": reply_to}
 
 
 def manual_schedule_context(job):
@@ -70,6 +85,28 @@ def enqueue(prompt, source, event_id, metadata=None):
     return {"message_id": identity, "pending": pending}
 
 
+def _admit_scheduled_prompt(prompt, event_id, metadata, reply_to):
+    from hermes_runtime.adapters.state import main_gateway_origin, current_home_session_id
+    from hermes_runtime.events import event_prompt
+    from tools.delegate_project_recovery import publish_wakeup
+
+    # Old jobs predate reply routing. New jobs explicitly retain their creator's
+    # surface, so a web-created timer never switches to the last Telegram chat.
+    origin = main_gateway_origin() if reply_to is None else reply_to.get("origin", {})
+    if not origin:
+        return enqueue(prompt, "cron", event_id, metadata)
+    current = main_gateway_origin()
+    if any(origin.get(key) != current.get(key) for key in ("platform", "chat_id", "thread_id", "session_key")):
+        raise ValueError("The scheduled reply route is no longer bound to this main conversation; update the job from its original chat")
+    origin = {**origin, "origin_session_id": current_home_session_id()}
+    identity = "main-cron-" + hashlib.sha256(event_id.encode()).hexdigest()
+    # The native gateway owns this wake and its reply. A raw session-id wake is
+    # claimed by the internal UI and loses the originating messaging transport.
+    publish_wakeup(identity, current_home_session_id(), origin, event_prompt(prompt, "cron", event_id, metadata),
+                   goal="The scheduled time has arrived; execute this task in the main conversation")
+    return {"message_id": identity}
+
+
 def admit_cron(job, *, extra_prompt=None, cancel_event=None, execution_id=None):
     """Return an admission receipt, never claim the model has finished the task.
 
@@ -91,8 +128,9 @@ def admit_cron(job, *, extra_prompt=None, cancel_event=None, execution_id=None):
         activate_home(get_hermes_home())
     request_id = execution_id or job.get("execution_id") or uuid.uuid4().hex
     job["execution_id"] = request_id
-    receipt = enqueue("\n\n".join(p for p in (job.get("prompt"), extra_prompt) if p),
-                      "cron", f"{job['id']}:{request_id}", {"job_id": job["id"], "execution_id": request_id})
+    receipt = _admit_scheduled_prompt("\n\n".join(p for p in (job.get("prompt"), extra_prompt) if p),
+                                     f"{job['id']}:{request_id}", {"job_id": job["id"], "execution_id": request_id},
+                                     (job.get("origin") or {}).get("reply_to"))
     response = f"Accepted into main-session inbox: {receipt['message_id']}. Task execution is pending in the main conversation."
     return True, response + "\n", response, None
 
@@ -111,4 +149,4 @@ async def watch_home(port, token):
 def schedule(prompt, when, name=None):
     from cron.scheduler import create_job_with_scheduler_registration
     return create_job_with_scheduler_registration(prompt=prompt, schedule=when, name=name, deliver="local",
-                                                  origin={"platform": CRON_ORIGIN, "chat_id": "main"})
+                                                  origin=main_schedule_origin())

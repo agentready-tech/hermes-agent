@@ -97,6 +97,19 @@ def _drain(q) -> list:
     return out
 
 
+def test_ownerless_durable_wake_is_ready_without_dead_producer_grace(tmp_path):
+    from tools.delegate_project_recovery import publish_wakeup
+
+    home = tmp_path / 'ready-wake'
+    home.mkdir()
+    target = queue.Queue()
+    with _Home(home):
+        assert publish_wakeup('timer-ready', 'main', {'session_key':'main'}, 'The scheduled time has arrived')
+        assert ad.sweep_orphaned_completions(target, now=time.time()) == 1
+        assert [event['delegation_id'] for event in _drain(target)] == ['timer-ready']
+        assert ad.sweep_orphaned_completions(target, now=time.time()) == 0
+
+
 def test_orphaned_terminal_completion_is_offered_once_while_the_process_runs(tmp_path):
     home = tmp_path / "home"
     delegation_id = _orphan(home)

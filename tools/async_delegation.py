@@ -395,7 +395,8 @@ def sweep_orphaned_completions(target_queue, *, now: Optional[float] = None) -> 
     started; this covers the rest while it runs. Abandoned in-flight rows are first classified by
     ``recover_abandoned_delegations``. A terminal row qualifies when it is pending with an event, idle
     past ``_ORPHAN_STALE_S``, not under a live delivery claim, and its owner fails the shared liveness
-    check. A row is offered once per live in-memory copy: a consumer that discards the copy with the row
+    check. Atomically committed ownerless durable wakes are ready immediately; they have no producer
+    still preparing an in-memory offer that needs the dead-owner grace. A row is offered once per live in-memory copy: a consumer that discards the copy with the row
     still pending hands it back for the next sweep. The consumer's ``claim_completion_delivery`` stays
     the atomic cross-process gate, so two processes offering one row never both deliver it. Rows past
     the delivery budget or the replay age converge to ``dropped``. Reads the current profile's ledger:
@@ -415,7 +416,8 @@ def sweep_orphaned_completions(target_queue, *, now: Optional[float] = None) -> 
                       owner_pid, owner_started_at, delivery_attempts
                FROM async_delegations
                WHERE state NOT IN ('running','finalizing') AND delivery_state='pending'
-                 AND event_json IS NOT NULL AND updated_at < ?
+                 AND event_json IS NOT NULL
+                 AND (updated_at < ? OR (owner_pid IS NULL AND json_extract(event_json, '$.durable_recovery')=1))
                  AND (delivery_claim IS NULL OR delivery_claimed_at < ?)
                ORDER BY completed_at, delegation_id""", (now - _ORPHAN_STALE_S, now - _CLAIM_LEASE_S)).fetchall()
         orphans = []

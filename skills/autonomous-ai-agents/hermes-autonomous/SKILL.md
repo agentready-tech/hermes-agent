@@ -1,7 +1,7 @@
 ---
 name: hermes-autonomous
 description: "Run schedules and project work in the main session."
-version: 1.4.0
+version: 1.4.1
 author: Mihail Arlashkin, Hermes Agent
 license: MIT
 platforms: [linux, macos]
@@ -52,6 +52,9 @@ lifecycle through the same tool, preserving its main-inbox routing:
 List jobs again after a change and verify `execution_scope="main"`. The tool runs
 in the owning Hermes process; the sandbox does not need the host CLI, an inbox
 mount or a separate scheduling service. The host CLI remains available to operators.
+The scheduling interface is retained: a messaging request receives its final
+answer through that chat/topic; a web/local request stays in the main interface.
+Do not call `hermes send` in the Docker sandbox to deliver this final answer.
 
 ## Quick Reference
 

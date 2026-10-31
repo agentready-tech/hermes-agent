@@ -214,6 +214,13 @@ resume and remove schedules. It runs in the owning Hermes process regardless of
 Its returned job view identifies `execution_scope: main`. Tool/script/skill and
 delivery requirements belong in the prompt for the main agent to perform.
 
+Schedules created from a messaging conversation retain its registered route;
+their timer occurrences enter the native gateway automation queue with that route. The same gateway runs
+the main turn and sends its final reply back to that chat/topic; the Docker
+terminal needs no `hermes send`. These occurrences do not pass through the
+internal UI inbox. Schedules created from web/local interfaces retain the
+headless inbox path and do not switch to a registered messaging chat.
+
 Host operators can still use the compatible CLI:
 
 ```sh

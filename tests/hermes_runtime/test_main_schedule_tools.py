@@ -51,7 +51,8 @@ def test_existing_tool_creates_and_manages_main_schedule_with_docker_terminal(ma
     created = _tool("create", prompt="Review the existing project", schedule="every 1h", name="Main follow-up")
     assert created["success"] is True
     identity = created["job_id"]
-    assert get_job(identity)["origin"] == {"platform": CRON_ORIGIN, "chat_id": "main"}
+    assert get_job(identity)["origin"]["platform"] == CRON_ORIGIN
+    assert get_job(identity)["origin"]["chat_id"] == "main"
     assert created["job"]["execution_scope"] == "main"
     assert get_job(identity)["deliver"] == "local"
     assert _tool("pause", job_id=identity)["success"] is True

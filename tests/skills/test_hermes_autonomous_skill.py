@@ -12,7 +12,8 @@ def test_skill_schedule_command_creates_native_main_inbox_job():
         "Review outstanding supplier orders"], capture_output=True, text=True, timeout=20, check=False)
     assert result.returncode == 0, result.stderr
     job = json.loads(result.stdout)
-    assert job["origin"] == {"platform": "hermes-autonomous", "chat_id": "main"}
+    assert job["origin"]["platform"] == "hermes-autonomous"
+    assert job["origin"]["chat_id"] == "main"
     assert job["prompt"] == "Review outstanding supplier orders"
     assert job["schedule"]["kind"] == "interval"
     assert job["deliver"] == "local"
