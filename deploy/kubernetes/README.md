@@ -237,7 +237,11 @@ VPN session. Both original container IDs and StartedAt remained unchanged.
 2. Record a private baseline: exact container IDs/StartedAt, mounts/security,
    main session/head, SQLite integrity and row counts, hashes of config/auth,
    vault decryptability **without values**, cron/inbox, workspace/skills/files,
-   Chromium profile and NetBird state. Retain a complete original cold backup.
+   Chromium profile and NetBird state. Inventory provider CLI command overrides
+   from the old workload environment, including
+   `CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND`; a preserved executable outside PATH
+   still requires its explicit path in the new Hermes container environment.
+   Retain a complete original cold backup.
 3. Quiesce Hermes gracefully, disable its automatic restart, wait for in-flight
    tools and persistence. Close Chromium gracefully through its native process,
    then stop NetBird/desktop and the **existing sandbox**. This is the first
@@ -263,8 +267,11 @@ VPN session. Both original container IDs and StartedAt remained unchanged.
    Management/Signal connected. Then start only Hermes (scale to 1). Verify
    native ready status, **same** main conversation and old messages, vault
    decryptability, Telegram polling, real terminal/files, Chromium sandbox and
-   existing profile. Test native browser/CDP, CUA and Panel Bot Screen against
-   this same Pod. Do not send synthetic Telegram messages or create schedules.
+   existing profile. Check each configured provider's credential/CLI resolution,
+   including session model overrides, without making a model request; a connected
+   Telegram poller alone does not prove the selected provider is available.
+   Test native browser/CDP, CUA and Panel Bot Screen against this same Pod.
+   Do not send synthetic Telegram messages or create schedules.
    The user verifies a real task and delivery.
 8. Verify actual enforcing NetworkPolicies with a temporary unrelated client:
    no other-tenant/node/API/Panel access from sandbox, only scoped exec from
