@@ -1,12 +1,38 @@
 """Browser Use caller -> browser-harness on Hermes's own interpreter -> actual child."""
 import importlib.metadata
 import json
+import os
 import subprocess
 import sys
 
 import pytest
 
 from tools import browser_use_cli as bu
+
+
+@pytest.mark.parametrize("override", [None, "BH_HOME", "BROWSER_HARNESS_HOME"])
+def test_harness_storage_uses_writable_profile_home(monkeypatch, tmp_path, override):
+    profile = tmp_path / "hermes-profile"
+    profile.mkdir()
+    environment = {"HOME": str(tmp_path / "readonly-root"), "PATH": os.environ["PATH"]}
+    expected = profile / "cache" / "browser-harness"
+    if override:
+        expected = tmp_path / "custom-harness"
+        environment[override] = str(expected)
+    monkeypatch.setattr(bu, "get_hermes_home", lambda: profile)
+    monkeypatch.setattr("tools.browser_tool._build_browser_env", lambda: dict(environment))
+    probe = (
+        "import json; from browser_harness import paths; "
+        "temporary = paths.tmp_dir(); "
+        "(temporary / 'healthcheck').write_text('ok'); "
+        "print(json.dumps({'home': str(paths.home_dir()), 'tmp': str(temporary)}))"
+    )
+    result = subprocess.run([sys.executable, "-c", probe], env=bu._base_subprocess_env(),
+                            capture_output=True, text=True, timeout=15, check=True)
+    paths = json.loads(result.stdout)
+    assert paths["home"] == str(expected)
+    assert paths["tmp"] == str(expected / "tmp")
+    assert (expected / "tmp" / "healthcheck").read_text() == "ok"
 
 
 @pytest.mark.platforms("posix", "windows")

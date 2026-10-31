@@ -165,6 +165,9 @@ def _code_url_verdict(code: str) -> _CodeUrlVerdict:
 def _base_subprocess_env() -> dict:
     from tools.browser_tool import _build_browser_env
     env = _build_browser_env()
+    # Service children discard desktop XDG_CONFIG_HOME; the container's HOME may be read-only.
+    if not (env.get("BH_HOME") or env.get("BROWSER_HARNESS_HOME")):
+        env["BH_HOME"] = str(get_hermes_home() / "cache" / "browser-harness")
     # The harness runs on Hermes's own interpreter, but a bundled Desktop install boots that
     # interpreter with its site dir on PYTHONPATH (no venv to activate), and the harness's daemon
     # re-runs sys.executable. Point PYTHONPATH at the harness's site dir, replacing whatever the
