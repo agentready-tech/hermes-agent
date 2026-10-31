@@ -71,7 +71,10 @@ then test actual traffic. Existing `AS-MGMT` restrictions remain for Docker;
 only Kubernetes Pod-source Panel443/API6443 exceptions are added. No Pod-IP
 allowlist or asynchronous address reconciliation is required.
 
-Kubelet binds the private address. kube-proxy NodePorts bind loopback only;
+Kubelet binds the private address. The server uses `egress-selector-mode: disabled`
+so API exec/log streams reach that address directly over WireGuard. K3s's default
+agent tunnel targets kubelet loopback, which does not serve this configuration.
+kube-proxy NodePorts bind loopback only;
 no tenant Service is exposed. This guard complements NetworkPolicy, not a CNI
 replacement. Public-port and cross-tenant traffic tests are still required.
 
