@@ -150,6 +150,16 @@ snapshot to a public registry. For a single worker it can be imported into
 K3s/containerd locally and referenced by its immutable digest. Preserve its
 original image/security/mount metadata and image archive for rollback.
 
+Locally imported production images with `imagePullPolicy: Never` must be pinned
+before lengthy checkpoint work. Kubelet can otherwise garbage-collect an unused
+image when copies push disk usage over its high threshold, even after a successful
+preflight. Import with both `io.cri-containerd.image=managed` and
+`io.cri-containerd.pinned=pinned` labels, apply the pinned label to each tag/digest
+alias, and verify `crictl inspecti` reports `status.pinned: true` for both images.
+Keep free-space checks and cold archives; pinning is not additional disk capacity.
+See the [containerd pinning contract](https://github.com/containerd/containerd/blob/main/integration/containerd_image_test.go)
+and [kubelet image garbage collection](https://github.com/kubernetes/kubernetes/blob/master/pkg/kubelet/images/image_gc_manager.go).
+
 ## Chromium and optional VPN
 
 Chromium keeps its own sandbox. No `--no-sandbox`, `SYS_ADMIN`, host networking,
