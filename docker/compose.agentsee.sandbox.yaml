@@ -1,0 +1,29 @@
+# Optional provisioning file for NEW agents. Do not apply when adopting a
+# running sandbox: keep its container, mounts, browser and VPN unchanged.
+services:
+  sandbox:
+    image: ${SANDBOX_IMAGE:?Set a pinned desktop sandbox image}
+    container_name: ${SANDBOX_CONTAINER:?Set a unique sandbox name}
+    command: [sleep, infinity]
+    restart: unless-stopped
+    init: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${CHROMIUM_SECCOMP:?Set the bundled Chromium seccomp policy path}
+    volumes:
+      - ${HERMES_DATA}/sandboxes/docker/default/home:/root
+      - ${HERMES_DATA}/sandboxes/docker/default/desktop-home:/home/pn
+      - ${HERMES_DATA}/sandboxes/docker/default/desktop-machine-id:/etc/machine-id:ro
+      - ${HERMES_DATA}/workspace:/workspace
+      - ${HERMES_DATA}/workspace:${HERMES_DATA}/workspace
+      - ${HERMES_DATA}/skills:${HERMES_DATA}/skills:ro
+      - ${HERMES_DATA}/attachments:${HERMES_DATA}/attachments:ro
+      - ${HERMES_DATA}/images:${HERMES_DATA}/images:ro
+    shm_size: 1g
+    mem_limit: ${SANDBOX_MEMORY:-3g}
+    pids_limit: 512
+    logging:
+      driver: local
+      options: {max-size: "10m", max-file: "3"}

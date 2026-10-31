@@ -657,7 +657,8 @@ class DockerEnvironment(BaseEnvironment):
         shm_size: str = _DEFAULT_SHM_SIZE,
         shared_container_key: str = "",
         snap_compat: bool = False,
-        image_pinned: bool = False):
+        image_pinned: bool = False,
+        container_name: str = ""):
         if cwd == "~":
             cwd = "/root"
         super().__init__(cwd=cwd, timeout=timeout)
@@ -680,6 +681,20 @@ class DockerEnvironment(BaseEnvironment):
             volumes = []
 
         _ensure_docker_available()
+
+        self._managed_container = container_name.strip()
+        if self._managed_container:
+            # Compose/operator owns immutable mounts, resources and lifecycle.
+            # Never probe by launching a container or silently replace this one.
+            self._docker_exe = find_docker() or "docker"
+            self._image = image
+            self._labels = {}
+            self.chromium_sandbox_enabled = desktop_image(image)
+            self._persistent = self._persist_across_processes = True
+            self._attach_managed_container()
+            self._init_env_args = self._build_init_env_args()
+            self.init_session()
+            return
 
         resource_args = self._resource_args(image, cpu, memory, disk, network, shm_size, extra_args)
         volume_args, writable_args = self._mount_args(volumes, host_cwd, auto_mount_cwd, task_id)
@@ -996,6 +1011,19 @@ class DockerEnvironment(BaseEnvironment):
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
             return e
 
+    def _attach_managed_container(self):
+        result = run_capture([self._docker_exe, "inspect", "--format",
+            "{{.Id}}\t{{.State.Status}}\t{{.Config.Image}}", self._managed_container], timeout=15)
+        values = result.stdout.strip().split("\t")
+        if result.returncode or len(values) != 3:
+            raise RuntimeError("Configured Docker sandbox is unavailable; refusing to create a replacement")
+        container, state, image = values
+        if image != self._image:
+            raise RuntimeError("Configured Docker sandbox image differs; update its Compose service explicitly")
+        if state != "running" and (error := self._start_container(container)) is not None:
+            raise RuntimeError("Configured Docker sandbox could not start; refusing to create a replacement") from error
+        self._container_id = container
+
     def _run_command(self, name: str, workdir: str) -> list[str]:
         """``docker run -d`` argv for a fresh ``sleep infinity`` container (idle reaper handles
         lifetime). s6-overlay images already provide PID 1, so ``--init`` is skipped for them."""
@@ -1115,6 +1143,13 @@ class DockerEnvironment(BaseEnvironment):
         recovery fails so the caller surfaces the original error."""
         logger.warning("Container %s appears to be gone — attempting recovery", (self._container_id or "")[:12])
         self._container_id = None
+
+        if getattr(self, "_managed_container", ""):
+            self._attach_managed_container()
+            self._snapshot_ready = False
+            self.init_session()
+            self._mark_recreated()
+            return True
 
         existing = self._find_reusable_container(
             self._labels.get("hermes-task-id", ""),
@@ -1272,6 +1307,9 @@ class DockerEnvironment(BaseEnvironment):
         completes when we do trigger it.
         """
         container_id = self._container_id
+        if getattr(self, "_managed_container", ""):
+            self._container_id = None
+            return
         if not container_id:
             # Bind-mount dirs are still dropped in non-persistent mode.
             if not self._persistent:

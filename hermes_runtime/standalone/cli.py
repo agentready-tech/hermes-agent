@@ -92,6 +92,8 @@ def execute(args, home):
     if args.command in {"up", "backup", "upgrade", "rollback", "recover"}:
         from hermes_runtime.standalone.deployment import Deployment
         operator = Deployment(args.deployment or home.with_name(home.name + "-deployment"))
+        if (operator.directory / "deployment.json").exists() and operator.read().get("manager") == "compose":
+            raise ValueError("This deployment is managed by Docker Compose; use its saved Compose project and migration backup")
         dispatch = {"up": lambda: operator.up(home, args.image, args.port, mounts(args.mount)),
                     "backup": operator.backup, "upgrade": lambda: operator.upgrade(args.image),
                     "rollback": lambda: operator.rollback(args.snapshot), "recover": operator.recover}

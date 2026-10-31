@@ -345,10 +345,10 @@ DEFAULT_CONFIG = {
         # go first because n/nvm/asdf write PATH exports there without an interactivity guard. Turn
         # off if an rc file misbehaves when sourced non-interactively (exits on TTY check).
         "auto_source_bashrc": True,
-        # The default sandbox for every container backend: the nikolaik/python-nodejs base
-        # (Python 3.13 / Node 26) plus a display stack, so Bot Screen, computer_use and the
-        # bot's browser run INSIDE the sandbox and the pane can watch them (see bot_desktop).
+        # Container backends share the Python/Node desktop image: Bot Screen,
+        # computer_use and the browser run inside it (see bot_desktop).
         "docker_image": DEFAULT_SANDBOX_IMAGE,
+        "docker_container": "",  # Operator-managed sandbox; never create a replacement.
         "docker_forward_env": [],
         # Exact key-value env pairs set inside Docker containers (unlike docker_forward_env, which
         # reads host values) — useful under systemd without the user's shell env. Example:

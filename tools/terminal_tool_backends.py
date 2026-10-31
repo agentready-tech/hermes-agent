@@ -66,7 +66,7 @@ _CONTAINER_KEYS = (
     ("docker_env", {}), ("docker_run_as_host_user", False), ("docker_extra_args", []),
     ("docker_shm_size", "1g"), ("docker_network", True), ("docker_persist_across_processes", True),
     ("docker_shared_container_key", ""), ("docker_orphan_reaper", True), ("docker_snap_compat", False),
-    ("docker_image_pinned", False),
+    ("docker_image_pinned", False), ("docker_container", ""),
 )
 _DOCKER_KWARGS = (
     ("volumes", "docker_volumes", []), ("auto_mount_cwd", "docker_mount_cwd_to_workspace", False),
@@ -75,6 +75,7 @@ _DOCKER_KWARGS = (
     ("extra_args", "docker_extra_args", []), ("persist_across_processes", "docker_persist_across_processes", True),
     ("shared_container_key", "docker_shared_container_key", ""), ("shm_size", "docker_shm_size", "1g"),
     ("snap_compat", "docker_snap_compat", False), ("image_pinned", "docker_image_pinned", False),
+    ("container_name", "docker_container", ""),
 )
 
 
@@ -141,7 +142,8 @@ def _build_docker_env(*, image, cwd, timeout, cc, task_id, host_cwd, **_):
                                      _maybe_reap_docker_orphans)
     # One-shot reaper for labeled containers orphaned by prior Hermes processes that died before
     # atexit (SIGKILL / OOM / closed terminal); ``terminal.docker_orphan_reaper: false`` disables it.
-    _maybe_reap_docker_orphans(cc)
+    if not cc.get("docker_container"):
+        _maybe_reap_docker_orphans(cc)
     # A session-keyed container must not outlive its session, so cross-process reuse/persist is
     # disabled for it (cleanup_vm()/idle reaper stop+rm it). The shared "default" container and
     # RL/benchmark override sandboxes keep their existing lifecycle.

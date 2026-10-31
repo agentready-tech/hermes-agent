@@ -163,6 +163,49 @@ fork installation before upgrading a Docker deployment; its stable
 
 ## Docker and durable data
 
+### Compose with an existing sandbox
+
+`docker/compose.agentsee.yaml` runs one autonomous owner and a private,
+sandbox-scoped Docker API socket. Use a unique Compose project and a separate
+absolute home per agent. The home is mounted at the **same absolute path** on
+both sides, preserving existing workspace, credential and sandbox bind paths.
+The image's upstream s6 entrypoint is intentionally replaced by the autonomous
+foreground supervisor; production homes are never reseeded or recursively chowned.
+
+Set `terminal.docker_container` in the native `config.yaml` to the existing
+sandbox name. This selects the ordinary Docker backend's terminal, files and
+browser tools, but disables automatic container creation/replacement/removal.
+It starts that container if stopped and refuses missing or mismatched images.
+Mounts, capabilities and resource changes belong to the operator/Compose.
+
+The host-owned `SANDBOX_POLICY` JSON contains a `sandbox` projection from
+`docker inspect`: `Id`, `Name`, `Image`, `HostConfig`, and `Config.Image` only.
+It must live outside the agent's writable home. Neither the policy nor the
+real Docker socket is mounted into Hermes. The proxy permits inspect, start,
+exec for that sandbox only; stop/remove, creation, image pulls, host
+mount changes, networks, volumes, builds and access to other containers fail
+closed. No request bodies or upstream output are logged.
+
+Deployment variables are `HERMES_IMAGE` (an immutable image), `HERMES_DATA`,
+`SANDBOX_POLICY`, and optionally `HERMES_PORT`/`HERMES_MEMORY`. Pass them through
+a private Compose env file, distinct from the native home's secret `.env`.
+Publish only the authenticated dashboard on localhost. Sandboxes and the
+Docker API need no public port. Keep the current sandbox running during a
+native-to-container migration; moving the owner does not require restarting
+Chromium or VPN.
+
+Before cutover, back up the complete native home and external credential
+files, record history/session identity and sandbox process start times, then
+stop the old owner and take the final consistent copy. Start the Compose
+owner against the **same home**, verify native status, Telegram connectivity,
+history preservation and real terminal execution in the same sandbox. Disable
+the old service only after verification. On failure stop the new owner and
+restart the old service; retain both backup and latest home without silently
+discarding messages received during the attempted migration.
+
+The ordinary `hermes-autonomous up` operator below remains available for
+deployments that do not use this Compose template.
+
 On a host with the installed fork and Docker:
 
 ```sh

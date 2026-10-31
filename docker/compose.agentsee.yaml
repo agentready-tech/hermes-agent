@@ -1,0 +1,60 @@
+# One project per agent. Keep HERMES_DATA identical inside/outside the container:
+# the native Docker backend passes these paths to the host daemon for bind mounts.
+# Provision a sandbox first, capture its host-owned policy, then launch this stack.
+services:
+  docker-api:
+    image: ${HERMES_IMAGE:?Set an immutable fork image}
+    entrypoint: ["/opt/hermes/.venv/bin/python", "-m", "hermes_runtime.standalone.docker_api"]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      SANDBOX_POLICY: /policy/sandbox.json
+      SANDBOX_SOCKET: /run/sandbox-api/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${SANDBOX_POLICY:?Set the host-owned policy file}:/policy/sandbox.json:ro
+      - sandbox-api:/run/sandbox-api
+    network_mode: none
+    tmpfs: ["/opt/data:rw,noexec,mode=0700,size=1m"]
+    mem_limit: 128m
+    pids_limit: 64
+    logging: &logging
+      driver: local
+      options: {max-size: "10m", max-file: "3"}
+
+  hermes:
+    image: ${HERMES_IMAGE:?Set an immutable fork image}
+    # The autonomous foreground supervisor owns backend+gateway. Do not also
+    # start the upstream s6 slots or seed/chown an existing production home.
+    entrypoint: ["/opt/hermes/.venv/bin/python", "-m", "hermes_runtime.standalone.cli"]
+    command: ["--home", "${HERMES_DATA:?Set an absolute agent home}", "run", "--host", "0.0.0.0", "--port", "9119"]
+    working_dir: ${HERMES_DATA}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    labels:
+      hermes.autonomous: ${COMPOSE_PROJECT_NAME:?Set a unique Compose project name}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      HOME: /root
+      HERMES_HOME: ${HERMES_DATA}
+      HERMES_WRITE_SAFE_ROOT: ${HERMES_DATA}
+      XDG_RUNTIME_DIR: /tmp/hermes-runtime
+      DOCKER_HOST: unix:///run/sandbox-api/docker.sock
+    volumes:
+      - ${HERMES_DATA}:${HERMES_DATA}
+      - sandbox-api:/run/sandbox-api:ro
+    tmpfs: ["/tmp:rw,exec,mode=1777,size=512m", "/opt/data:rw,noexec,mode=0700,size=1m"]
+    ports: ["127.0.0.1:${HERMES_PORT:-9119}:9119"]
+    depends_on: [docker-api]
+    mem_limit: ${HERMES_MEMORY:-2g}
+    pids_limit: 512
+    logging: *logging
+
+volumes:
+  sandbox-api:

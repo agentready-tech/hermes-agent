@@ -120,6 +120,17 @@ def test_host_event_uses_container_stdin_without_opening_live_database(home, tmp
         execute(args, home)
 
 
+def test_legacy_operator_cannot_replace_a_compose_managed_deployment(home, tmp_path):
+    from hermes_runtime.standalone.cli import parser, execute
+
+    directory = tmp_path / "compose-deployment"
+    directory.mkdir()
+    (directory / "deployment.json").write_text(json.dumps({"manager": "compose"}))
+    args = parser().parse_args(["--deployment", str(directory), "upgrade", "--image", "candidate"])
+    with pytest.raises(ValueError, match="managed by Docker Compose"):
+        execute(args, home)
+
+
 def test_mail_and_native_cron_retries_share_main_inbox(home):
     from cron.scheduler_authority import run_canonical_job
     from hermes_runtime.adapters.inbox import HomeInbox

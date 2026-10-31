@@ -27,6 +27,7 @@ _terminal_scope_var: ContextVar = ContextVar("hermes_terminal_scope", default=No
 _TOOL_LEVEL_DEFAULTS: dict[str, Any] = {
     "cwd": ".", "ssh_host": "", "ssh_user": "", "ssh_port": 22, "ssh_key": "",
     "docker_orphan_reaper": True, "docker_persist_across_processes": True,
+    "docker_container": "",
     "sandbox_dir": "", "lifetime_seconds": 300, "docker_shared_container_key": "",
     "home_mode": "auto",
 }
