@@ -44,6 +44,8 @@ services:
       HOME: /root
       HERMES_HOME: ${HERMES_DATA}
       HERMES_WRITE_SAFE_ROOT: ${HERMES_DATA}
+      # Preserve the existing root-owned home without a recursive ownership migration.
+      HERMES_ALLOW_ROOT_GATEWAY: "1"
       XDG_RUNTIME_DIR: /tmp/hermes-runtime
       XDG_CACHE_HOME: ${HERMES_DATA}/cache
       DOCKER_HOST: unix:///run/sandbox-api/docker.sock

@@ -171,6 +171,9 @@ absolute home per agent. The home is mounted at the **same absolute path** on
 both sides, preserving existing workspace, credential and sandbox bind paths.
 The image's upstream s6 entrypoint is intentionally replaced by the autonomous
 foreground supervisor; production homes are never reseeded or recursively chowned.
+This migration template deliberately keeps the existing root UID and sets the
+native `HERMES_ALLOW_ROOT_GATEWAY=1` opt-in. The runtime drops all Linux
+capabilities and receives only its own data and sandbox-scoped Docker socket.
 
 Set `terminal.docker_container` in the native `config.yaml` to the existing
 sandbox name. This selects the ordinary Docker backend's terminal, files and
