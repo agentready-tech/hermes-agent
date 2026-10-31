@@ -606,10 +606,10 @@ def _try_dispatch_background_run(
         res = _run_claimed_job(claimed_job, extra_prompt=extra_prompt)
         return _manual_run_completion(res, job_id, job_name, deliver, started_at)
 
+    from hermes_runtime.standalone.events import manual_schedule_context
     dispatch = dispatch_async_delegation(
         goal=f"Manual run of cron job '{job_name}' ({job_id})",
-        context=("Triggered via cronjob(action='run'). The job executed in its own "
-                 "fresh cron session; this block reports its outcome."),
+        context=manual_schedule_context(job),
         toolsets=None, role="cron_run", model=job.get("model"), session_key=session_key,
         parent_session_id=str(session_id) if session_id else None, runner=_runner,
         origin_ui_session_id=origin_ui_session_id, origin_session_id=origin_session_id,
@@ -633,6 +633,11 @@ def _try_dispatch_background_run(
 
 def _with_guidance(result: dict[str, Any], job: dict[str, Any], deliver: Optional[str]) -> dict[str, Any]:
     """Attach mode/delivery guidance (create and update echo the same notes)."""
+    from hermes_runtime.standalone.events import is_main_schedule
+    if is_main_schedule(job):
+        result["guidance"] = ["The timer admits this prompt into the existing main conversation. "
+                              "A successful cron fire confirms admission, not completion of the task."]
+        return result
     _notes = _mode_guidance_notes(job, deliver)
     if _notes:
         result["guidance"] = _notes
@@ -640,8 +645,10 @@ def _with_guidance(result: dict[str, Any], job: dict[str, Any], deliver: Optiona
 
 
 def _action_create(a: dict[str, Any]) -> str:
+    from hermes_runtime.standalone.events import main_schedule_options
+    main_options = main_schedule_options(a)
     prompt, script = a["prompt"], a["script"]
-    deliver = _normalize_deliver_param(a["deliver"])
+    deliver = _normalize_deliver_param(main_options.get("deliver", a["deliver"]))
     if not a["schedule"]:
         return tool_error("schedule is required for create", success=False)
     canonical_skills = _canonical_skills(a["skill"], a["skills"])
@@ -683,7 +690,7 @@ def _action_create(a: dict[str, Any]) -> str:
         job = create_job_with_scheduler_registration(
             prompt=prompt or "", schedule=a["schedule"], name=a["name"], repeat=a["repeat"],
             deliver=_resolve_cron_context_deliver(deliver),
-            origin=_origin_from_env(a["schedule"]),
+            origin=main_options.get("origin", _origin_from_env(a["schedule"])),
             skills=canonical_skills,
             model=_normalize_optional_job_value(a["model"]), provider=_normalize_optional_job_value(a["provider"]),
             base_url=_normalize_optional_job_value(a["base_url"], strip_trailing_slash=True),
@@ -947,6 +954,11 @@ def _action_update(job: dict[str, Any], a: dict[str, Any]) -> str:
             return tool_error(error, success=False)
     if not updates:
         return tool_error("No updates provided.", success=False)
+    from hermes_runtime.standalone.events import is_main_schedule, validate_main_schedule
+    if is_main_schedule(job):
+        validate_main_schedule({**job, **updates})
+        if "deliver" in updates:
+            updates["deliver"] = "local"
     updated = update_job(job["id"], updates)
     _notify_provider_jobs_changed_safe()
     # An update can switch modes or delivery — echo the same guidance as create.
@@ -1050,6 +1062,19 @@ def _cronjob_schema_overrides() -> dict:
     that process, so a path baked in at import would name the launch profile's home (#95685)."""
     params = copy.deepcopy(CRONJOB_SCHEMA["parameters"])
     params["properties"]["script"]["description"] = _script_description(display_hermes_home())
+    from hermes_runtime.standalone.events import main_scheduling_enabled
+    if main_scheduling_enabled():
+        params["properties"]["deliver"]["description"] = (
+            "Omit for main-inbox scheduling. Put any destination for the eventual result in the prompt; "
+            "the main agent handles it when the timer fires.")
+        return {"parameters": params, "description":
+                "Manage schedules for the existing persistent main conversation. Use action='list' before "
+                "creating or changing jobs; action='create' needs prompt and schedule. The native timer "
+                "admits the prompt into the main inbox with the existing history, memory and projects. "
+                "It never creates a separate session. Use update/pause/resume/remove with job_id; run "
+                "admits an existing job immediately. Keep tool/script/skill and delivery instructions in "
+                "the prompt. Successful admission is not completion; the main history contains the outcome. "
+                "This tool works independently of the terminal backend, including Docker."}
     return {"parameters": params}
 
 

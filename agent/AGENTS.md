@@ -84,8 +84,8 @@ middleware, approvals, per-call occurrence identities and segment barriers intac
   paths outside the working dir so `~/.codex/AGENTS.md` / `~/.claude/CLAUDE.md` never mix in.
 - **Managed main scheduling policy** (`hermes_runtime/standalone/instructions.py`) is
   installed by `agent_init_session.init_session_state` as a native per-agent system suffix, independently
-  of skills. It defaults schedules to the durable main inbox; isolated execution needs
-  explicit user instruction. The policy text stays stable across personality changes; saved
+  of skills. Agent schedules always target the durable main inbox through the existing
+  cron tool, including with a Docker terminal. The policy text stays stable across personality changes; saved
   system prompts and transcript rows are not rewritten on resume. Profile, main-lineage,
   delegated-child and side-agent gates keep this policy on the owning main agent.
 - **`_last_resolved_tool_names` is a process-global in `model_tools.py`.** `_run_single_child()`

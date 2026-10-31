@@ -8,6 +8,47 @@ logger = logging.getLogger(__name__)
 CRON_ORIGIN = "hermes-autonomous"
 
 
+def is_main_schedule(job):
+    return (job.get("origin") or {}).get("platform") == CRON_ORIGIN
+
+
+def main_scheduling_enabled():
+    """Include detached cron workers, which boot without activating the managed adapter."""
+    from hermes_runtime.adapters.hermes import enabled
+    from hermes_runtime.standalone.config import settings
+    from hermes_constants import get_hermes_home
+
+    return enabled() or settings(get_hermes_home()).get("enabled") is True
+
+
+def validate_main_schedule(job):
+    if (any(job.get(k) for k in ("script", "monitor_script", "monitor_url", "context_from", "skills", "skill",
+                                "model", "provider", "base_url", "workdir", "reasoning_effort", "interpreter",
+                                "no_agent", "continuity", "attach_to_session"))
+            or job.get("enabled_toolsets") is not None):
+        raise ValueError("Main-inbox schedules accept prompts; put tool/script work and preferences in the prompt. "
+                         "Scheduled work must continue the existing main session.")
+    if job.get("deliver") not in (None, "", "local", "origin", "bot-chat") or job.get("failure_deliver"):
+        raise ValueError("Main-inbox schedules return to the main conversation; put any other delivery "
+                         "destination in the prompt for the main agent to handle.")
+
+
+def main_schedule_options(arguments):
+    """Reuse the host-side cron tool even when terminal commands execute in Docker."""
+    if not main_scheduling_enabled():
+        return {}
+    validate_main_schedule(arguments)
+    return {"deliver": "local", "origin": {"platform": CRON_ORIGIN, "chat_id": "main"}}
+
+
+def manual_schedule_context(job):
+    if is_main_schedule(job):
+        return ("Triggered via cronjob(action='run'). The timer admits this prompt into the existing main "
+                "conversation; this reports admission, not completion of the task.")
+    return ("Triggered via cronjob(action='run'). The job executes in its own fresh cron session; "
+            "this reports its outcome.")
+
+
 def enqueue(prompt, source, event_id, metadata=None):
     from hermes_runtime.adapters.inbox import HomeInbox
     from hermes_runtime.events import event_prompt
@@ -35,16 +76,15 @@ def admit_cron(job, *, extra_prompt=None, cancel_event=None, execution_id=None):
     Only jobs explicitly created for this inbox take this path. Native scripts,
     monitors and other jobs keep their normal execution and delivery semantics.
     """
-    if (job.get("origin") or {}).get("platform") != CRON_ORIGIN:
+    if not is_main_schedule(job):
+        if main_scheduling_enabled():
+            raise ValueError("Separate-session cron runs are disabled for managed Hermes. "
+                             "Create a main-inbox schedule with cronjob_manage or hermes-autonomous schedule.")
         return None
     from hermes_runtime.adapters.hermes import enabled
     from hermes_runtime.standalone.config import activate_home
     from hermes_constants import get_hermes_home
-    if any(job.get(k) for k in ("script", "monitor_script", "monitor_url", "context_from", "skills", "skill",
-                                "model", "provider", "base_url", "enabled_toolsets", "workdir",
-                                "reasoning_effort", "interpreter")):
-        raise ValueError("Main-inbox schedules accept prompts; put tool/script work in the prompt. "
-                         "A separate-session job requires an explicit user request")
+    validate_main_schedule(job)
     if cancel_event is not None and cancel_event.is_set():
         return False, "Schedule cancelled before admission", "", "cancelled"
     if not enabled():
@@ -53,7 +93,8 @@ def admit_cron(job, *, extra_prompt=None, cancel_event=None, execution_id=None):
     job["execution_id"] = request_id
     receipt = enqueue("\n\n".join(p for p in (job.get("prompt"), extra_prompt) if p),
                       "cron", f"{job['id']}:{request_id}", {"job_id": job["id"], "execution_id": request_id})
-    return True, f"Accepted into main-session inbox: {receipt['message_id']}\n", "", None
+    response = f"Accepted into main-session inbox: {receipt['message_id']}. Task execution is pending in the main conversation."
+    return True, response + "\n", response, None
 
 
 async def watch_home(port, token):
@@ -68,6 +109,6 @@ async def watch_home(port, token):
 
 
 def schedule(prompt, when, name=None):
-    from cron.jobs import create_job
-    return create_job(prompt=prompt, schedule=when, name=name, deliver="local",
-                      origin={"platform": CRON_ORIGIN, "chat_id": "main"})
+    from cron.scheduler import create_job_with_scheduler_registration
+    return create_job_with_scheduler_registration(prompt=prompt, schedule=when, name=name, deliver="local",
+                                                  origin={"platform": CRON_ORIGIN, "chat_id": "main"})

@@ -132,11 +132,12 @@ def test_mail_and_native_cron_retries_share_main_inbox(home):
     run_canonical_job(job, execution_id="fire-2")
     assert len(HomeInbox().pending()) == 3
     job["base_url"] = "http://example.test/v1"
-    with pytest.raises(ValueError, match="explicit user request"):
+    with pytest.raises(ValueError, match="existing main session"):
         run_canonical_job(job, execution_id="fire-unsupported")
     assert len(HomeInbox().pending()) == 3
     job.pop("base_url")
-    assert events.admit_cron({"id": "ordinary", "origin": None}) is None
+    with pytest.raises(ValueError, match="Separate-session cron runs are disabled"):
+        events.admit_cron({"id": "ordinary", "origin": None})
     cancelled = threading.Event()
     cancelled.set()
     assert not run_canonical_job(job, execution_id="fire-cancelled", cancel_event=cancelled)[0]

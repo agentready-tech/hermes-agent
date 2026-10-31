@@ -1,7 +1,7 @@
 ---
 name: hermes-autonomous
 description: "Run schedules and project work in the main session."
-version: 1.3.0
+version: 1.4.0
 author: Mihail Arlashkin, Hermes Agent
 license: MIT
 platforms: [linux, macos]
@@ -15,8 +15,8 @@ metadata:
 
 Use the fork's durable main inbox for reminders and external events. Reuse
 persistent project subagents when a long-running task receives new information.
-Schedules target the main conversation by default. A separate execution session
-requires the user's explicit instruction; a request to schedule work alone does not imply it.
+Schedules always target the existing main conversation. Do not create a separate
+execution session for scheduled work.
 
 ## When to Use
 
@@ -26,36 +26,36 @@ requires the user's explicit instruction; a request to schedule work alone does 
 
 ## Prerequisites
 
-The Hermes fork's autonomous owner must be running. `terminal` provides the
-`hermes-autonomous` CLI, and `delegate_task` manages persistent project children.
+The Hermes fork's autonomous owner must be running. Use the existing
+`cronjob_manage` tool for schedules, and `delegate_task` for persistent project children.
 Settings and secrets use the active native Hermes profile.
 
 ## How to Run
 
-Use `terminal` for a main-session schedule:
+Use `cronjob_manage` for a main-session schedule, including with a Docker terminal:
 
-```sh
-hermes-autonomous schedule --when 'every 1h' --name 'Order review' 'Review outstanding supplier orders and act on new evidence'
+```json
+{"action":"create","schedule":"every 1h","name":"Order review","prompt":"Review outstanding supplier orders and act on new evidence"}
 ```
 
-For a one-time reminder, pass the native Hermes schedule syntax to `--when`.
-First inspect `hermes cron list` and reuse an appropriate existing schedule. Manage
-main-inbox jobs through native cron commands, preserving their routing:
+For a one-time reminder, pass an ISO timestamp with its timezone in `schedule`.
+First use `action="list"` and reuse an appropriate existing schedule. Manage its
+lifecycle through the same tool, preserving its main-inbox routing:
 
-```sh
-hermes cron edit JOB_ID --schedule 'every 2h' --prompt 'Review outstanding supplier orders'
-hermes cron pause JOB_ID
-hermes cron resume JOB_ID
-hermes cron remove JOB_ID
+```json
+{"action":"update","job_id":"JOB_ID","schedule":"every 2h","prompt":"Review outstanding supplier orders"}
+{"action":"pause","job_id":"JOB_ID"}
+{"action":"resume","job_id":"JOB_ID"}
+{"action":"remove","job_id":"JOB_ID"}
 ```
 
-Read the job back after changing it. An ordinary `cronjob_manage` create runs in
-a separate session; use it only when the user explicitly requests that scope.
-Do not convert existing jobs to another scope implicitly.
+List jobs again after a change and verify `execution_scope="main"`. The tool runs
+in the owning Hermes process; the sandbox does not need the host CLI, an inbox
+mount or a separate scheduling service. The host CLI remains available to operators.
 
 ## Quick Reference
 
-- Create or inspect main-session schedules: `terminal` with this CLI and native cron.
+- Create or inspect main-session schedules: `cronjob_manage`.
 - Find an existing project: `delegate_task(action='list', query='project topic')`.
 - Create a child: `delegate_task(tasks=[{'project': 'stable-project-key', 'goal': 'Concrete goal'}])`.
 - A task without `project` also gets a persistent child and a saved ID.
@@ -105,6 +105,6 @@ Do not convert existing jobs to another scope implicitly.
 
 ## Verification
 
-Use `terminal` to inspect native cron records and `hermes-autonomous status`.
+Use `cronjob_manage` to inspect native cron records and their main execution scope.
 Use `delegate_task` to read durable project outcomes. Verify a claimed external
 action against its real source; queue acceptance alone does not prove completion.

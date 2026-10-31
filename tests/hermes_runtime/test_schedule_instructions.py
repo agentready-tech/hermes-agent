@@ -56,10 +56,10 @@ def test_scheduling_policy_is_mandatory_only_for_the_main_owner(runtime, monkeyp
     try:
         agent.run_conversation("Check how the next reminder should run")
         text = seen[0]["messages"][0]["content"]
-        assert ("hermes-autonomous schedule" in text) == (kind == "main")
+        from hermes_runtime.standalone.instructions import MAIN_SCHEDULE_INSTRUCTIONS
+        assert (MAIN_SCHEDULE_INSTRUCTIONS in text) == (kind == "main")
         assert "Existing host instructions" in text
         if kind == "main":
-            from hermes_runtime.standalone.instructions import MAIN_SCHEDULE_INSTRUCTIONS
             assert text.count(MAIN_SCHEDULE_INSTRUCTIONS) == 1
             assert not {"skill_view", "skills_list"} & agent.valid_tool_names
     finally:

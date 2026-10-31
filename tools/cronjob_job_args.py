@@ -509,6 +509,9 @@ def _format_job(job: dict[str, Any]) -> dict[str, Any]:
         "paused_at": job.get("paused_at"),
         "paused_reason": job.get("paused_reason"),
     }
+    from hermes_runtime.standalone.events import is_main_schedule
+    if is_main_schedule(job):
+        result["execution_scope"] = "main"
     for key in _FORMAT_JOB_OPTIONAL_KEYS:
         if job.get(key):
             result[key] = True if key == "no_agent" else job[key]
