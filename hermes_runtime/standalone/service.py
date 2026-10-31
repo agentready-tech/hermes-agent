@@ -17,9 +17,16 @@ def _systemd_quote(value, *, exec_line=True):
 
 
 def _command(module, *args, interpreter=None, home=None):
-    from hermes_cli._launchers import installation_command
+    from hermes_cli._launchers import installation_command, runtime_command
+    from hermes_cli.image_provenance import read_image_provenance
 
-    return installation_command(Path(__file__).resolve().parents[2], args,
+    root = Path(__file__).resolve().parents[2]
+    image = read_image_provenance()
+    if image is not None:
+        if not image.valid:
+            raise ValueError("The Hermes image provenance marker is invalid")
+        return runtime_command(root, args, module=module, python=interpreter or sys.executable, home=home)
+    return installation_command(root, args,
         module=module, python=interpreter, home=home)
 
 

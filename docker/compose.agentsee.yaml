@@ -45,6 +45,7 @@ services:
       HERMES_HOME: ${HERMES_DATA}
       HERMES_WRITE_SAFE_ROOT: ${HERMES_DATA}
       XDG_RUNTIME_DIR: /tmp/hermes-runtime
+      XDG_CACHE_HOME: ${HERMES_DATA}/cache
       DOCKER_HOST: unix:///run/sandbox-api/docker.sock
     volumes:
       - ${HERMES_DATA}:${HERMES_DATA}
