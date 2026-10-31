@@ -8,7 +8,7 @@ import tempfile
 
 import pytest
 
-from hermes_runtime.standalone.docker_api import Policy, Server
+from hermes_runtime.standalone.docker_api import Policy, Server, daemon_json
 
 
 @pytest.fixture
@@ -128,3 +128,23 @@ def test_exec_upgrade_forwards_stdin_and_output_without_hanging(policy):
                 writer.close()
     with tempfile.TemporaryDirectory(prefix="ag-api-", dir="/tmp") as directory:  # no-tmp: short AF_UNIX path
         asyncio.run(exercise(Path(directory)))
+
+
+@pytest.mark.platforms("posix")
+def test_daemon_lookup_uses_a_valid_http_host_over_the_unix_socket():
+    async def exercise(path):
+        received = []
+        async def daemon(reader, writer):
+            header = await reader.readuntil(b"\r\n\r\n")
+            received.append(header)
+            body = b'{"Id":"existing"}'
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: "
+                         + str(len(body)).encode() + b"\r\n\r\n" + body)
+            await writer.drain()
+            writer.close()
+        async with await asyncio.start_unix_server(daemon, str(path)):
+            value = await asyncio.to_thread(daemon_json, "/containers/own/json", daemon=str(path))
+            assert value == {"Id": "existing"}
+            assert b"Host: docker\r\n" in received[0]
+    with tempfile.TemporaryDirectory(prefix="ag-api-", dir="/tmp") as directory:  # no-tmp: short AF_UNIX path
+        asyncio.run(exercise(Path(directory) / "d.sock"))

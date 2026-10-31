@@ -19,10 +19,15 @@ VERSION = re.compile(r"^/v[0-9]+\.[0-9]+(?=/)")
 
 
 class UnixHTTP(http.client.HTTPConnection):
+    def __init__(self, path, *, timeout):
+        self.socket_path = path
+        # The HTTP Host header is independent of the Unix socket address.
+        super().__init__("docker", timeout=timeout)
+
     def connect(self):
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.settimeout(self.timeout)
-        self.sock.connect(self.host)
+        self.sock.connect(self.socket_path)
 
 
 def daemon_json(path, *, daemon):
