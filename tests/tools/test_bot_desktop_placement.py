@@ -178,7 +178,8 @@ def test_terminal_placement_starts_the_sandbox_screen_instead_of_running_on_the_
                         ["docker", "exec", "-i", "-u", user, e._container_id])
     (command, args), child_env = cb.sandbox_mcp_invocation()
     assert command == "docker" and "cua-driver mcp" in args[-1] and "export DISPLAY=:20" in args[-1]
-    assert set(child_env) == {"PATH"}  # the host driver's env never reaches the sandbox driver
+    assert "PATH" in child_env
+    assert "DISPLAY" not in child_env  # the sandbox display travels in the remote invocation
 
 
 def test_refused_placement_never_falls_back_to_the_host(monkeypatch, isolated_home):

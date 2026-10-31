@@ -12,6 +12,7 @@ the desktop stays on the gateway host (or refuses, per ``bot_desktop.placement``
 """
 from __future__ import annotations
 
+import os
 import shlex
 import socket
 import subprocess
@@ -19,6 +20,17 @@ import threading
 from typing import Optional, Sequence
 
 from tools.environments.base import BaseEnvironment
+
+
+def client_environment() -> dict[str, str]:
+    """Keep the exec client's transport selection without exposing Hermes secrets.
+
+    These values belong to docker/ssh on the gateway, never the remote tool's env.
+    Dropping DOCKER_HOST would bypass a configured sandbox socket and use the default daemon.
+    """
+    keys = ("PATH", "HOME", "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_API_VERSION",
+            "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "SSH_AUTH_SOCK")
+    return {key: os.environ[key] for key in keys if key in os.environ}
 
 
 def exec_prefix(env: BaseEnvironment, *, user: Optional[str] = None, interactive: bool = True) -> Optional[list[str]]:

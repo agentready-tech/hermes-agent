@@ -163,13 +163,14 @@ def sandbox_mcp_invocation() -> Optional[tuple[tuple[str, list[str]], dict[str, 
     if not published.get("DISPLAY"):
         raise RuntimeError("the screen inside the terminal backend's sandbox is gone; start it again")
     from tools.bot_desktop import sandbox_host
+    from tools.environments import streams
     env = _bd_runtime._sandbox_env(create=True)
     if env is None:
         raise RuntimeError("the terminal backend's sandbox is not running, so there is nowhere to run cua-driver")
     command, args = sandbox_host.cua_mcp_invocation(env, _bd_runtime._profile_name(),
                                                     {**published, _CUA_TELEMETRY_ENV_VAR: "0"})
     _bd_runtime.touch_activity()
-    return (command, args), {"PATH": os.environ.get("PATH", "")}
+    return (command, args), streams.client_environment()
 
 
 def sanitized_cua_driver_env() -> dict[str, str]:

@@ -708,7 +708,8 @@ def _sandbox_wrap(cmd_parts: list[str], browser_env: dict[str, str], task_socket
                                      user=sandbox_host._user_for(env), interactive=True)
     if wrapped is None:
         raise RuntimeError(f"{type(env).__name__} cannot host the browser")
-    host_env = {"PATH": browser_env.get("PATH", os.environ.get("PATH", "")), "HOME": os.environ.get("HOME", "")}
+    host_env = streams.client_environment()
+    host_env["PATH"] = browser_env.get("PATH", os.environ.get("PATH", ""))
     return wrapped, host_env
 
 
@@ -853,6 +854,10 @@ def _bot_desktop_attach_port(session_info: dict[str, Any]) -> Optional[int]:
     """DevTools port of a human-started Chromium on the Bot Desktop's shared profile, else ``None``."""
     if not _shares_bot_desktop_browser(session_info):
         return None
+    if _browser_in_sandbox():
+        from tools.bot_desktop import runtime, sandbox_host
+        env = runtime._sandbox_env(create=True)
+        return sandbox_host.browser_instance_cdp_port(env, exclude_session=session_info["session_name"]) if env else None
     from tools.bot_desktop import browser as _bd_browser
     return _bd_browser.running_instance_cdp_port(str(_bd_browser.profile_dir()),
                                                  exclude_session=session_info["session_name"])
