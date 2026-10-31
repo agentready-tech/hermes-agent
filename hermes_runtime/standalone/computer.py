@@ -1,4 +1,4 @@
-"""Configure the native Docker desktop sandbox without installing a host desktop."""
+"""Configure a native sandbox desktop without installing a host desktop."""
 
 import io
 from pathlib import Path
@@ -27,10 +27,10 @@ def configure(home):
     for key in ("browser_executable", "browser_profile"):
         computer.pop(key, None)
     autonomous["rdp"] = False
-    config.setdefault("terminal", {}).update({
-        "backend": "docker", "docker_image": SANDBOX_IMAGE_HINT,
-        "container_persistent": True, "docker_persist_across_processes": True,
-    })
+    terminal = config.setdefault("terminal", {})
+    if terminal.get("backend") != "kubernetes":
+        terminal.update({"backend": "docker", "docker_image": SANDBOX_IMAGE_HINT,
+                         "container_persistent": True, "docker_persist_across_processes": True})
     config.setdefault("browser", {}).update({"headed": True, "cdp_url": ""})
     desktop = config.setdefault("bot_desktop", {})
     desktop.update({"auto_start": True, "idle_stop_minutes": 0, "placement": "auto"})
@@ -38,7 +38,8 @@ def configure(home):
     output = io.StringIO()
     yaml.dump(config, output)
     atomic_write_text(path, output.getvalue(), mode=0o600)
-    return {"backend": "docker", "image": SANDBOX_IMAGE_HINT, "config_backup": str(backup)}
+    return {"backend": terminal["backend"], "image": terminal.get("docker_image")
+            if terminal["backend"] == "docker" else None, "config_backup": str(backup)}
 
 
 def install(home):
@@ -50,8 +51,8 @@ def start_desktop():
     from tools.bot_desktop import placement, runtime
 
     where = placement.resolve()
-    if where.backend != "docker" or where.where != placement.TERMINAL:
-        raise ValueError("Computer mode requires the Docker sandbox; run install-service --computer")
+    if where.backend not in {"docker", "kubernetes"} or where.where != placement.TERMINAL:
+        raise ValueError("Computer mode requires a Docker or Kubernetes sandbox; run install-service --computer")
     return runtime.start()
 
 

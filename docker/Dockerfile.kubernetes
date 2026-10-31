@@ -1,0 +1,7 @@
+# Optional extension of an already-built fork image. The default Docker image is unchanged.
+ARG HERMES_IMAGE
+FROM registry.k8s.io/kubectl:v1.35.8@sha256:1ec2791a3ddd245559e18a887f2dcd25cdfee7a649c5b73ca2715e3d7f6bf6f8 AS kubectl
+FROM docker:28.5.1-dind@sha256:ea9d20492ca1caaaba78e68453433895d256173c79281756e88b745647fcbcfd AS init
+FROM ${HERMES_IMAGE}
+COPY --from=kubectl /bin/kubectl /usr/local/bin/kubectl
+COPY --from=init /usr/local/bin/docker-init /usr/local/bin/agentsee-init

@@ -1,0 +1,38 @@
+# Optional infrastructure component, not part of a tenant namespace.
+# Source: squat/generic-device-plugin release 0.2.0; only /dev/net/tun is advertised.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: agentsee-tun
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels: {app: agentsee-tun}
+  template:
+    metadata:
+      labels: {app: agentsee-tun}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector: {agentsee.io/vpn: "true"}
+      containers:
+        - name: plugin
+          image: squat/generic-device-plugin:0.2.0@sha256:66c8d5c270eb2b721f1064c549b9b7898152a6d2f0163380a5d37dc7636c20ff
+          args:
+            - --listen=127.0.0.1:8080
+            - --device={"name":"tun","groups":[{"count":100,"paths":[{"path":"/dev/net/tun"}]}]}
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          volumeMounts:
+            - {name: sockets, mountPath: /var/lib/kubelet/device-plugins}
+            - {name: tun, mountPath: /dev/net/tun, readOnly: true}
+      volumes:
+        - name: sockets
+          hostPath: {path: /var/lib/kubelet/device-plugins, type: Directory}
+        - name: tun
+          hostPath: {path: /dev/net/tun, type: CharDevice}

@@ -1,0 +1,15 @@
+# Server: agent-ready / Panel. Install only after capacity + CIDR/firewall preflight.
+# /etc/rancher/k3s/config.yaml; join tokens belong in a separate root-only file.
+node-name: agentsee-panel
+node-ip: 10.216.0.1
+bind-address: 10.216.0.1
+advertise-address: 10.216.0.1
+tls-san: [10.216.0.1]
+flannel-iface: wg-agentsee
+flannel-backend: vxlan
+cluster-cidr: 10.240.0.0/16
+service-cidr: 10.241.0.0/16
+cluster-dns: 10.241.0.10
+disable: [traefik, servicelb]
+node-taint: [node-role.kubernetes.io/control-plane=true:NoSchedule]
+write-kubeconfig-mode: "0600"

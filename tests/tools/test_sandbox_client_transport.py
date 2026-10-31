@@ -42,6 +42,9 @@ def test_sandbox_tool_subprocess_reaches_selected_transport(monkeypatch, tmp_pat
     sandbox = Sandbox()
     monkeypatch.setenv("DOCKER_HOST", "unix:///run/client-only/docker.sock")
     monkeypatch.setenv("SSH_AUTH_SOCK", "/run/client-only/ssh-agent.sock")
+    monkeypatch.setenv("KUBECONFIG", str(tmp_path / "sandbox-only.kubeconfig"))
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.43.0.1")
+    monkeypatch.setenv("KUBERNETES_SERVICE_PORT", "443")
     monkeypatch.setenv("OPENAI_API_KEY", "provider-secret-must-stay-out")
     monkeypatch.setenv("HERMES_PANEL_CREDENTIAL", "panel-secret-must-stay-out")
     monkeypatch.setattr(runtime, "_sandbox_env", lambda **_: sandbox)
@@ -63,10 +66,14 @@ def test_sandbox_tool_subprocess_reaches_selected_transport(monkeypatch, tmp_pat
     observed = json.loads(result.stdout)
     assert observed["docker_host"] == os.environ["DOCKER_HOST"]
     assert observed["ssh_agent"] == os.environ["SSH_AUTH_SOCK"]
+    assert environment["KUBECONFIG"] == os.environ["KUBECONFIG"]
+    assert environment["KUBERNETES_SERVICE_HOST"] == "10.43.0.1"
+    assert environment["KUBERNETES_SERVICE_PORT"] == "443"
     assert observed["provider_secret"] is None
     assert observed["panel_secret"] is None
     assert "DOCKER_HOST" not in observed["remote_command"]
     assert "SSH_AUTH_SOCK" not in observed["remote_command"]
+    assert "KUBECONFIG" not in observed["remote_command"]
 
 
 @pytest.mark.platforms("posix")

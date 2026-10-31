@@ -34,6 +34,7 @@ from typing import Dict, Any, Literal, Optional, List, Tuple, Set
 import hermes_yaml as yaml
 
 from hermes_cli.cli_output import line_input
+from hermes_cli.config_terminal_defaults import terminal_config_env_map
 from hermes_cli.colors import Colors, color
 from hermes_cli import managed_scope
 from hermes_cli.default_soul import DEFAULT_SOUL_MD, is_legacy_template_soul
@@ -2121,19 +2122,7 @@ def write_platform_config_field(
 
 # ``terminal.<key>`` -> env var read by tools.terminal_tool. Every key maps to ``TERMINAL_<KEY>``
 # except ``backend`` (historically ``TERMINAL_ENV``).
-TERMINAL_CONFIG_ENV_MAP = {
-    "backend": "TERMINAL_ENV",
-    **{
-        key: f"TERMINAL_{key.upper()}"
-        for key in (
-            "modal_mode", "degraded_mode", "cwd", "temp_dir", "timeout", "lifetime_seconds",
-            "docker_image", "docker_container", "docker_forward_env", "singularity_image", "modal_image",
-            "daytona_image", "vercel_runtime", "vercel_image", "ssh_host", "ssh_user", "ssh_port", "ssh_key",
-            "container_cpu", "container_memory", "container_disk", "container_persistent",
-            "docker_volumes", "docker_env", "docker_mount_cwd_to_workspace", "docker_network",
-            "docker_extra_args", "docker_shm_size", "docker_run_as_host_user", "docker_snap_compat",
-            "docker_persist_across_processes", "docker_shared_container_key",
-            "docker_orphan_reaper", "sandbox_dir", "persistent_shell")}}
+TERMINAL_CONFIG_ENV_MAP = terminal_config_env_map()
 
 
 def _terminal_env_value(value: Any) -> str:

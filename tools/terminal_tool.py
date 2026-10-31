@@ -718,7 +718,7 @@ def _get_env_config() -> dict[str, Any]:
     # Container/docker-only payloads are parsed only when such a backend is
     # selected: a stale or invalid Docker value bridged from config.yaml must
     # not make local terminal/execute_code unusable.
-    if _is_container_backend(env_type):
+    if _is_container_backend(env_type) and env_type != "kubernetes":
         container_cpu = _parse_env_var("TERMINAL_CONTAINER_CPU", "1", float, "number")
         container_memory = _parse_env_var("TERMINAL_CONTAINER_MEMORY", "5120")
         container_disk = _parse_env_var("TERMINAL_CONTAINER_DISK", "51200")
@@ -742,6 +742,10 @@ def _get_env_config() -> dict[str, Any]:
         "docker_image": _tenv("TERMINAL_DOCKER_IMAGE", default_image),
         "docker_image_pinned": _tenv("TERMINAL_DOCKER_IMAGE_PINNED", "0") == "1",
         "docker_container": _tenv("TERMINAL_DOCKER_CONTAINER", "").strip(),
+        "kubernetes_namespace": _tenv("TERMINAL_KUBERNETES_NAMESPACE", "").strip(),
+        "kubernetes_pod": _tenv("TERMINAL_KUBERNETES_POD", "sandbox-0").strip(),
+        "kubernetes_container": _tenv("TERMINAL_KUBERNETES_CONTAINER", "sandbox").strip(),
+        "kubernetes_persistent": _tenv_bool("TERMINAL_PERSISTENT_SHELL", "true"),
         "docker_forward_env": docker_forward_env,
         "singularity_image": _tenv("TERMINAL_SINGULARITY_IMAGE", f"docker://{default_image}"),
         "modal_image": _tenv("TERMINAL_MODAL_IMAGE", default_image),

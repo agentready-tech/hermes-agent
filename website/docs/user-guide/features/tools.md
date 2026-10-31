@@ -72,6 +72,7 @@ The terminal tool can execute commands in different environments:
 |---------|-------------|----------|
 | `local` | Run on your machine (default) | Development, trusted tasks |
 | `docker` | Isolated containers | Security, reproducibility |
+| `kubernetes` | Existing sandbox Pod through the API | Platform-managed per-client workloads |
 | `ssh` | Remote server | Sandboxing, keep agent away from its own code |
 | `singularity` | HPC containers | Cluster computing, rootless |
 | `modal` | Cloud execution | Serverless, scale |
@@ -83,7 +84,7 @@ The terminal tool can execute commands in different environments:
 ```yaml
 # In ~/.hermes/config.yaml
 terminal:
-  backend: local    # or: docker, ssh, singularity, modal, daytona, vercel_sandbox
+  backend: local    # or: docker, kubernetes, ssh, singularity, modal, daytona, vercel_sandbox
   cwd: "."          # Working directory
   timeout: 180      # Command timeout in seconds
 ```
@@ -125,6 +126,13 @@ terminal:
 **One persistent container, shared across the whole process.** Hermes starts a single long-lived container on first use (`docker run -d ... sleep infinity`) and routes every terminal, file, and `execute_code` call through `docker exec` into that same container. Working-directory changes, installed packages, environment tweaks, and files written to `/workspace` all carry over from one tool call to the next, across `/new`, `/reset`, and `delegate_task` subagents, for the lifetime of the Hermes process. The container is stopped and removed on shutdown.
 
 This means the Docker backend behaves like a persistent sandbox VM, not a fresh container per command. If you `pip install foo` once, it's there for the rest of the session. If you `cd /workspace/project`, subsequent `ls` calls see that directory. See [Configuration → Docker Backend](../configuration.md#docker-backend) for the full lifecycle details and the `container_persistent` flag that controls whether `/workspace` and `/root` survive across Hermes restarts.
+
+### Kubernetes Backend
+
+Select a pre-provisioned namespace/Pod/container with `terminal.kubernetes_namespace`,
+`kubernetes_pod` and `kubernetes_container`. Hermes uses a scoped API account and
+never creates or deletes workloads. Native browser and desktop tools execute in
+that same Pod. See [Kubernetes terminal backend](../kubernetes.md).
 
 ### SSH Backend
 

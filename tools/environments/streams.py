@@ -5,7 +5,7 @@ follows the terminal backend needs three things that are not: the RFB byte strea
 Desktop pane and the sandbox's Xvnc, cua-driver's MCP-over-stdio server, and agent-browser
 invocations whose daemon must outlive the call. All three are "spawn argv in the sandbox, keep
 stdin/stdout as pipes". Each spawn-per-call backend has a local argv prefix that gives exactly that
-(``docker exec -i``, ``ssh``, ``apptainer exec``); this module is the one place that knows it.
+(``docker exec -i``, ``kubectl exec -i``, ``ssh``, ``apptainer exec``); this module owns those prefixes.
 
 SDK backends (modal, daytona, vercel) have no argv prefix: ``exec_prefix`` returns None there and
 the desktop stays on the gateway host (or refuses, per ``bot_desktop.placement``).
@@ -29,20 +29,24 @@ def client_environment() -> dict[str, str]:
     Dropping DOCKER_HOST would bypass a configured sandbox socket and use the default daemon.
     """
     keys = ("PATH", "HOME", "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_API_VERSION",
-            "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "SSH_AUTH_SOCK")
+            "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "SSH_AUTH_SOCK", "KUBECONFIG",
+            "KUBERNETES_SERVICE_HOST", "KUBERNETES_SERVICE_PORT", "KUBERNETES_SERVICE_PORT_HTTPS")
     return {key: os.environ[key] for key in keys if key in os.environ}
 
 
 def exec_prefix(env: BaseEnvironment, *, user: Optional[str] = None, interactive: bool = True) -> Optional[list[str]]:
     """Local argv that runs its remainder inside ``env``, or None for backends without one.
 
-    ``user`` selects the sandbox-side account (docker only; ssh runs as the configured login, apptainer as
+    ``user`` selects the sandbox-side account (Docker/Kubernetes; ssh runs as the configured login, apptainer as
     the caller). ``interactive`` keeps stdin open (``docker exec -i``); ssh and apptainer always do.
     """
     from tools.environments.docker import DockerEnvironment
+    from tools.environments.kubernetes import KubernetesEnvironment
     from tools.environments.singularity import SingularityEnvironment
     from tools.environments.ssh import SSHEnvironment
 
+    if isinstance(env, KubernetesEnvironment):
+        return env.exec_prefix(user=user, interactive=interactive)
     if isinstance(env, DockerEnvironment):
         container = getattr(env, "_container_id", None)
         if not container:

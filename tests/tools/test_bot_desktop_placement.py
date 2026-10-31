@@ -22,6 +22,7 @@ from tools.environments import streams
     [
         ("auto", "local", placement.GATEWAY),
         ("auto", "docker", placement.TERMINAL),
+        ("auto", "kubernetes", placement.TERMINAL),
         ("auto", "ssh", placement.TERMINAL),
         ("auto", "singularity", placement.TERMINAL),
         ("auto", "modal", placement.REFUSED),

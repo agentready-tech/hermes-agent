@@ -1,0 +1,6 @@
+# Extend a PRIVATE cold sandbox snapshot. Copy only init, no runtime credentials or state.
+ARG HERMES_IMAGE
+ARG SANDBOX_IMAGE
+FROM ${HERMES_IMAGE} AS runtime
+FROM ${SANDBOX_IMAGE}
+COPY --from=runtime /usr/local/bin/agentsee-init /usr/local/bin/agentsee-init

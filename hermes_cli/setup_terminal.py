@@ -263,16 +263,36 @@ def _setup_backend_plugin(config: dict, backend: str) -> None:
         _setup.print_warning(f"Backend plugin setup hook failed: {exc}")
 
 
+def _setup_backend_kubernetes(config: dict) -> None:
+    from hermes_platform.resolver import locate_command
+    from tools.environments.kubernetes import validate_target
+    _setup.print_success("Terminal backend: Kubernetes")
+    command = locate_command("kubectl").command
+    _report_binary(command[0] if command else None, "kubectl not found in PATH",
+                   "Install kubectl in the Hermes image. Use a sandbox-scoped ServiceAccount or KUBECONFIG.")
+    terminal = config.setdefault("terminal", {})
+    for key, label, default in (("namespace", "Client namespace", ""), ("pod", "Sandbox Pod", "sandbox-0"),
+                                ("container", "Sandbox container", "sandbox")):
+        name = "kubernetes_" + key
+        terminal[name] = _setup.prompt("  " + label, terminal.get(name, default))
+    try:
+        validate_target(*(terminal["kubernetes_" + k] for k in ("namespace", "pod", "container")))
+    except ValueError as error:
+        _setup.print_warning(str(error))
+    _setup.print_info("The platform creates and manages the sandbox Pod. Hermes only executes commands in it.")
+
+
 _BUILTIN_TERMINAL_BACKENDS = [
     ("local", "Local - run directly on this machine (default)"),
     ("docker", "Docker/Podman - isolated container with configurable resources"),
+    ("kubernetes", "Kubernetes - execute in your platform-managed sandbox Pod"),
     ("modal", "Modal - serverless cloud sandbox"), ("ssh", "SSH - run on a remote machine"),
     ("daytona", "Daytona - persistent cloud development environment"),
     ("vercel_sandbox", "Vercel Sandbox - cloud microVM with snapshot filesystem persistence")]
 _TERMINAL_BACKEND_SETUP = {
     "local": _setup_backend_local, "docker": _setup_backend_docker, "singularity": _setup_backend_singularity,
     "modal": _setup_backend_modal, "daytona": _setup_backend_daytona, "vercel_sandbox": _setup_backend_vercel,
-    "ssh": _setup_backend_ssh}
+    "ssh": _setup_backend_ssh, "kubernetes": _setup_backend_kubernetes}
 # Backend -> env var mirrored from config after setup (config.yaml is the source of truth, but
 # terminal_tool reads these from .env).
 _BACKEND_ENV_MIRROR = {"modal": ("TERMINAL_MODAL_MODE", "modal_mode", "auto"),

@@ -1,0 +1,6 @@
+# Agent: hermes-vm. Token supplied separately via a root-only token-file.
+server: https://10.216.0.1:6443
+node-name: hermes-vm
+node-ip: 10.216.0.2
+flannel-iface: wg-agentsee
+node-label: [agentsee.io/worker=hermes-vm, agentsee.io/vpn=true]

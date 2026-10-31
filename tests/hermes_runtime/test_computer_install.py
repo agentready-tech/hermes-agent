@@ -113,12 +113,30 @@ def test_desktop_start_uses_native_sandbox_runtime(monkeypatch):
     assert calls == ["native sandbox"]
 
 
+def test_kubernetes_configuration_and_native_start_preserve_target(tmp_path, monkeypatch):
+    from tools.bot_desktop import placement, runtime
+
+    config.initialize(tmp_path)
+    value = config.read_config(tmp_path)
+    target = {"backend": "kubernetes", "kubernetes_namespace": "client-one", "kubernetes_pod": "sandbox-0",
+              "kubernetes_container": "sandbox", "docker_container": "keep-for-rollback"}
+    value["terminal"] = target.copy()
+    (tmp_path / "config.yaml").write_text(json.dumps(value))
+    assert computer.configure(tmp_path)["backend"] == "kubernetes"
+    assert config.read_config(tmp_path)["terminal"] == target
+    monkeypatch.setattr(placement, "resolve", lambda: placement.Placement(placement.TERMINAL, "kubernetes"))
+    started = []
+    monkeypatch.setattr(runtime, "start", lambda: started.append("native"))
+    computer.start_desktop()
+    assert started == ["native"]
+
+
 @pytest.mark.parametrize("backend,where", [("local", "gateway"), ("docker", "gateway"), ("ssh", "terminal")])
 def test_computer_mode_never_falls_back_to_host_or_another_backend(backend, where, monkeypatch):
     from tools.bot_desktop import placement, runtime
     monkeypatch.setattr(placement, "resolve", lambda: placement.Placement(where, backend))
     monkeypatch.setattr(runtime, "start", lambda: pytest.fail("An unintended desktop was started"))
-    with pytest.raises(ValueError, match="Docker sandbox"):
+    with pytest.raises(ValueError, match="Docker or Kubernetes sandbox"):
         computer.start_desktop()
 
 

@@ -67,6 +67,9 @@ def _owner_identity(env: Any) -> dict[str, Any]:
     """What the marker records about the sandbox hosting the screen, so a restarted gateway (empty terminal
     registry) can tell a still-running sandbox from one that was removed."""
     ident: dict[str, Any] = {"backend": type(env).__name__}
+    kubernetes = getattr(env, "kubernetes_identity", None)
+    if kubernetes:
+        ident["kubernetes"] = dict(kubernetes)
     container = getattr(env, "_container_id", None)
     if container:
         ident["container"] = container
@@ -82,6 +85,16 @@ def marker_sandbox_alive(marker: dict[str, Any]) -> bool:
     (cached a few seconds; this sits on the browser's per-command path). Other backends (ssh host, apptainer
     instance) cannot be probed from here without their environment object: the re-attach's own
     ``published_env`` probe decides, so they read as alive."""
+    if marker.get("kubernetes"):
+        from tools.environments.kubernetes import marker_alive
+        identity = marker["kubernetes"]
+        key = "kubernetes:" + json.dumps(identity, sort_keys=True)
+        cached = _ALIVE_CACHE.get(key)
+        if cached and time.monotonic() - cached[0] < 5:
+            return cached[1]
+        alive = marker_alive(identity)
+        _ALIVE_CACHE[key] = (time.monotonic(), alive)
+        return alive
     container = marker.get("container")
     if not container:
         return True
