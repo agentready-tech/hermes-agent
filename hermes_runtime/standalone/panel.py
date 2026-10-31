@@ -87,7 +87,7 @@ def screen_request(raw):
     return json.dumps(message)
 
 
-async def bridge(command, config, port, credential, dashboard_token):
+async def bridge(command, config, port, credential, auth):
     from urllib.parse import urlencode
     from websockets.asyncio.client import connect
     from websockets.exceptions import ConnectionClosed
@@ -96,7 +96,7 @@ async def bridge(command, config, port, credential, dashboard_token):
     if kind not in {"rpc", "rfb"} or not isinstance(identity, str) or len(identity) > 100:
         raise ValueError("Invalid Panel channel")
     if kind == "rpc":
-        target = f"ws://127.0.0.1:{port}/api/ws?" + urlencode({"token": dashboard_token})
+        target = await asyncio.to_thread(auth.rpc_url)
     else:
         ticket = command.get("ticket")
         if not isinstance(ticket, str) or len(ticket) > 4096:
@@ -138,7 +138,7 @@ async def bridge(command, config, port, credential, dashboard_token):
             await remote.close(code=1012)
 
 
-async def connection(config, port, credential, dashboard_token):
+async def connection(config, port, credential, auth):
     from websockets.asyncio.client import connect
     from websockets.exceptions import WebSocketException
     tasks = set()
@@ -148,7 +148,7 @@ async def connection(config, port, credential, dashboard_token):
         logger.info("Computer connected to Panel")
         async def open_channel(command):
             try:
-                await bridge(command, config, port, credential, dashboard_token)
+                await bridge(command, config, port, credential, auth)
             except (OSError, ValueError, WebSocketException, TimeoutError):
                 # Native tickets and credentials may occur in exception URLs; never log them.
                 logger.warning("Panel screen channel ended; reconnect from the Panel if needed")
@@ -173,6 +173,7 @@ async def worker(home):
     from agent.secret_scope import get_secret
     from hermes_runtime.standalone.config import settings
     from hermes_runtime.standalone.computer import start_desktop
+    from hermes_runtime.standalone.panel_auth import NativeScreenAuth
     config = settings(home)
     panel = config.get("panel", {})
     credential = get_secret("HERMES_PANEL_CREDENTIAL") or ""
@@ -181,10 +182,13 @@ async def worker(home):
         raise ValueError("Panel connection is not registered for this Hermes home")
     if config.get("computer", {}).get("enabled"):
         await asyncio.to_thread(start_desktop)
+    auth = NativeScreenAuth(config["port"], dashboard_token,
+        username=get_secret("HERMES_DASHBOARD_BASIC_AUTH_USERNAME"),
+        password=get_secret("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"))
     delay = 1
     while True:
         try:
-            await connection(panel, config["port"], credential, dashboard_token)
+            await connection(panel, config["port"], credential, auth)
             delay = 1
         except (OSError, ValueError):
             logger.warning("Panel unavailable; the agent and its desktop continue locally")
