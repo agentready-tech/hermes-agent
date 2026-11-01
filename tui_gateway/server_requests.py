@@ -26,6 +26,8 @@ Window-owned bridges (``preview.read`` / ``preview.act`` / ``terminal.read`` / `
 with :data:`NOT_SHOWN_CODE`. A decline does not settle the request — the owner may still answer — until
 every answering client attached to the session has declined; then the request resolves with
 :data:`NOT_SHOWN_MESSAGE` at once instead of the agent waiting out the deadline (#119333).
+Credential prompts instead settle with an empty value: diagnostic text must never
+be mistaken for a password or one-time code supplied by the user.
 
 Capability: a client says once per connection that it answers server→client requests
 (``client.capabilities {server_requests: true}`` → :func:`advertise`). A WebSocket client that never
@@ -117,6 +119,9 @@ _clients: Callable[[str], list] = lambda sid: []
 NOT_SHOWN_CODE = 4404
 NOT_SHOWN_MESSAGE = ("No Hermes Desktop window is showing this chat, so its preview, terminal and tour are out "
                      "of reach. Ask the user to open this chat in the Desktop app, then retry.")
+# These consumers treat any nonempty value as a credential. A diagnostic JSON
+# string would otherwise be entered as an OTP/password despite no human answer.
+_SECRET_VALUE_REQUESTS = frozenset({"secret", "sudo", "vault.unlock_prompt", "vault.save_login", "vault.code"})
 
 # Client transports that sent ``client.capabilities {server_requests: true}`` (identity set: StdioTransport
 # has __slots__ and cannot be weak-referenced; ws.py forgets a peer on disconnect).
@@ -268,7 +273,8 @@ def _decline(rid: str, transport: Any) -> bool:
         if not clients or not clients <= req.declined:
             return True
         _open.pop(rid, None)
-        req.result = {"value": json.dumps({"success": False, "error": NOT_SHOWN_MESSAGE})}
+        req.result = {"value": "" if req.method in _SECRET_VALUE_REQUESTS
+                      else json.dumps({"success": False, "error": NOT_SHOWN_MESSAGE})}
         req.answered = True
     if req.on_result is not None:
         req.on_result(req.result)

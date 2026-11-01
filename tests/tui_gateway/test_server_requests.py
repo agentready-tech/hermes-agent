@@ -54,3 +54,24 @@ def test_cancel_after_the_write_is_emitted_once(wire):
     assert server_requests.cancel("s1") == 1
     pending("resolved")
     assert [event for event, _ in wire] == ["request", "request.cancel"]
+
+
+@pytest.mark.parametrize(("method", "params"), [
+    ("secret", {"env_var": "FIXTURE_ONLY", "prompt": "Fixture secret"}),
+    ("sudo", {}),
+    ("vault.unlock_prompt", {"backend": "bitwarden", "display_name": "Fixture manager"}),
+    ("vault.save_login", {"origin": "https://fixture.invalid", "site": "fixture.invalid"}),
+    ("vault.code", {"site": "fixture.invalid", "hint": ""}),
+])
+def test_unshown_credential_prompt_never_turns_error_text_into_a_secret(wire, monkeypatch, method, params):
+    client = object()
+    monkeypatch.setattr(server_requests, "_clients", lambda sid: [client])
+
+    def decline(frame):
+        assert server_requests.resolve_response({
+            "id": frame["id"], "error": {"code": server_requests.NOT_SHOWN_CODE},
+        }, client)
+
+    monkeypatch.setattr(server_requests, "_write", decline)
+    assert server_requests.send(method, "s1", params, timeout=10) == {"value": ""}
+    assert server_requests.open_requests("s1") == []
