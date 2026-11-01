@@ -25,11 +25,13 @@ class NativeScreenAuth:
         with self.opener.open(request, timeout=10) as response:
             return json.load(response)
 
-    def rpc_url(self):
+    def rpc_url(self, events=False):
+        target = self.websocket.replace("/api/ws", "/api/events") if events else self.websocket
+        channel = {"channel": "agentready_home"} if events else {}
         # Older loopback-only installations have no password provider. Their existing
         # process token remains valid; a gated dashboard still rejects it itself.
         if not self.username or not self.password:
-            return self.websocket + "?" + urlencode({"token": self.legacy_token})
+            return target + "?" + urlencode({"token": self.legacy_token, **channel})
         with self.lock:
             try:
                 identity = self.request("/api/auth/me")
@@ -41,6 +43,6 @@ class NativeScreenAuth:
                 })
             else:
                 if identity.get("provider") == "loopback":
-                    return self.websocket + "?" + urlencode({"token": self.legacy_token})
+                    return target + "?" + urlencode({"token": self.legacy_token, **channel})
             ticket = self.request("/api/auth/ws-ticket", {})["ticket"]
-            return self.websocket + "?" + urlencode({"ticket": ticket})
+            return target + "?" + urlencode({"ticket": ticket, **channel})

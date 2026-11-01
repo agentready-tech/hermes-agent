@@ -90,12 +90,12 @@ def screen_request(raw):
 async def bridge(command, config, port, credential, auth):
     from urllib.parse import urlencode
     from websockets.asyncio.client import connect
-    from websockets.exceptions import ConnectionClosed
+    from websockets.exceptions import ConnectionClosed, WebSocketException
 
     kind, identity = command.get("kind"), command.get("id")
-    if kind not in {"rpc", "rfb"} or not isinstance(identity, str) or len(identity) > 100:
+    if kind not in {"rpc", "rfb", "chat"} or not isinstance(identity, str) or len(identity) > 100:
         raise ValueError("Invalid Panel channel")
-    if kind == "rpc":
+    if kind in {"rpc", "chat"}:
         target = await asyncio.to_thread(auth.rpc_url)
     else:
         ticket = command.get("ticket")
@@ -103,9 +103,14 @@ async def bridge(command, config, port, credential, auth):
             raise ValueError("Invalid native display ticket")
         target = f"ws://127.0.0.1:{port}/api/display/ws?" + urlencode({"display_ticket": ticket})
     remote_url = socket_url(config["url"], config["environment_id"], "reverse", urlencode({"id": identity}))
-    options = {"max_size": 4 * 1024 * 1024, "open_timeout": 15, "close_timeout": 5, "proxy": None}
+    options = {"max_size": (32 if kind == "chat" else 4) * 1024 * 1024, "open_timeout": 15, "close_timeout": 5, "proxy": None}
     async with connect(target, **options) as native, connect(remote_url,
             additional_headers={"Authorization": f"Bearer {credential}"}, **options) as remote:
+        events = None
+        if kind == "chat":
+            # Panel authorizes and filters chat RPCs; Hermes keeps its existing chat backend.
+            with suppress(OSError, WebSocketException, TimeoutError):
+                events = await connect(await asyncio.to_thread(auth.rpc_url, True), **options)
         async def pump(source, destination, inbound):
             try:
                 async for frame in source:
@@ -122,6 +127,13 @@ async def bridge(command, config, port, credential, auth):
             else:
                 await destination.close(code=1000)
         tasks = [asyncio.create_task(pump(remote, native, True)), asyncio.create_task(pump(native, remote, False))]
+        observer = None
+        if events:
+            async def observe():
+                with suppress(ConnectionClosed):
+                    async for frame in events:
+                        await remote.send(frame)
+            observer = asyncio.create_task(observe())
         try:
             done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in pending:
@@ -133,6 +145,10 @@ async def bridge(command, config, port, credential, auth):
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            if observer:
+                observer.cancel()
+                await asyncio.gather(observer, return_exceptions=True)
+                await events.close()
             # Cancellation / a lost control connection must not look like an intentional hand-back.
             await native.close(code=1012)
             await remote.close(code=1012)
@@ -146,6 +162,7 @@ async def connection(config, port, credential, auth):
     async with connect(url, additional_headers={"Authorization": f"Bearer {credential}"},
                        max_size=4096, open_timeout=15, close_timeout=5, proxy=None) as control:
         logger.info("Computer connected to Panel")
+        await control.send(json.dumps({"type": "hello", "capabilities": ["screen", "chat"]}))
         async def open_channel(command):
             try:
                 await bridge(command, config, port, credential, auth)

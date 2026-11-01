@@ -86,6 +86,26 @@ def dock_launch() -> Optional[tuple[str, str]]:
     return (exe, str(profile_dir())) if exe else None
 
 
+def proxy_args(proxy: Optional[str] = None) -> list[str]:
+    """One opt-in browser-only egress policy, shared by native dock and agent-browser."""
+    if proxy is None:
+        from hermes_cli.config import load_config_readonly
+        proxy = (load_config_readonly().get("browser") or {}).get("proxy", "")
+    if not proxy:
+        return []
+    import ipaddress
+    from urllib.parse import urlsplit
+    url = urlsplit(proxy)
+    address = ipaddress.ip_address(url.hostname or "")
+    if (url.scheme not in {"http", "https", "socks5"} or url.username or url.password
+            or url.path not in {"", "/"} or url.query or url.fragment
+            or not address.is_private or address.is_loopback or address.is_link_local or address.is_unspecified):
+        raise ValueError("browser.proxy requires an operator-managed private proxy without credentials")
+    return [f"--proxy-server={proxy}", "--proxy-bypass-list=localhost;127.0.0.1;[::1]", "--disable-quic",
+            "--dns-prefetch-disable", "--host-resolver-rules=MAP * ~NOTFOUND",
+            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
+
+
 def dock_argv(exe: str, user_data_dir: str, *, sandbox_bypass: Optional[bool] = None) -> list[str]:
     """Command the dock's Browser icon runs. ``--remote-debugging-port=0`` makes a human-started
     instance attachable (Chromium writes the chosen port to ``<user-data-dir>/DevToolsActivePort``);
@@ -99,7 +119,7 @@ def dock_argv(exe: str, user_data_dir: str, *, sandbox_bypass: Optional[bool] = 
     # The profile is persistent by design (logins survive handoffs); its HTTP cache is not worth a
     # gateway's disk: uncapped it grows for months toward a hosted instance's 6 GB.
     return [exe, f"--user-data-dir={user_data_dir}", "--remote-debugging-port=0", "--no-first-run",
-            "--no-default-browser-check", "--test-type", f"--disk-cache-size={DISK_CACHE_BYTES}",
+            "--no-default-browser-check", "--test-type", f"--disk-cache-size={DISK_CACHE_BYTES}", *proxy_args(),
             *(CHROMIUM_SANDBOX_BYPASS_ARGS if (_needs_chromium_sandbox_bypass() if sandbox_bypass is None
                                               else sandbox_bypass) else ())]
 

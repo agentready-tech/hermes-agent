@@ -314,3 +314,25 @@ plugin for its device test; absent optional prerequisites are reported as skips.
 * [NetworkPolicy semantics and limitations](https://kubernetes.io/docs/concepts/services-networking/network-policies/)
 * [K3s networking and policy controller](https://docs.k3s.io/networking/networking-services)
 * [Generic device plugin](https://github.com/squat/generic-device-plugin/tree/generic-device-plugin-0.2.0)
+
+## New agentsee tenants
+
+Panel provisioning uses this renderer with `external_ssh=False` (CLI:
+`--no-external-ssh`). This removes all three migration-only owner SSH mounts;
+the default remains enabled for compatibility with the existing migration plan.
+The caller supplies a fresh home, credentials and a clean sandbox image. Never
+seed another customer from an existing agent's home or private container image.
+
+`browser.proxy` optionally selects a private credential-free HTTP/HTTPS/SOCKS5
+endpoint for native browser launches. It does not set process-wide proxy env
+variables or change inference routing. The operator must separately provide
+the proxy and narrowly allow its destination in network/host policies.
+This setting is opt-in for new tenants; shipping the fork does not update or
+reconfigure an existing agent.
+
+Bot Desktop keeps Xfce preferences under the persistent PN home at
+`.hermes/bot-desktop/config/<profile>`. Existing preferences in runtime scratch
+are moved only when persistent preferences do not exist. Socket/PID/display
+state remains temporary. Images that install the Agentsee theme, Manrope,
+Papirus/Greybird and the agentsee wallpaper provide initial defaults; startup
+preserves an existing user's selected values and browser profile.

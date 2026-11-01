@@ -58,9 +58,20 @@ COOKIE
 # ---- look: dark theme from whatever the host ships (first match wins), Hermes wallpaper ----
 pick_theme() { local d t; for t in "$@"; do for d in /usr/share/themes "$HOME/.themes"; do [[ -d "$d/$t" ]] && { echo "$t"; return; }; done; done; echo "$1"; }
 pick_icons() { local d t; for t in "$@"; do for d in /usr/share/icons "$HOME/.icons"; do [[ -d "$d/$t" ]] && { echo "$t"; return; }; done; done; echo "$1"; }
-GTK_THEME_NAME=$(pick_theme Adwaita-dark Breeze-Dark Greybird-dark Arc-Dark Adwaita)
+GTK_THEME_NAME=$(pick_theme Agentsee Adwaita-dark Breeze-Dark Greybird-dark Arc-Dark Adwaita)
 WM_THEME_NAME=$(pick_theme Default-hdpi Default)   # xfwm4 window themes ship with xfwm4 itself
 ICON_THEME_NAME=$(pick_icons Papirus-Dark breeze-dark Adwaita hicolor)
+UI_FONT="DejaVu Sans 10"
+TITLE_FONT="DejaVu Sans Bold 9"
+MONO_FONT="DejaVu Sans Mono 10"
+if [[ "$GTK_THEME_NAME" == Agentsee ]]; then
+  WM_THEME_NAME=$(pick_theme Greybird Default-hdpi Default)
+  ICON_THEME_NAME=$(pick_icons Papirus Adwaita hicolor)
+  UI_FONT="Manrope 10"
+  TITLE_FONT="Manrope Bold 10"
+  MONO_FONT="JetBrains Mono 10"
+  [[ ! -f /usr/share/backgrounds/agentsee/desktop.svg ]] || HERMES_BD_WALLPAPER=/usr/share/backgrounds/agentsee/desktop.svg
+fi
 : "${HERMES_BD_WALLPAPER:="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/wallpaper.png"}"
 
 # ---- pre-seed xfconf BEFORE xfconfd starts (it caches; edits after start are overwritten) ----
@@ -73,11 +84,11 @@ X="$XDG_CONFIG_HOME/xfce4/xfconf/xfce-perchannel-xml"
     <property name="workspace_count" type="int" value="1"/>
     <property name="focus_new" type="bool" value="true"/>
     <property name="theme" type="string" value="HERMES_BD_WM_THEME"/>
-    <property name="title_font" type="string" value="DejaVu Sans Bold 9"/>
+    <property name="title_font" type="string" value="HERMES_BD_TITLE_FONT"/>
   </property>
 </channel>
 EOF
-sed -i "s|HERMES_BD_WM_THEME|$WM_THEME_NAME|" "$X/xfwm4.xml"
+sed -i "s|HERMES_BD_WM_THEME|$WM_THEME_NAME|; s|HERMES_BD_TITLE_FONT|$TITLE_FONT|" "$X/xfwm4.xml"
 [[ -e "$X/xfce4-screensaver.xml" ]] || cat > "$X/xfce4-screensaver.xml" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <channel name="xfce4-screensaver" version="1.0">
@@ -94,8 +105,8 @@ EOF
     <property name="IconThemeName" type="string" value="HERMES_BD_ICON_THEME"/>
   </property>
   <property name="Gtk" type="empty">
-    <property name="FontName" type="string" value="DejaVu Sans 10"/>
-    <property name="MonospaceFontName" type="string" value="DejaVu Sans Mono 10"/>
+    <property name="FontName" type="string" value="HERMES_BD_UI_FONT"/>
+    <property name="MonospaceFontName" type="string" value="HERMES_BD_MONO_FONT"/>
   </property>
   <property name="Xft" type="empty">
     <property name="DPI" type="int" value="96"/>
@@ -104,7 +115,7 @@ EOF
   </property>
 </channel>
 EOF
-sed -i "s|HERMES_BD_GTK_THEME|$GTK_THEME_NAME|; s|HERMES_BD_ICON_THEME|$ICON_THEME_NAME|" "$X/xsettings.xml"
+sed -i "s|HERMES_BD_GTK_THEME|$GTK_THEME_NAME|; s|HERMES_BD_ICON_THEME|$ICON_THEME_NAME|; s|HERMES_BD_UI_FONT|$UI_FONT|; s|HERMES_BD_MONO_FONT|$MONO_FONT|" "$X/xsettings.xml"
 [[ -e "$X/xfce4-desktop.xml" ]] || cat > "$X/xfce4-desktop.xml" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <channel name="xfce4-desktop" version="1.0">

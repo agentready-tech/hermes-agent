@@ -32,7 +32,7 @@ def workload(name, container, namespace):
         }}})
 
 
-def render(*, client, worker, root, home, hermes_image, sandbox_image, panel_ip, vpn=False):
+def render(*, client, worker, root, home, hermes_image, sandbox_image, panel_ip, vpn=False, external_ssh=True):
     if not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]{0,38}[a-z0-9])?", client):
         raise ValueError("client must be a DNS label, at most 40 characters")
     for value in (root, home):
@@ -47,7 +47,7 @@ def render(*, client, worker, root, home, hermes_image, sandbox_image, panel_ip,
     namespace = "agentsee-" + client
     base = "home/sandboxes/docker/default/"
     ssh = [mount("external/ssh/" + p, "/root/.ssh/" + p, True)
-           for p in ("config", "known_hosts_gitlab", "slotegrator_gitlab_ed25519")]
+           for p in ("config", "known_hosts_gitlab", "slotegrator_gitlab_ed25519")] if external_ssh else []
     environment = {"HOME": "/root", "HERMES_HOME": home, "HERMES_WRITE_SAFE_ROOT": home,
                    # no-tmp: ok — runtime path INSIDE the Pod's explicit scratch volume.
                    "HERMES_ALLOW_ROOT_GATEWAY": "1", "XDG_RUNTIME_DIR": "/tmp/hermes-runtime"}
@@ -161,6 +161,8 @@ def main():
     for key in ("client", "worker", "root", "home", "hermes-image", "sandbox-image", "panel-ip"):
         parser.add_argument("--" + key, required=True)
     parser.add_argument("--vpn", action="store_true", help="NetBird + device-plugin TUN allocation (optional)")
+    parser.add_argument("--no-external-ssh", dest="external_ssh", action="store_false",
+                        help="New empty tenant: do not inherit migration-specific SSH files")
     print(json.dumps(render(**vars(parser.parse_args())), indent=2))
 
 

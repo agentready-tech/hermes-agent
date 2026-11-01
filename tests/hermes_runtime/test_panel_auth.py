@@ -80,6 +80,16 @@ def test_invalid_password_does_not_fall_back_to_legacy_token(dashboard):
     assert state["tickets"] == 0
 
 
+def test_chat_observer_uses_the_native_home_channel_and_a_separate_ticket(dashboard):
+    port, state = dashboard
+    auth = NativeScreenAuth(port, "legacy", username="owner", password="private")
+    rpc, observer = urlsplit(auth.rpc_url()), urlsplit(auth.rpc_url(True))
+    assert rpc.path == "/api/ws"
+    assert observer.path == "/api/events"
+    assert parse_qs(observer.query) == {"ticket": ["single-use-2"], "channel": ["agentready_home"]}
+    assert state["tickets"] == 2
+
+
 def test_loopback_dashboard_retains_its_native_token(dashboard):
     port, state = dashboard
     state["loopback"] = True

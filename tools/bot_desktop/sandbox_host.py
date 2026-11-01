@@ -138,6 +138,11 @@ def browser_profile_dir(env: Any) -> str:
     return f"{desktop_home(env).rstrip('/')}/.hermes/bot-desktop/browser-profile"
 
 
+def desktop_config_dir(env: Any, profile: str) -> str:
+    """Xfce preferences belong to the mounted desktop home; sockets and PIDs stay in scratch."""
+    return f"{desktop_home(env).rstrip('/')}/.hermes/bot-desktop/config/{profile}"
+
+
 _BROWSER_PORT_PROBE = """
 import os, socket, sys
 from pathlib import Path
@@ -282,8 +287,12 @@ def start(env: Any, profile: str, *, geometry: str, wait_seconds: float = 20.0,
     user = _user_for(env)
     launcher = (Path(__file__).with_name("launcher.sh").read_bytes())
     wallpaper = Path(__file__).with_name("wallpaper.png").read_bytes()
+    config_dir = desktop_config_dir(env, profile)
     seed = (
-        f"set -e; rm -rf {shlex.quote(rdir)}; mkdir -p {shlex.quote(rdir)}; cd {shlex.quote(rdir)};"
+        f"set -e; mkdir -p {shlex.quote(str(Path(config_dir).parent))};"
+        f" if [ ! -d {shlex.quote(config_dir)} ] && [ -d {shlex.quote(rdir + '/xdg')} ]; then"
+        f" cp -a {shlex.quote(rdir + '/xdg')} {shlex.quote(config_dir)}; fi;"
+        f" mkdir -p {shlex.quote(config_dir)}; rm -rf {shlex.quote(rdir)}; mkdir -p {shlex.quote(rdir)}; cd {shlex.quote(rdir)};"
         f" echo {shlex.quote(base64.b64encode(launcher).decode())} | base64 -d > launcher.sh;"
         f" echo {shlex.quote(base64.b64encode(wallpaper).decode())} | base64 -d > wallpaper.png;"
         " chmod 0700 . launcher.sh"
@@ -295,7 +304,7 @@ def start(env: Any, profile: str, *, geometry: str, wait_seconds: float = 20.0,
     child_env = {
         "HERMES_BD_PROFILE": profile, "HERMES_BD_DISPLAY_NUM": str(num), "HERMES_BD_SOCKET": f"{rdir}/rfb.sock",
         "HERMES_BD_XAUTH": f"{rdir}/Xauthority", "HERMES_BD_ENV_FILE": f"{rdir}/env",
-        "HERMES_BD_CONFIG_HOME": f"{rdir}/xdg", "HERMES_BD_GEOMETRY": geometry, "HERMES_BD_WALLPAPER": f"{rdir}/wallpaper.png",
+        "HERMES_BD_CONFIG_HOME": config_dir, "HERMES_BD_GEOMETRY": geometry, "HERMES_BD_WALLPAPER": f"{rdir}/wallpaper.png",
     }
     if browser_exec and browser_exec_line:
         child_env["HERMES_BD_BROWSER_EXEC"] = browser_exec
