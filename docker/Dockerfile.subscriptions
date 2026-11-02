@@ -9,6 +9,6 @@ RUN mkdir -p /opt/hermes/plugins/model-providers/claude-subscription-directsdk-e
        -C /opt/hermes/plugins/model-providers/claude-subscription-directsdk-experimental \
        hermes-official-plugins-2da429264671788748f69bca7d5a2216c1885b92/claude-subscription-directsdk \
     && rm /opt/claude-provider.tar.gz \
-    && npm install --global --ignore-scripts --no-audit --no-fund @anthropic-ai/claude-code@2.1.293 \
+    && npm install --global --prefix /usr/local --ignore-scripts --no-audit --no-fund @anthropic-ai/claude-code@2.1.293 \
     && claude --version
 LABEL io.agentsee.runtime.subscriptions="v1"
