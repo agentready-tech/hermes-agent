@@ -1,0 +1,14 @@
+# Optional extension for NEW managed employees. Never retag an existing agent's image.
+ARG HERMES_IMAGE
+FROM ${HERMES_IMAGE}
+
+# Official provider plugin and CLI, pinned independently of customer credentials.
+ADD --checksum=sha256:79b8aa8594ca03b44569646cca6a7bd36b22616224d8ad7e6f28d75ad43e3659 https://codeload.github.com/NousResearch/hermes-official-plugins/tar.gz/2da429264671788748f69bca7d5a2216c1885b92 /opt/claude-provider.tar.gz
+RUN mkdir -p /opt/hermes/plugins/model-providers/claude-subscription-directsdk-experimental \
+    && tar -xzf /opt/claude-provider.tar.gz --strip-components=2 \
+       -C /opt/hermes/plugins/model-providers/claude-subscription-directsdk-experimental \
+       hermes-official-plugins-2da429264671788748f69bca7d5a2216c1885b92/claude-subscription-directsdk \
+    && rm /opt/claude-provider.tar.gz \
+    && npm install --global --ignore-scripts --no-audit --no-fund @anthropic-ai/claude-code@2.1.293 \
+    && claude --version
+LABEL io.agentsee.runtime.subscriptions="v1"

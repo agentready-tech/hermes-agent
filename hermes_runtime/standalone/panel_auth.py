@@ -18,10 +18,11 @@ class NativeScreenAuth:
         self.opener = build_opener(ProxyHandler({}), HTTPCookieProcessor(CookieJar()))
         self.lock = threading.Lock()
 
-    def request(self, path, payload=None):
+    def request(self, path, payload=None, *, method=None):
         data = json.dumps(payload).encode() if payload is not None else None
-        request = Request(self.origin + path, data=data,
-                          headers={"Content-Type": "application/json", "Origin": self.origin})
+        request = Request(self.origin + path, data=data, method=method,
+                          headers={"Content-Type": "application/json", "Origin": self.origin,
+                                   "Authorization": f"Bearer {self.legacy_token}"})
         with self.opener.open(request, timeout=10) as response:
             return json.load(response)
 

@@ -87,14 +87,20 @@ def screen_request(raw):
     return json.dumps(message)
 
 
-async def bridge(command, config, port, credential, auth):
+async def bridge(command, config, port, credential, auth, subscriptions=None):
     from urllib.parse import urlencode
     from websockets.asyncio.client import connect
     from websockets.exceptions import ConnectionClosed, WebSocketException
 
     kind, identity = command.get("kind"), command.get("id")
-    if kind not in {"rpc", "rfb", "chat"} or not isinstance(identity, str) or len(identity) > 100:
+    if kind not in {"rpc", "rfb", "chat", "subscriptions"} or not isinstance(identity, str) or len(identity) > 100:
         raise ValueError("Invalid Panel channel")
+    if kind == "subscriptions":
+        if subscriptions is None:
+            raise ValueError("Subscriptions unavailable")
+        remote_url = socket_url(config["url"], config["environment_id"], "reverse", urlencode({"id": identity}))
+        await subscriptions.bridge(remote_url, credential)
+        return
     if kind in {"rpc", "chat"}:
         target = await asyncio.to_thread(auth.rpc_url)
     else:
@@ -154,7 +160,7 @@ async def bridge(command, config, port, credential, auth):
             await remote.close(code=1012)
 
 
-async def connection(config, port, credential, auth):
+async def connection(config, port, credential, auth, subscriptions=None):
     from websockets.asyncio.client import connect
     from websockets.exceptions import WebSocketException
     tasks = set()
@@ -162,10 +168,10 @@ async def connection(config, port, credential, auth):
     async with connect(url, additional_headers={"Authorization": f"Bearer {credential}"},
                        max_size=4096, open_timeout=15, close_timeout=5, proxy=None) as control:
         logger.info("Computer connected to Panel")
-        await control.send(json.dumps({"type": "hello", "capabilities": ["screen", "chat"]}))
+        await control.send(json.dumps({"type": "hello", "capabilities": ["screen", "chat", *(["subscriptions"] if subscriptions else [])]}))
         async def open_channel(command):
             try:
-                await bridge(command, config, port, credential, auth)
+                await bridge(command, config, port, credential, auth, subscriptions)
             except (OSError, ValueError, WebSocketException, TimeoutError):
                 # Native tickets and credentials may occur in exception URLs; never log them.
                 logger.warning("Panel screen channel ended; reconnect from the Panel if needed")
@@ -202,10 +208,12 @@ async def worker(home):
     auth = NativeScreenAuth(config["port"], dashboard_token,
         username=get_secret("HERMES_DASHBOARD_BASIC_AUTH_USERNAME"),
         password=get_secret("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"))
+    from hermes_runtime.standalone.panel_subscriptions import Subscriptions
+    subscriptions = Subscriptions(home, auth)
     delay = 1
     while True:
         try:
-            await connection(panel, config["port"], credential, auth)
+            await connection(panel, config["port"], credential, auth, subscriptions)
             delay = 1
         except (OSError, ValueError):
             logger.warning("Panel unavailable; the agent and its desktop continue locally")
