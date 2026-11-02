@@ -27,10 +27,14 @@ def dashboard():
             self.wfile.write(json.dumps(value).encode())
 
         def authenticated(self):
-            return state["session"] and self.headers.get("Cookie") == "session=verified"
+            # Native gated middleware rejects an invalid bearer before cookies.
+            return (not self.headers.get("Authorization") and state["session"]
+                    and self.headers.get("Cookie") == "session=verified")
 
         def do_GET(self):
             if state["loopback"]:
+                if self.path == "/api/providers/oauth":
+                    return self.reply(200 if self.headers.get("Authorization") == "Bearer local-token" else 401, {"providers": []})
                 return self.reply(200, {"provider": "loopback"})
             return self.reply(200, {"provider": "basic"}) if self.authenticated() else self.reply(401, {})
 
@@ -96,3 +100,11 @@ def test_loopback_dashboard_retains_its_native_token(dashboard):
     auth = NativeScreenAuth(port, "local-token", username="owner", password="private")
     assert parse_qs(urlsplit(auth.rpc_url()).query) == {"token": ["local-token"]}
     assert state["logins"] == state["tickets"] == 0
+    assert auth.request("/api/providers/oauth") == {"providers": []}
+
+
+def test_loopback_http_without_password_uses_its_native_token(dashboard):
+    port, state = dashboard
+    state["loopback"] = True
+    auth = NativeScreenAuth(port, "local-token")
+    assert auth.request("/api/providers/oauth") == {"providers": []}

@@ -15,14 +15,18 @@ class NativeScreenAuth:
         self.origin = f"http://127.0.0.1:{int(port)}"
         self.websocket = f"ws://127.0.0.1:{int(port)}/api/ws"
         self.legacy_token, self.username, self.password = legacy_token, username, password
+        self.legacy_http = not (username and password)
         self.opener = build_opener(ProxyHandler({}), HTTPCookieProcessor(CookieJar()))
         self.lock = threading.Lock()
 
     def request(self, path, payload=None, *, method=None):
         data = json.dumps(payload).encode() if payload is not None else None
-        request = Request(self.origin + path, data=data, method=method,
-                          headers={"Content-Type": "application/json", "Origin": self.origin,
-                                   "Authorization": f"Bearer {self.legacy_token}"})
+        headers = {"Content-Type": "application/json", "Origin": self.origin}
+        # A gated dashboard prioritizes a presented bearer over its valid cookie.
+        # Its process token belongs only to the older loopback authentication mode.
+        if self.legacy_http:
+            headers["Authorization"] = f"Bearer {self.legacy_token}"
+        request = Request(self.origin + path, data=data, method=method, headers=headers)
         with self.opener.open(request, timeout=10) as response:
             return json.load(response)
 
@@ -44,6 +48,7 @@ class NativeScreenAuth:
                 })
             else:
                 if identity.get("provider") == "loopback":
+                    self.legacy_http = True
                     return target + "?" + urlencode({"token": self.legacy_token, **channel})
             ticket = self.request("/api/auth/ws-ticket", {})["ticket"]
             return target + "?" + urlencode({"ticket": ticket, **channel})
