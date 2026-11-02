@@ -22,11 +22,11 @@ _CRITERIA = {
 }
 
 
-def _submit(client: httpx.Client, request: dict[str, Any], key: str) -> Any:
+def _submit(client: httpx.Client, request: dict[str, Any], key: str, path="/api/alpha/decisions") -> Any:
     messages = request["messages"]
     started = time.monotonic()
     response = client.post(
-        "/api/alpha/decisions", headers={"Authorization": "Bearer " + key},
+        path, headers={"Authorization": "Bearer " + key},
         json={"model": request["model"], "state": json.loads(messages[1]["content"]), "questions": {
             "verdict": {"type": "choice", "instructions": messages[0]["content"], "criteria": _CRITERIA},
         }},
@@ -71,7 +71,12 @@ def judge_continuation(payload: dict[str, Any], instructions: str, timeout: floa
         _validate_llm_response,
     )
 
-    key = get_secret_str("OPENROUTER_API_KEY").strip()
+    from hermes_cli.config import load_config
+    from hermes_runtime.standalone.inference_route import auxiliary_route
+    config = ((load_config().get("agent") or {}).get("continuation_guard") or {})
+    route = auxiliary_route(config)
+    base_url, key = route or (_BASE_URL, get_secret_str("OPENROUTER_API_KEY").strip())
+    path = "/decisions" if route else "/api/alpha/decisions"
     if not key:
         raise ValueError("OPENROUTER_API_KEY is not configured for the owning profile")
     if not model:
@@ -82,12 +87,12 @@ def judge_continuation(payload: dict[str, Any], instructions: str, timeout: floa
     ]}
     with (
         _relay_aux_call_scope((), {"task": "goal_judge"}),
-        httpx.Client(base_url=_BASE_URL, timeout=min(timeout, _MAX_TIMEOUT_SECONDS), follow_redirects=False) as client,
+        httpx.Client(base_url=base_url, timeout=min(timeout, _MAX_TIMEOUT_SECONDS), follow_redirects=False) as client,
     ):
         _set_relay_auxiliary_route("openrouter", model, "decisions")
         response = _relay_sync_completion(
             client, request, provider="openrouter", api_mode="decisions",
-            create=lambda prepared: _submit(client, prepared, key),
+            create=lambda prepared: _submit(client, prepared, key, path),
         )
-        response = _validate_llm_response(response, "goal_judge", provider="openrouter", base_url=_BASE_URL)
+        response = _validate_llm_response(response, "goal_judge", provider="openrouter", base_url=base_url)
         return json.loads(response.choices[0].message.content)["verdict"]

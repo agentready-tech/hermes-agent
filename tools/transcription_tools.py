@@ -117,6 +117,9 @@ def _resolve_stt_language(
 def _openai_audio_unavailable_reason() -> Optional[str]:
     """None when OpenAI audio has usable credentials (config, env, or managed gateway); else the reason."""
     try:
+        from hermes_runtime.standalone.inference_route import auxiliary_route
+        if auxiliary_route(_load_stt_config().get("openai") or {}):
+            return None
         # Resolve directly instead of via the boolean probe: the probe flattens
         # _resolve_openai_audio_client_config's selection-specific ValueError into False, so a managed
         # openai-audio gateway outage would be logged as a generic "no API key" hint (#93045).

@@ -180,6 +180,8 @@ def run(home, *, host=None, port=None):
     }
     if config.get("gmail", {}).get("enabled"):
         specs["gmail"] = _argv(home, sys.executable, "gmail-worker")
+    if config.get("workspace", {}).get("url"):
+        specs["workspace"] = _argv(home, sys.executable, "workspace-worker")
     if config.get("panel", {}).get("url"):
         specs["computer"] = _argv(home, sys.executable, "panel-worker")
     elif config.get("computer", {}).get("enabled"):

@@ -162,3 +162,23 @@ def test_decisions_preserves_auxiliary_observation_without_main_request_events(r
     assert [event for event, _ in fired] == ["pre_auxiliary_call", "post_auxiliary_call"]
     assert all(data["aux_task"] == "goal_judge" and data["api_mode"] == "decisions" for _, data in fired)
     assert fired[1][1]["usage"]["prompt_tokens"] == 300
+
+
+def test_managed_route_does_not_require_or_send_shared_openrouter_key(runtime, monkeypatch):
+    atomic_config_write(get_hermes_home() / "config.yaml", {"agent": {"continuation_guard": {
+        "enabled": True, "judge": "openrouter_decisions", "model": "fixture/decision",
+        "base_url": "https://panel.invalid/app/api/agents/fixture/inference/v1",
+        "key_env": "AGENTSEE_INFERENCE_KEY",
+    }}})
+    calls = install_response(monkeypatch, lambda request: httpx.Response(200, json={
+        "answers": {"verdict": {"type": "choice", "choice": "continue"}},
+    }))
+    token = set_secret_scope({"AGENTSEE_INFERENCE_KEY": "fixture-employee-key"})
+    try:
+        nudge = continuation_guard.build_continuation_nudge(runtime[0],
+            [{"role": "user", "content": "Check the result"}], "I will check.")
+    finally:
+        reset_secret_scope(token)
+    assert nudge
+    assert str(calls[0].url) == "https://panel.invalid/app/api/agents/fixture/inference/v1/decisions"
+    assert calls[0].headers["Authorization"] == "Bearer fixture-employee-key"

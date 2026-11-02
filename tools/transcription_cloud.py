@@ -134,7 +134,13 @@ def _transcribe_openai(
     from tools.transcription_tools import _HAS_OPENAI, _resolve_stt_language
     if api_key is None:
         try:
-            api_key, fallback_base = _resolve_openai_audio_client_config()
+            from tools.transcription_tools import _load_stt_config
+            from hermes_runtime.standalone.inference_route import auxiliary_route
+            route = auxiliary_route(_load_stt_config().get("openai") or {})
+            if route:
+                fallback_base, api_key = route
+            else:
+                api_key, fallback_base = _resolve_openai_audio_client_config()
         except ValueError as exc:
             return _error_result(str(exc))
         base_url = base_url or fallback_base
