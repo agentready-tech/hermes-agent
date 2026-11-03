@@ -26,6 +26,16 @@ rollback through user acceptance. Redacted evidence is stored on both servers at
 proofs alongside it. No synthetic Telegram messages, cron tasks or model requests
 were sent. A real user task and the browser viewer remain user acceptance checks.
 
+## Managed mailbox replies
+
+Workspace Gmail/IMAP events use the main conversation's committed messaging route.
+Native gateway admission owns both execution and the final transport, so the same
+answer is retained in shared history (including Panel) and delivered to the bound
+messaging channel. An active Panel turn cannot capture the event's reply route.
+Without a usable messaging route, mail keeps its local main-inbox fallback.
+Stable admission identities and legacy inbox receipts prevent cursor retries from
+executing a message twice; previously processed mail is not replayed on upgrade.
+
 ## Placement and installation gates
 
 | Host | Private address | Role |

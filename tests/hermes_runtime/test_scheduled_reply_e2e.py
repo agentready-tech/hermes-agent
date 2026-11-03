@@ -13,7 +13,8 @@ from tests.waiting import async_wait_until
 
 
 @pytest.mark.asyncio
-async def test_docker_terminal_timer_replies_through_telegram_without_desktop_or_send_cli(tmp_path, monkeypatch):
+@pytest.mark.parametrize("producer", ["timer", "mail", "mail-busy"])
+async def test_main_event_replies_through_telegram_and_shared_history(tmp_path, monkeypatch, producer):
     from gateway.config import Platform, PlatformConfig
     from gateway.platforms.base import BasePlatformAdapter, SendResult
     from gateway.platforms.event import MessageEvent
@@ -60,6 +61,7 @@ async def test_docker_terminal_timer_replies_through_telegram_without_desktop_or
     monkeypatch.setenv('OPENAI_API_KEY', 'loopback-only')
     monkeypatch.setenv('OPENAI_BASE_URL', url)
     monkeypatch.setenv('TELEGRAM_ALLOWED_USERS', 'fixture-user')
+    monkeypatch.setattr('hermes_state.DEFAULT_DB_PATH', home / 'state.db')
     monkeypatch.setattr(hermes, '_home', None)
     monkeypatch.setattr(tools.async_delegation, 'ORPHAN_SWEEP_INTERVAL_S', 0.05)
     monkeypatch.setattr(agent.prompt_builder, '_probe_remote_backend', lambda *_: 'Linux Docker fixture')
@@ -87,21 +89,36 @@ async def test_docker_terminal_timer_replies_through_telegram_without_desktop_or
         with sqlite3.connect(home / 'state.db') as db:
             before = db.execute('SELECT id FROM sessions ORDER BY id').fetchall()
         assert before == [(HOME_SESSION_ID,)]
-        import tools.cronjob_tools
-        from tools.registry import registry
-        from cron import scheduler
-        from cron.jobs import get_job
-        tokens = set_session_vars(platform='telegram', chat_id='schedule-chat', chat_type='dm',
-                                  user_id='fixture-user', session_key=HOME_SESSION_KEY, session_id=HOME_SESSION_ID)
-        try:
-            result = json.loads(registry.dispatch('cronjob_manage', {'action':'create', 'schedule':'every 1h',
-                'prompt':'SCHEDULED_TELEGRAM_ROUTE_PROOF: continue this conversation and return the result.'},
-                session_id=HOME_SESSION_ID))
-        finally:
-            clear_session_vars(tokens)
-        assert result['success'], result
-        monkeypatch.setattr(scheduler, '_launch_external_cron_worker', lambda *_: None)
-        assert await asyncio.to_thread(scheduler.run_one_job, get_job(result['job_id']))
+        if producer == 'timer':
+            import tools.cronjob_tools
+            from tools.registry import registry
+            from cron import scheduler
+            from cron.jobs import get_job
+            tokens = set_session_vars(platform='telegram', chat_id='schedule-chat', chat_type='dm',
+                                      user_id='fixture-user', session_key=HOME_SESSION_KEY, session_id=HOME_SESSION_ID)
+            try:
+                result = json.loads(registry.dispatch('cronjob_manage', {'action':'create', 'schedule':'every 1h',
+                    'prompt':'SCHEDULED_TELEGRAM_ROUTE_PROOF: continue this conversation and return the result.'},
+                    session_id=HOME_SESSION_ID))
+            finally:
+                clear_session_vars(tokens)
+            assert result['success'], result
+            monkeypatch.setattr(scheduler, '_launch_external_cron_worker', lambda *_: None)
+            assert await asyncio.to_thread(scheduler.run_one_job, get_job(result['job_id']))
+        else:
+            from hermes_runtime.adapters.turns import ActiveHomeTurn
+            from hermes_runtime.standalone.workspace import admit_batches
+            response = {'batches': [{'connectionId': 'mail-fixture', 'cursor': {'uid': 1}, 'events': [{
+                'id': 'mail-1', 'source': 'gmail:fixture', 'prompt': 'MAIL_TELEGRAM_ROUTE_PROOF', 'metadata': {}}]}]}
+            turn = ActiveHomeTurn() if producer == 'mail-busy' else None
+            try:
+                admit_batches(home, response, {})
+                admit_batches(home, response, {})
+                if turn:
+                    assert turn.take() == [], 'A Panel-owned turn cannot capture the mail reply'
+            finally:
+                if turn:
+                    turn.finish(error='Synthetic foreground turn finished')
         runner._running = True
         watcher = asyncio.create_task(runner._async_delegation_watcher(interval=0.05))
         try:
@@ -113,11 +130,13 @@ async def test_docker_terminal_timer_replies_through_telegram_without_desktop_or
                 print('ADMISSIONS', db.execute('SELECT principal_id,status,outcome FROM session_admissions').fetchall())
             print('WATCHER', watcher.done(), repr(watcher.exception()) if watcher.done() else 'running')
             raise
-        assert 'SCHEDULED_TELEGRAM_ROUTE_PROOF' in json.dumps(provider.calls)
+        assert ('SCHEDULED' if producer == 'timer' else 'MAIL') + '_TELEGRAM_ROUTE_PROOF' in json.dumps(provider.calls)
         assert adapter.deliveries[-1]['chat_id'] == 'schedule-chat'
+        assert len([call for call in provider.calls if 'messages' in call]) == 2, 'A replay must not start another inference'
         with sqlite3.connect(home / 'state.db') as db:
             assert db.execute('SELECT id FROM sessions ORDER BY id').fetchall() == before
-            assert db.execute("SELECT count(*) FROM agentready_inbox WHERE event_key LIKE '%cron%'").fetchone()[0] == 0
+            assert db.execute("SELECT count(*) FROM messages WHERE role='assistant' AND content=?", (expected,)).fetchone()[0] == 2
+            assert db.execute("SELECT count(*) FROM agentready_inbox").fetchone()[0] == 0
             assert db.execute("SELECT count(*) FROM session_admissions WHERE principal_id LIKE 'automation:%'").fetchone()[0] >= 1
     finally:
         runner._running = False
