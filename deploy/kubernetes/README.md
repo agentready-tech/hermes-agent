@@ -112,6 +112,20 @@ replacement. Public-port and cross-tenant traffic tests are still required.
 
 ## Images, data and inactive manifests
 
+[`runtime-images.json`](runtime-images.json) records the default runtime version,
+immutable image digest, source commit, base image and build recipe for each
+recorded release. It describes the default for new agents; changing the default
+does not roll existing Pods. Existing agents require a separate scoped upgrade.
+
+`distribution.mode: preloaded` means the image was imported into the worker's
+containerd store, not published to a registry. A `docker.io/` image name alone
+does not imply registry availability. Git stores version metadata and recipes;
+image layers belong in a container registry or the recorded local image stores.
+For a recorded patch recipe, export each `sourceFiles` entry from its exact
+`sourceRevision` to the stated build-context path. Require the cached base's
+Docker image ID to match `base.dockerImageId` before building; do not use
+uncommitted worktree files or an unchecked mutable base tag.
+
 Build the fork normally, then optionally add the pinned API client:
 
 ```sh
