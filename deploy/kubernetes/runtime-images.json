@@ -3,8 +3,8 @@
   "defaultRuntimeVersion": "af0266796d58-mail-replies",
   "versions": {
     "af0266796d58-mail-replies": {
-      "image": "docker.io/agentsee/hermes-kubernetes@sha256:cf6092d6dbf6fe66b5a8e67aa35b5b03ff03c7723ffec05f8e04f8e785a610b0",
-      "tag": "agentsee/hermes-kubernetes:af0266796d58-mail-replies",
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes:af0266796d58-mail-replies",
       "platform": "linux/amd64",
       "sourceRevision": "af0266796d581b5c5ddf562ff39f21f0dd4689e7",
       "recipe": "releases/mail-replies-af0266796d58.Dockerfile",
@@ -17,11 +17,20 @@
       "base": {
         "image": "docker.io/agentsee/hermes-kubernetes@sha256:184433ffb8deb3192d3a18ca69724b0ee92e09274dfbbd27b99270fec81e5850",
         "localTag": "agentsee/hermes-kubernetes:eda469d9f21e-subscriptions",
-        "dockerImageId": "sha256:184433ffb8deb3192d3a18ca69724b0ee92e09274dfbbd27b99270fec81e5850"
+        "dockerImageId": "sha256:184433ffb8deb3192d3a18ca69724b0ee92e09274dfbbd27b99270fec81e5850",
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:938646755c3b1f41140b3a9ccd09906099ebcc9438cb55f82d3dbac165cab00a",
+        "configDigest": "sha256:d0eb079fd23084f70385a438d0172d523f2001686c2be8ddcce3014249d7cb35"
       },
       "distribution": {
-        "mode": "preloaded",
-        "registryPublished": false
+        "mode": "registry",
+        "registryPublished": true,
+        "visibility": "private",
+        "publishedManifestDigest": "sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
+        "sourceIndexDigest": "sha256:cf6092d6dbf6fe66b5a8e67aa35b5b03ff03c7723ffec05f8e04f8e785a610b0",
+        "pullVerified": true,
+        "preloadedOnCurrentWorker": true,
+        "workerImagePullPolicy": "Never",
+        "publisherRevision": "6ad41db0f262bfdf1220c5599d98781fbb7c3645"
       },
       "validation": {
         "isolatedRuntimeSmoke": true,
@@ -30,7 +39,9 @@
         "regressionTestsPassed": 14,
         "sourceChecksPassed": 12
       },
-      "description": "Managed Gmail/IMAP events retain the main messaging reply route and shared history."
+      "description": "Managed Gmail/IMAP events retain the main messaging reply route and shared history.",
+      "preloadedSourceImage": "docker.io/agentsee/hermes-kubernetes@sha256:cf6092d6dbf6fe66b5a8e67aa35b5b03ff03c7723ffec05f8e04f8e785a610b0",
+      "configDigest": "sha256:eda925b08477eecdcf56d032a68296189a42125ab5b8a21439ddfbcd86b4a79a"
     }
   }
 }

@@ -117,14 +117,27 @@ immutable image digest, source commit, base image and build recipe for each
 recorded release. It describes the default for new agents; changing the default
 does not roll existing Pods. Existing agents require a separate scoped upgrade.
 
-`distribution.mode: preloaded` means the image was imported into the worker's
-containerd store, not published to a registry. A `docker.io/` image name alone
-does not imply registry availability. Git stores version metadata and recipes;
-image layers belong in a container registry or the recorded local image stores.
-For a recorded patch recipe, export each `sourceFiles` entry from its exact
-`sourceRevision` to the stated build-context path. Require the cached base's
-Docker image ID to match `base.dockerImageId` before building; do not use
-uncommitted worktree files or an unchecked mutable base tag.
+The default release is published to private GHCR packages. Its immutable
+`image` and version `tag` identify the verified Linux/amd64 manifest;
+`preloadedSourceImage` and `distribution.sourceIndexDigest` preserve provenance
+from the original worker import. The published manifest can differ from that
+multi-platform index without changing config or layer bytes. Full registry pulls
+were verified before the release was used. Registry access remains private.
+Workers still preload and pin images with `imagePullPolicy: Never`; publication
+alone does not configure pull credentials on new nodes or update existing Pods.
+
+`distribution.mode: preloaded` in older records means the image was imported into
+the worker's containerd store without registry publication. A `docker.io/` name
+alone does not imply availability. Git stores metadata and recipes; image layers
+live in the registry or recorded local image stores.
+
+The recorded patch `recipe` is the historical build using the cached base.
+Export each `sourceFiles` entry from its exact `sourceRevision` to the stated
+build-context path and check the cached base against `base.dockerImageId` before
+using that recipe. `base.registryImage` records the equivalent published
+Linux/amd64 base for a future digest-pinned registry build. Do not substitute
+uncommitted worktree files or an unchecked mutable tag. Publication promoted
+existing bytes; no new build was performed.
 
 Build the fork normally, then optionally add the pinned API client:
 
