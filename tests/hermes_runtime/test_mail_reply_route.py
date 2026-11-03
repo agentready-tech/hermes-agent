@@ -6,7 +6,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests.hermes_runtime.test_scheduled_reply_route import telegram_home
+from tests.hermes_runtime.test_scheduled_reply_route import telegram_home as scheduled_telegram_home
+
+
+@pytest.fixture
+def telegram_home(monkeypatch):
+    yield from scheduled_telegram_home.__wrapped__(monkeypatch)
 
 
 @pytest.mark.parametrize("source", ["gmail:fixture", "email:fixture"])
