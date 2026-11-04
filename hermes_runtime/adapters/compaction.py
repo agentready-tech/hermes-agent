@@ -3,12 +3,45 @@
 import logging
 import threading
 import time
-from hermes_runtime.checkpoints import persist_bounded_checkpoint
+from hermes_runtime.checkpoints import CHECKPOINT_SUMMARY_TARGET_TOKENS, persist_bounded_checkpoint
 from hermes_runtime.adapters.checkpoint_files import FileCheckpointArchive
 from hermes_runtime.adapters.hermes import managed_home
 from hermes_runtime.adapters.state import current_home_session_id
 
 _CHECKPOINT_DEPTH = threading.local()
+
+
+def report_summary_abort(agent, error):
+    from hermes_runtime.adapters.hermes import enabled
+    from hermes_runtime.adapters.state import belongs_to_home_lineage
+
+    if enabled() and belongs_to_home_lineage(agent.session_id):
+        # The owning native recovery wrapper reports a failure only if its
+        # archive-backed recovery cannot commit. Do not ask users to reset home.
+        logging.getLogger(__name__).warning("Semantic summary unavailable; preserving history for native recovery")
+        return
+    agent._emit_warning(
+        f"⚠ Compression aborted: {error}. "
+        "No messages were dropped — conversation continues unchanged. "
+        "Run /compress to retry, or /new to start a fresh session."
+    )
+
+
+def _complete_summary(self, proceed, *args, **kwargs):
+    from agent.context_compressor import _TRUNCATED_SUMMARY_MARKER
+    from agent.conversation_compression import _raise_if_stale_attempt
+
+    kwargs = {**kwargs, "output_budget": CHECKPOINT_SUMMARY_TARGET_TOKENS}
+    result = proceed(*args, **kwargs)
+    if result is not None or _TRUNCATED_SUMMARY_MARKER not in str(getattr(self, "_last_summary_error", "")):
+        return result
+    _raise_if_stale_attempt(self)
+    if self._compression_cancelled():
+        return result
+    # A fresh semantic summary of the SAME source, never continuation of partial
+    # model output. This retry is bounded and stays inside the owning commit fence.
+    logging.getLogger(__name__).info("Retrying incomplete summary with a smaller total response budget")
+    return proceed(*args, **{**kwargs, "output_budget": CHECKPOINT_SUMMARY_TARGET_TOKENS // 2, "bypass_cooldown": True})
 
 
 def estimate_checkpoint_tokens(text):
@@ -34,12 +67,12 @@ def generate_summary(self, proceed, *args, **kwargs):
     if id(self) in active:
         # Hermes retries a failed auxiliary route via self._generate_summary.
         # Archive and bound only once, after that retry returns to its owner.
-        return proceed(*args, **kwargs)
+        return proceed(*args, **{**kwargs, "output_budget": CHECKPOINT_SUMMARY_TARGET_TOKENS})
     active.add(id(self))
     previous = getattr(self, "_previous_summary", None)
     previous_provenance = getattr(self, "_summary_has_user_turn", None)
     try:
-        result = proceed(*args, **kwargs)
+        result = _complete_summary(self, proceed, *args, **kwargs)
         body = getattr(self, "_previous_summary", None)
         if not result or not body:
             return result

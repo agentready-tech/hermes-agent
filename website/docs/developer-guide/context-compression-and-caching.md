@@ -640,7 +640,22 @@ template:
 Summary budget scales with the amount of content being compressed:
 - Formula: `content_tokens × 0.20` (the `_SUMMARY_RATIO` constant)
 - Minimum: 2,000 tokens
-- Maximum: `min(context_length × 0.05, 12,000)` tokens
+- Maximum: `min(context_length × 0.05, 10,000)` tokens
+
+The managed AgentReady runtime applies one smaller **total** output target to
+the narrative and detailed session log together: 3,200 tokens, derived from the
+existing 16,000-character checkpoint bound with space for anchors and the archive
+footer. The detailed log receives a portion of this target rather than adding
+another 4,000 tokens. This is prompt guidance; it does not impose a smaller wire
+token cap or change the main model, provider, context window, or admin settings.
+
+A length-stopped managed summary is discarded and retried once from the same
+source with a 1,600-token total target. Partial output is never persisted or
+continued as a checkpoint. If semantic summarization still fails, the existing
+fenced archive-backed recovery preserves the full transcript and continues in
+the same home session. That recovery owns the final user-facing outcome: an
+intermediate summary failure does not ask the user to `/compress` or `/new`.
+Archive/commit failures remain visible and preserve the original history.
 
 ### Phase 4: Assemble Compressed Messages
 

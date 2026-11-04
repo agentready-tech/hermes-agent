@@ -20,7 +20,7 @@ def recovery_home(monkeypatch):
         yield Path(directory)
 
 
-@pytest.mark.parametrize("failure", ["summary", "recompression", "timeout", "large_tail", "manual", "archive_error", "cancel"])
+@pytest.mark.parametrize("failure", ["summary", "truncation", "recompression", "timeout", "large_tail", "manual", "archive_error", "cancel"])
 def test_failed_compression_recovers_and_continues_with_all_history(recovery_home, monkeypatch, failure):
     from hermes_runtime.adapters import hermes
     from hermes_runtime.adapters.state import ensure_home_session
@@ -51,6 +51,10 @@ def test_failed_compression_recovers_and_continues_with_all_history(recovery_hom
 
     def failed_summary(**kwargs):
         from openai.types.chat import ChatCompletion
+        if failure == "truncation":
+            return ChatCompletion(id="capped", object="chat.completion", created=1, model="gpt-4.1", choices=[{
+                "index": 0, "message": {"role": "assistant", "content": "PARTIAL_UNSAFE_CHECKPOINT"},
+                "finish_reason": "length"}])
         if failure == "cancel":
             from agent.auxiliary_client import AuxiliaryExplicitCancellation
             agent._hard_interrupt_requested.set()
@@ -93,6 +97,8 @@ def test_failed_compression_recovers_and_continues_with_all_history(recovery_hom
                         session_id=HOME_SESSION_ID, skip_context_files=True, skip_memory=True,
                         enabled_toolsets=["file"])
     agent.compression_in_place = True
+    warnings = []
+    monkeypatch.setattr(agent, "_emit_warning", warnings.append)
     agent.context_compressor = ContextCompressor(
         model="gpt-4.1", provider="custom", base_url="http://127.0.0.1:9/v1", api_key="test-only",
         config_context_length=64000, protect_first_n=1, protect_last_n=2,
@@ -128,6 +134,9 @@ def test_failed_compression_recovers_and_continues_with_all_history(recovery_hom
         compacted = db.get_messages_as_conversation(HOME_SESSION_ID)
         assert len(compacted) < len(messages), "failed summary must recover instead of returning the full context"
         assert agent._last_compaction_in_place is True
+        if failure == "truncation":
+            assert not warnings, "native archive-backed recovery owns the final outcome, not a premature CLI reset warning"
+            assert "PARTIAL_UNSAFE_CHECKPOINT" not in str(compacted)
         assert before_ids <= {row["id"] for row in after}
         archives = list((home / "workspace/.agentready/checkpoints").rglob("*.md"))
         assert any("search-needle-0" in archive.read_text() and "search-needle-39" in archive.read_text()

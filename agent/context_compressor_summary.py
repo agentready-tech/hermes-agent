@@ -57,6 +57,75 @@ class SummaryDispatchMixin:
             if value:
                 call_kwargs[key] = value
 
+    @classmethod
+    def _summary_template_sections(cls, _section: dict[str, str], summary_budget: int, _session_log_section: str, output_budget: Optional[int] = None) -> str:
+        """The ``## ...`` section template shared by the fresh and iterative-update prompts."""
+        from agent.context_compressor import (
+            HISTORICAL_TASK_HEADING, _PRUNED_SKILLS_SECTION_HEADING,
+            _LEAN_SESSION_LOG_BUDGET_TOKENS, _LEAN_SESSION_LOG_SECTION_TEMPLATE,
+        )
+        total_budget = summary_budget + (_LEAN_SESSION_LOG_BUDGET_TOKENS if _session_log_section else 0)
+        if output_budget is not None:
+            total_budget = min(total_budget, output_budget)
+            if _session_log_section:
+                _session_log_section = _LEAN_SESSION_LOG_SECTION_TEMPLATE.format(session_log_budget=max(1, total_budget // 3))
+        _temporal_anchoring_rule = cls._temporal_anchoring_rule()
+        return f"""{HISTORICAL_TASK_HEADING}
+{_section["historical_task"]}
+
+## Goal
+{_section["goal"]}
+
+## Constraints & Preferences
+{_section["constraints"]}
+
+## Completed Actions
+[Numbered list of concrete actions taken — include tool used, target, and outcome.
+Format each as: N. ACTION target — outcome [tool: name]
+Example:
+1. READ config.py:45 — found `==` should be `!=` [tool: read_file]
+2. PATCH config.py:45 — changed `==` to `!=` [tool: patch]
+3. TEST `pytest tests/` — 3/50 failed: test_parse, test_validate, test_edge [tool: terminal]
+Be specific with file paths, commands, line numbers, and results.]
+
+## Active State
+[Current working state — include:
+- Working directory and branch (if applicable)
+- Modified/created files with brief note on each
+- Test status (X/Y passing)
+- Any running processes or servers
+- Environment details that matter]
+
+## Blocked
+[Any blockers, errors, or issues not yet resolved. Include exact error messages.]
+
+## Key Decisions
+[Important technical decisions and WHY they were made]
+
+## Errors & Fixes
+[Errors hit during the compacted turns and how each was resolved — include the
+exact error text. Pay special attention to corrections the USER gave; quote
+the user's correction and record what changed as a result.]
+
+## Resolved Questions
+{_section["resolved_questions"]}
+
+## Relevant Files
+[Files read, modified, or created — with brief note on each]
+
+## Critical Context
+[Any specific values, error messages, configuration details, or data that would be lost without explicit preservation. NEVER include API keys, tokens, passwords, or credentials — write [REDACTED] instead.]{_session_log_section}
+
+{_PRUNED_SKILLS_SECTION_HEADING}
+[If any [SKILL_PRUNED: ...reload with skill_view(...)] markers appear in the input,
+repeat each one verbatim here — copy the exact text, do NOT paraphrase, summarize,
+or describe them. These markers tell the agent which skills must be reloaded before
+use. If none appear, omit this section entirely.]
+
+Target ~{total_budget} tokens. Be CONCRETE — include file paths, command outputs, error messages, line numbers, and specific values. Avoid vague descriptions like "made some changes" — say exactly what changed.
+{_temporal_anchoring_rule}
+Write only the summary body. Do not include any preamble or prefix."""
+
     def _summarize_window(
         self, messages: list[dict[str, Any]], turns_to_summarize: list[dict[str, Any]], scan: _HandoffScan,
         focus_topic: Optional[str], memory_context: str, bypass_cooldown: bool,

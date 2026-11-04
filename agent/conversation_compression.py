@@ -3530,11 +3530,8 @@ def _candidate_rejected(
         _err = _summary_error or "unknown error"
         if getattr(agent, "_last_compression_summary_warning", None) != _err:
             agent._last_compression_summary_warning = _err
-            agent._emit_warning(
-                f"⚠ Compression aborted: {_err}. "
-                "No messages were dropped — conversation continues unchanged. "
-                "Run /compress to retry, or /new to start a fresh session."
-            )
+            from hermes_runtime.adapters.compaction import report_summary_abort
+            report_summary_abort(agent, _err)
         _emit_aborted_attempt_telemetry(
             agent, attempt.started_at, _summary_error and "summary_generation_aborted", attempt.seed
         )
