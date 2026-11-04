@@ -35,6 +35,22 @@ MAIN_TOOL_OPERATION_INSTRUCTIONS = (
 )
 
 
+MAIN_INTEGRATION_INSTRUCTIONS = (
+    "## User-requested MCP and API setup\n"
+    "Configure integrations yourself with manage_connections in this Hermes runtime. The terminal is a "
+    "separate sandbox; absence of the Hermes config there is expected and is not a reason to ask the user "
+    "to administer Panel or give you host access. For a custom remote MCP, use install with one named "
+    "mcp:true connector and server.url. For a JSON HTTP API, read its documentation and declare api.base_url "
+    "and named operations with path/query/body input schemas. The native first-party adapter exposes them "
+    "as MCP tools; do not execute generated setup code in the Hermes container. Authentication uses the "
+    "protected secret form. Never ask for API keys in ordinary messages, send them to the model, or write "
+    "them into commands or skills. Cancellation is not successful setup; never pretend a key was entered. "
+    "Use returned tool names after connection succeeds. API adapter registration does not establish that "
+    "an external operation succeeded. Reuse or create a native skill when the user requests a reusable "
+    "workflow; the skill contains connection/tool names and procedures, not credentials."
+)
+
+
 def install_main_schedule_instructions(agent):
     """Use Hermes' existing immutable per-agent system suffix; never rewrite a saved prefix or transcript."""
     from agent.delegation_context import is_delegated_child_context
@@ -47,7 +63,7 @@ def install_main_schedule_instructions(agent):
     if resolve_home(agent.session_id) is None:
         return False
     existing = getattr(agent, "ephemeral_system_prompt", None) or ""
-    instructions = MAIN_SCHEDULE_INSTRUCTIONS + "\n\n" + MAIN_TOOL_OPERATION_INSTRUCTIONS
+    instructions = "\n\n".join((MAIN_SCHEDULE_INSTRUCTIONS, MAIN_TOOL_OPERATION_INSTRUCTIONS, MAIN_INTEGRATION_INSTRUCTIONS))
     if instructions in existing:
         return False
     agent.ephemeral_system_prompt = existing + ("\n\n" if existing else "") + instructions

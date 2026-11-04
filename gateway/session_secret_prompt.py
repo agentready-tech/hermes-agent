@@ -12,7 +12,10 @@ and returns main's callback result. The value travels only in the viewer's respo
 from __future__ import annotations
 
 import contextlib
+import asyncio
 import logging
+import time
+from concurrent.futures import TimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +32,8 @@ def secret_prompt_scope(turn, agent):
     """Bind this turn's secret-capture callback (a ContextVar, so parallel tool workers inherit it)."""
     from gateway.run_turn_progress import local_viewer_turn
     if not local_viewer_turn(turn):
-        yield
+        with _adapter_secret_scope(turn, agent):
+            yield
         return
     from tools.skills_tool import bind_turn_secret_capture
     authority, session_id, _generation = turn._approval_owner
@@ -49,4 +53,44 @@ def secret_prompt_scope(turn, agent):
                 "message": "Secret stored securely. The secret value was not exposed to the model."}
 
     with bind_turn_secret_capture(callback):
+        yield
+
+
+@contextlib.contextmanager
+def _adapter_secret_scope(turn, agent):
+    """Use an adapter's existing out-of-band secret transport, never ordinary input."""
+    from tools.skills_tool import bind_turn_secret_capture
+    source = turn._ctx.source
+    runner = getattr(turn, "_runner", None)
+    delivery = getattr(runner, "_delivery_adapter_for", None)
+    adapter = delivery(source) if delivery else None
+    request = getattr(type(adapter), "request_secret", None)
+    loop = getattr(turn._ctx, "_loop_for_step", None)
+    if request is None or loop is None:
+        yield
+        return
+
+    def capture(var_name, prompt, metadata=None):
+        from hermes_cli.config import save_env_value_secure
+        current = getattr(turn._ctx, "_run_still_current", lambda: True)
+        future = asyncio.run_coroutine_threadsafe(
+            request(adapter, source, label=prompt, site=(metadata or {}).get("help") or var_name), loop)
+        deadline = time.monotonic() + SECRET_TIMEOUT_S
+        try:
+            while time.monotonic() < deadline and current() and not getattr(agent, "_interrupt_requested", False):
+                try:
+                    value = future.result(timeout=0.25)
+                    if value:
+                        return {**save_env_value_secure(var_name, value), "skipped": False}
+                    break
+                except TimeoutError:
+                    continue
+        except Exception:
+            # Adapter exceptions may contain SDK response bodies; never expose them.
+            return _skipped(var_name, "cancelled", "Secret setup could not complete.")
+        finally:
+            future.cancel()
+        return _skipped(var_name, "cancelled", "Secret setup was skipped.")
+
+    with bind_turn_secret_capture(capture):
         yield

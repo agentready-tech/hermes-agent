@@ -51,7 +51,8 @@ def normalize_targets(raw: Any) -> tuple[list[HostedTarget], list[str], Optional
                 return [], [], (
                     f"unknown target field(s) {', '.join(unknown)}: a target is "
                     "{\"name\": \"<slug>\"} or {\"name\": \"<server>\", \"mcp\": true}. Transport, "
-                    "URLs and credentials come from the catalog manifest, never from the call."
+                    "URLs do not belong inside connectors: use the top-level server or api definition "
+                    "for a custom connection. Credentials use protected input, never call arguments."
                 )
             name = str(item.get("name") or "").strip().lower()
             is_mcp = bool(item.get("mcp", False))

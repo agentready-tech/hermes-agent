@@ -7,6 +7,8 @@ Disconnecting accounts remains a portal-only user decision.
 from typing import Any, Callable, Dict, Optional
 
 from tools.connectors.catalog_tool import MANAGE_CATALOG_SCHEMA, manage_catalog
+from tools.connectors.custom_schema import CUSTOM_CONNECTION_FIELDS
+from tools.connectors.custom import available as _custom_connections_available
 from tools.connectors.gateway import config as gateway_config
 from tools.connectors.managed import run_managed_action
 from tools.connectors.mcp import run_mcp_operation
@@ -34,6 +36,12 @@ def manage_connections(
     if action_error:
         return tool_error(action_error)
 
+    if args.get("server") is not None or args.get("api") is not None:
+        if managed:
+            return tool_error("Custom setup takes one named mcp:true connector")
+        from tools.connectors.custom import install
+        return install(args, mcp_targets)
+
     if action in MCP_ACTIONS:
         return run_mcp_operation(
             mcp_targets, action, backend=mcp_backend,
@@ -52,7 +60,14 @@ MANAGE_CONNECTIONS_SCHEMA = {
     "name": "manage_connections",
     "description": (
         "Connect the user to apps. Two kinds: a hosted connector account (Gmail, Notion, ...) "
-        "served through the tool gateway, and a local MCP server from the bundled catalog. "
+        "For a user-requested custom MCP URL use action install with one mcp:true connector and 'server'. "
+        "For a JSON HTTP API use action install with one mcp:true connector and 'api' operations described "
+        "from its documentation. Hermes saves the connection in its own persistent home; the terminal "
+        "sandbox does not need config access. Authentication requests a protected form automatically. "
+        "NEVER put API keys in arguments, messages, terminal commands or skills. After connection succeeds, "
+        "use the returned tools and create a reusable skill when requested. Custom definitions contain "
+        "URLs and schemas only; local commands and source execution are not accepted. "
+        "served through the tool gateway, and a profile-owned MCP server from the catalog or an explicit remote definition. "
         "Targets go in 'connectors': a bare slug or {\"name\": \"gmail\"} is a hosted connector "
         "account; {\"name\": \"linear\", \"mcp\": true} is a local MCP server. Many names exist on "
         "both sides, so the user's own words decide. Pass \"mcp\": true only when the user asks "
@@ -76,7 +91,7 @@ MANAGE_CONNECTIONS_SCHEMA = {
         "USER to open in a browser (never open it yourself); ask them to say when they are done, "
         "then use 'status'. "
         "When a hosted connector tool call returns CONNECTION_REQUIRED, use 'connect'. "
-        "MCP actions (every target must carry \"mcp\": true): 'install' adds a catalog entry, "
+        "MCP actions (every target must carry \"mcp\": true): 'install' adds a catalog entry or the supplied custom server/api, "
         "'enable' re-enables a disabled configured server, 'authorize' runs its OAuth. "
         "They show the user an approval card and block until it settles. Never hand-edit "
         "mcp_servers config — always use this tool. After a skip or a timeout, do not re-ask on "
@@ -90,6 +105,7 @@ MANAGE_CONNECTIONS_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
+            **CUSTOM_CONNECTION_FIELDS,
             "action": {
                 "type": "string",
                 "enum": list(ALL_ACTIONS),
@@ -110,7 +126,7 @@ MANAGE_CONNECTIONS_SCHEMA = {
                                 "mcp": {
                                     "type": "boolean",
                                     "description": (
-                                        "true = a local MCP server from the catalog; absent or "
+                                        "true = a configured, catalog or custom MCP server; absent or "
                                         "false = a hosted connector account."
                                     ),
                                 },
@@ -163,7 +179,7 @@ registry.register(
         args, session_id=kw.get("session_id"), tool_call_id=kw.get("tool_call_id"),
         connectors_available=gateway_config.connectors_available,
     ),
-    check_fn=lambda: gateway_config.connectors_available(),
+    check_fn=lambda: _custom_connections_available() or gateway_config.connectors_available(),
     emoji="🔗",
 )
 
