@@ -90,13 +90,14 @@ def test_unrelated_gateway_route_cannot_receive_main_schedule(telegram_home):
 
 
 @pytest.mark.parametrize("legacy_kind", [None, "main", "gateway"])
-def test_panel_timer_uses_current_main_route_even_with_legacy_surface_pin(telegram_home, legacy_kind):
+@pytest.mark.parametrize("creator_platform", ["", "tui", "telegram"])
+def test_timer_uses_current_main_route_independent_of_creation_context(telegram_home, legacy_kind, creator_platform):
     from gateway.session_context import set_session_vars, clear_session_vars
     from hermes_runtime.adapters.inbox import HomeInbox
     from hermes_runtime.standalone.events import admit_cron, schedule
 
     home, _ = telegram_home
-    tokens = set_session_vars(platform='tui', session_id='agentready_home')
+    tokens = set_session_vars(platform=creator_platform, session_id='agentready_home')
     try:
         job = schedule('Return this in the shared conversation', 'every 1h')
     finally:
@@ -105,8 +106,8 @@ def test_panel_timer_uses_current_main_route_even_with_legacy_surface_pin(telegr
         job['origin']['reply_to'] = {'kind': legacy_kind}
         if legacy_kind == 'gateway':
             job['origin']['reply_to']['origin'] = {'platform': 'telegram', 'chat_id': 'obsolete-binding'}
-    first = admit_cron(job, execution_id='panel-fire')
-    assert admit_cron(job, execution_id='panel-fire') == first
+    first = admit_cron(job, execution_id='autonomous-fire')
+    assert admit_cron(job, execution_id='autonomous-fire') == first
     assert not HomeInbox().pending()
     with sqlite3.connect(home / 'state.db') as conn:
         events = [json.loads(row[0]) for row in conn.execute('SELECT event_json FROM async_delegations')]

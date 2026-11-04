@@ -13,7 +13,7 @@ from tests.waiting import async_wait_until
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("producer", ["timer", "timer-panel", "timer-panel-busy", "mail", "mail-busy"])
+@pytest.mark.parametrize("producer", ["timer", "timer-autonomous", "timer-autonomous-busy", "mail", "mail-busy"])
 async def test_main_event_replies_through_telegram_and_shared_history(tmp_path, monkeypatch, producer):
     from gateway.config import Platform, PlatformConfig
     from gateway.platforms.base import BasePlatformAdapter, SendResult
@@ -94,8 +94,8 @@ async def test_main_event_replies_through_telegram_and_shared_history(tmp_path, 
             from tools.registry import registry
             from cron import scheduler
             from cron.jobs import get_job
-            tokens = set_session_vars(platform='tui' if 'panel' in producer else 'telegram',
-                                      chat_id='' if 'panel' in producer else 'schedule-chat', chat_type='dm',
+            tokens = set_session_vars(platform='' if 'autonomous' in producer else 'telegram',
+                                      chat_id='' if 'autonomous' in producer else 'schedule-chat', chat_type='dm',
                                       user_id='fixture-user', session_key=HOME_SESSION_KEY, session_id=HOME_SESSION_ID)
             try:
                 result = json.loads(registry.dispatch('cronjob_manage', {'action':'create', 'schedule':'every 1h',
@@ -106,11 +106,11 @@ async def test_main_event_replies_through_telegram_and_shared_history(tmp_path, 
             assert result['success'], result
             monkeypatch.setattr(scheduler, '_launch_external_cron_worker', lambda *_: None)
             from hermes_runtime.adapters.turns import ActiveHomeTurn
-            turn = ActiveHomeTurn() if producer == 'timer-panel-busy' else None
+            turn = ActiveHomeTurn() if producer == 'timer-autonomous-busy' else None
             try:
                 assert await asyncio.to_thread(scheduler.run_one_job, get_job(result['job_id']))
                 if turn:
-                    assert turn.take() == [], 'Panel cannot capture the scheduled reply transport'
+                    assert turn.take() == [], 'A foreground turn cannot capture the scheduled reply transport'
             finally:
                 if turn:
                     turn.finish(error='Synthetic foreground turn finished')
