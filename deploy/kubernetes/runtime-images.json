@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "af0266796d58-mail-replies",
+  "defaultRuntimeVersion": "b18857b2a78f-botmode-managed",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -42,6 +42,214 @@
       "description": "Managed Gmail/IMAP events retain the main messaging reply route and shared history.",
       "preloadedSourceImage": "docker.io/agentsee/hermes-kubernetes@sha256:cf6092d6dbf6fe66b5a8e67aa35b5b03ff03c7723ffec05f8e04f8e785a610b0",
       "configDigest": "sha256:eda925b08477eecdcf56d032a68296189a42125ab5b8a21439ddfbcd86b4a79a"
+    },
+    "b18857b2a78f-botmode-managed": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:de2fd7e63fd55691480f2252bad1225b884e6801a428df12f3a85d015f4ada5e",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes:b18857b2a78f-managed-botmode",
+      "configDigest": "sha256:a809c4adcea446720bf7117a4b5bd451780f45c04e3cb91ba300924e1e057e1d",
+      "platform": "linux/amd64",
+      "sourceRevision": "b18857b2a78f6afa7694952eb552032ed7db7954",
+      "base": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef"
+      },
+      "publisherRecipe": {
+        "repository": "agentready-tech/AgentReady",
+        "revision": "7f5a03a19d2a06224f6c466ca3dad6a11b6d821e",
+        "path": "deploy/kubernetes/runtime_patch.py"
+      },
+      "sourceFiles": {
+        "gateway/run_turn_progress.py": {
+          "sha256": "d680295d6a21372d7462f176a52840292d733cfda9471d48c8efc00209d3d108"
+        },
+        "gateway/session_controls.py": {
+          "sha256": "3ba4c17e138203570eb02b17ae6e5d55ddf7841f9062140803f9c814dbaa9a38"
+        },
+        "gateway/session_sudo_prompt.py": {
+          "sha256": "47ea0dd380effd15d71e465df9dc7564dd52dfdb68ec2c037b459a2caf06e6b2"
+        },
+        "gateway/session_vault_prompt.py": {
+          "sha256": "df382a38cb75fbc51def8cd8286cc7649d155dfd9b819b0d10f4dddd0e58849e"
+        },
+        "hermes_cli/gateway_client.py": {
+          "sha256": "ead62720a6c1625fa7e7a5b1a041865f44e5fc6b66d95fbf06f4953c06955d78"
+        },
+        "hermes_runtime/adapters/main_authority.py": {
+          "sha256": "4610794327b1ebb9d28fba0c732a126f7a803ab552e66643f064d31313bc4aa3"
+        },
+        "hermes_runtime/standalone/events.py": {
+          "sha256": "c0214163b23bea0dee571e2d0aa37dd316f71a0c54e2d720adb34efa009c4c8c"
+        },
+        "hermes_runtime/standalone/instructions.py": {
+          "sha256": "d534090c2daa2d1d8d3b8e0afd40409a9b5dfaa99a0a108acefc39be7935ac38"
+        },
+        "hermes_runtime/standalone/panel.py": {
+          "sha256": "f84e873d11d08311a15ac469be52eca520b7b9b7e4285d0339aadbfc0bfd66ef"
+        },
+        "hermes_runtime/standalone/panel_chat.py": {
+          "sha256": "9514cb401e6ddc361da9c8b9e445155ad7c14556961a9c7200882ff3d101550a"
+        },
+        "tools/cronjob_job_args.py": {
+          "sha256": "4d0682ab7158e01ced4ecbcd5a38dd8e6219203e67d4d8b1be53e2344c0059dd"
+        },
+        "tools/cronjob_tools.py": {
+          "sha256": "3a83e5fa7a91e37ebb3f20254e697b95215bc5185fcba9097d727c5be1787a90"
+        },
+        "tools/delegate_projects.py": {
+          "sha256": "d6a27a8171019fb14d2c32331a67b6902f8d7545f4a44252daa16c4e4e813b39"
+        },
+        "tools/delegate_tool.py": {
+          "sha256": "08b9c54de0c3e9790206baacd084c7c625a4b9fdc7bea35701fd907d8448d0b6"
+        },
+        "tools/delegate_tool_control.py": {
+          "sha256": "df661ff0f17b9df553b1b56811ed305d67b4cc37c7a55f9fc09e7283066684e4"
+        },
+        "tui_gateway/contracts/canonical_sessions.py": {
+          "sha256": "129fa408baf6171e56545deb266b4985ba176ec5caceb5d37e9993bdf96406ab"
+        }
+      },
+      "deployedFiles": {
+        "gateway/run_turn_progress.py": "d680295d6a21372d7462f176a52840292d733cfda9471d48c8efc00209d3d108",
+        "gateway/session_controls.py": "3ba4c17e138203570eb02b17ae6e5d55ddf7841f9062140803f9c814dbaa9a38",
+        "gateway/session_sudo_prompt.py": "47ea0dd380effd15d71e465df9dc7564dd52dfdb68ec2c037b459a2caf06e6b2",
+        "gateway/session_vault_prompt.py": "df382a38cb75fbc51def8cd8286cc7649d155dfd9b819b0d10f4dddd0e58849e",
+        "hermes_cli/gateway_client.py": "ead62720a6c1625fa7e7a5b1a041865f44e5fc6b66d95fbf06f4953c06955d78",
+        "hermes_runtime/adapters/main_authority.py": "4610794327b1ebb9d28fba0c732a126f7a803ab552e66643f064d31313bc4aa3",
+        "hermes_runtime/standalone/events.py": "c0214163b23bea0dee571e2d0aa37dd316f71a0c54e2d720adb34efa009c4c8c",
+        "hermes_runtime/standalone/instructions.py": "d534090c2daa2d1d8d3b8e0afd40409a9b5dfaa99a0a108acefc39be7935ac38",
+        "hermes_runtime/standalone/panel.py": "f84e873d11d08311a15ac469be52eca520b7b9b7e4285d0339aadbfc0bfd66ef",
+        "hermes_runtime/standalone/panel_chat.py": "9514cb401e6ddc361da9c8b9e445155ad7c14556961a9c7200882ff3d101550a",
+        "tools/cronjob_job_args.py": "4d0682ab7158e01ced4ecbcd5a38dd8e6219203e67d4d8b1be53e2344c0059dd",
+        "tools/cronjob_tools.py": "3a83e5fa7a91e37ebb3f20254e697b95215bc5185fcba9097d727c5be1787a90",
+        "tools/delegate_projects.py": "d6a27a8171019fb14d2c32331a67b6902f8d7545f4a44252daa16c4e4e813b39",
+        "tools/delegate_tool.py": "08b9c54de0c3e9790206baacd084c7c625a4b9fdc7bea35701fd907d8448d0b6",
+        "tools/delegate_tool_control.py": "df661ff0f17b9df553b1b56811ed305d67b4cc37c7a55f9fc09e7283066684e4",
+        "tui_gateway/contracts/canonical_sessions.py": "129fa408baf6171e56545deb266b4985ba176ec5caceb5d37e9993bdf96406ab"
+      },
+      "distribution": {
+        "mode": "registry",
+        "registryPublished": true,
+        "visibility": "private",
+        "publishedManifestDigest": "sha256:de2fd7e63fd55691480f2252bad1225b884e6801a428df12f3a85d015f4ada5e",
+        "pullVerified": true,
+        "preloadedOnCurrentWorker": true,
+        "workerImagePullPolicy": "Never",
+        "publisherRevision": "7f5a03a19d2a06224f6c466ca3dad6a11b6d821e",
+        "workflowRunId": 41806942278,
+        "workflowAttempt": 1,
+        "thinArchiveSha256": "243b39b4ad496e2f21d4e74a4295c9e1657d5af91a389735fba2068b7d4c33fe"
+      },
+      "validation": {
+        "isolatedRuntimeSmoke": true,
+        "network": "none",
+        "realCredentialsUsed": false,
+        "sourceChecksPassed": 12
+      },
+      "description": "BotMode cron delivery, asynchronous persistent delegation, and Panel transport to the existing main gateway queue."
+    },
+    "b18857b2a78f-botmode-owner": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:0a15c96a21dd216cca52960ca5d4593a76973d43c561da6ec644b65176fa9796",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes:b18857b2a78f-owner-botmode-legacy-panel",
+      "configDigest": "sha256:3052b742456770b7d336078cbcdfe306cbbc8877c00b4e27e4e044015991196b",
+      "platform": "linux/amd64",
+      "sourceRevision": "b18857b2a78f6afa7694952eb552032ed7db7954",
+      "base": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:9ec59130d6e2488e18f0b6b859336149ba0faeb04a5f8c415d684c0bdb7da629",
+        "sourceIndexImage": "docker.io/agentsee/hermes-kubernetes@sha256:0cbdda632560aff7dddafe4a7a01355aada95b2a15a0bf4eecfc7bba4f75d9a9"
+      },
+      "publisherRecipe": {
+        "repository": "agentready-tech/AgentReady",
+        "revision": "f01e04163735b313aa0e04a01c40471a73100638",
+        "path": "deploy/kubernetes/runtime_patch.py"
+      },
+      "sourceFiles": {
+        "gateway/run_turn_progress.py": {
+          "sha256": "d680295d6a21372d7462f176a52840292d733cfda9471d48c8efc00209d3d108"
+        },
+        "gateway/session_controls.py": {
+          "sha256": "3ba4c17e138203570eb02b17ae6e5d55ddf7841f9062140803f9c814dbaa9a38"
+        },
+        "gateway/session_sudo_prompt.py": {
+          "sha256": "47ea0dd380effd15d71e465df9dc7564dd52dfdb68ec2c037b459a2caf06e6b2"
+        },
+        "gateway/session_vault_prompt.py": {
+          "sha256": "df382a38cb75fbc51def8cd8286cc7649d155dfd9b819b0d10f4dddd0e58849e"
+        },
+        "hermes_cli/gateway_client.py": {
+          "sha256": "ead62720a6c1625fa7e7a5b1a041865f44e5fc6b66d95fbf06f4953c06955d78"
+        },
+        "hermes_runtime/adapters/main_authority.py": {
+          "sha256": "4610794327b1ebb9d28fba0c732a126f7a803ab552e66643f064d31313bc4aa3"
+        },
+        "hermes_runtime/standalone/events.py": {
+          "sha256": "c0214163b23bea0dee571e2d0aa37dd316f71a0c54e2d720adb34efa009c4c8c"
+        },
+        "hermes_runtime/standalone/instructions.py": {
+          "sha256": "d534090c2daa2d1d8d3b8e0afd40409a9b5dfaa99a0a108acefc39be7935ac38"
+        },
+        "hermes_runtime/standalone/panel.py": {
+          "sha256": "f84e873d11d08311a15ac469be52eca520b7b9b7e4285d0339aadbfc0bfd66ef"
+        },
+        "hermes_runtime/standalone/panel_chat.py": {
+          "sha256": "9514cb401e6ddc361da9c8b9e445155ad7c14556961a9c7200882ff3d101550a"
+        },
+        "tools/cronjob_job_args.py": {
+          "sha256": "4d0682ab7158e01ced4ecbcd5a38dd8e6219203e67d4d8b1be53e2344c0059dd"
+        },
+        "tools/cronjob_tools.py": {
+          "sha256": "3a83e5fa7a91e37ebb3f20254e697b95215bc5185fcba9097d727c5be1787a90"
+        },
+        "tools/delegate_projects.py": {
+          "sha256": "d6a27a8171019fb14d2c32331a67b6902f8d7545f4a44252daa16c4e4e813b39"
+        },
+        "tools/delegate_tool.py": {
+          "sha256": "08b9c54de0c3e9790206baacd084c7c625a4b9fdc7bea35701fd907d8448d0b6"
+        },
+        "tools/delegate_tool_control.py": {
+          "sha256": "df661ff0f17b9df553b1b56811ed305d67b4cc37c7a55f9fc09e7283066684e4"
+        },
+        "tui_gateway/contracts/canonical_sessions.py": {
+          "sha256": "129fa408baf6171e56545deb266b4985ba176ec5caceb5d37e9993bdf96406ab"
+        }
+      },
+      "deployedFiles": {
+        "gateway/run_turn_progress.py": "d680295d6a21372d7462f176a52840292d733cfda9471d48c8efc00209d3d108",
+        "gateway/session_controls.py": "3ba4c17e138203570eb02b17ae6e5d55ddf7841f9062140803f9c814dbaa9a38",
+        "gateway/session_sudo_prompt.py": "47ea0dd380effd15d71e465df9dc7564dd52dfdb68ec2c037b459a2caf06e6b2",
+        "gateway/session_vault_prompt.py": "df382a38cb75fbc51def8cd8286cc7649d155dfd9b819b0d10f4dddd0e58849e",
+        "hermes_cli/gateway_client.py": "ead62720a6c1625fa7e7a5b1a041865f44e5fc6b66d95fbf06f4953c06955d78",
+        "hermes_runtime/adapters/main_authority.py": "4610794327b1ebb9d28fba0c732a126f7a803ab552e66643f064d31313bc4aa3",
+        "hermes_runtime/standalone/events.py": "c0214163b23bea0dee571e2d0aa37dd316f71a0c54e2d720adb34efa009c4c8c",
+        "hermes_runtime/standalone/instructions.py": "d534090c2daa2d1d8d3b8e0afd40409a9b5dfaa99a0a108acefc39be7935ac38",
+        "hermes_runtime/standalone/panel.py": "56a9db1b205d8ead70cba43a484bff7cd3e22b4bbba95bc2d58b646922192460",
+        "hermes_runtime/standalone/panel_chat.py": "9514cb401e6ddc361da9c8b9e445155ad7c14556961a9c7200882ff3d101550a",
+        "tools/cronjob_job_args.py": "4d0682ab7158e01ced4ecbcd5a38dd8e6219203e67d4d8b1be53e2344c0059dd",
+        "tools/cronjob_tools.py": "3a83e5fa7a91e37ebb3f20254e697b95215bc5185fcba9097d727c5be1787a90",
+        "tools/delegate_projects.py": "d6a27a8171019fb14d2c32331a67b6902f8d7545f4a44252daa16c4e4e813b39",
+        "tools/delegate_tool.py": "08b9c54de0c3e9790206baacd084c7c625a4b9fdc7bea35701fd907d8448d0b6",
+        "tools/delegate_tool_control.py": "df661ff0f17b9df553b1b56811ed305d67b4cc37c7a55f9fc09e7283066684e4",
+        "tui_gateway/contracts/canonical_sessions.py": "129fa408baf6171e56545deb266b4985ba176ec5caceb5d37e9993bdf96406ab"
+      },
+      "distribution": {
+        "mode": "registry",
+        "registryPublished": true,
+        "visibility": "private",
+        "publishedManifestDigest": "sha256:0a15c96a21dd216cca52960ca5d4593a76973d43c561da6ec644b65176fa9796",
+        "pullVerified": true,
+        "preloadedOnCurrentWorker": true,
+        "workerImagePullPolicy": "Never",
+        "publisherRevision": "f01e04163735b313aa0e04a01c40471a73100638",
+        "workflowRunId": 41809223725,
+        "workflowAttempt": 1,
+        "thinArchiveSha256": "76827a86ae3e9b9296edd4582ba2362f72d097a27e22faaf6acc25514d1524ae"
+      },
+      "validation": {
+        "isolatedRuntimeSmoke": true,
+        "network": "none",
+        "realCredentialsUsed": false,
+        "sourceChecksPassed": 12
+      },
+      "description": "The same BotMode fixes over the preserved first-agent compatibility base and connector feature boundary.",
+      "ownerLegacyConnectorBoundaryPreserved": true
     }
   }
 }
