@@ -48,6 +48,8 @@ def credential(name, spec, *, replace=False):
         return {}, None
     if kind not in {"bearer", "api_key"}:
         raise ValueError("Use none, bearer or api_key authentication")
+    if urlsplit(spec.get("url") or spec.get("base_url")).scheme != "https":
+        raise ValueError("Authenticated connections require HTTPS")
     header = "Authorization" if kind == "bearer" else auth.get("header", "X-Api-Key")
     if not isinstance(header, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9-]{0,63}", header):
         raise ValueError("Invalid credential header")

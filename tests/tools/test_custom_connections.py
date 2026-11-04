@@ -118,6 +118,15 @@ def test_stored_key_does_not_fall_back_to_another_profile_or_process(setup_runti
     assert headers == {} and missing == variable
 
 
+def test_credentials_require_tls_before_requesting_a_key(setup_runtime):
+    from tools.connectors.custom import credential
+    from tools.skills_tool import bind_turn_secret_capture
+    spec = api_definition();spec["base_url"] = "http://public.example.test"
+    with bind_turn_secret_capture(lambda *_: pytest.fail("must not ask for a key for plaintext HTTP")):
+        with pytest.raises(ValueError, match="HTTPS"):
+            credential("store", spec)
+
+
 @pytest.mark.parametrize("url", ["http://127.0.0.1/x", "http://169.254.169.254/", "http://localhost/", "https://u:p@example.com/mcp", "https://example.com/mcp?key=abc"])
 def test_custom_endpoints_do_not_accept_host_metadata_or_embedded_credentials(url):
     from tools.connectors.custom import endpoint
