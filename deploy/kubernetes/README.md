@@ -110,6 +110,17 @@ kube-proxy NodePorts bind loopback only;
 no tenant Service is exposed. This guard complements NetworkPolicy, not a CNI
 replacement. Public-port and cross-tenant traffic tests are still required.
 
+## Managed main-session timers
+
+Managed `cronjob_manage` timers admit events into the existing main conversation.
+Delivery is owned by that conversation's current committed messaging route at fire
+time, including timers created through Panel. The shared history remains visible
+in Panel while the native gateway delivers the reply to the bound messaging chat.
+The managed model tool does not expose delivery targets. Legacy creator-surface
+pins are ignored; an unbound route stays in the durable main inbox and never
+selects an unrelated conversation. General unmanaged Hermes cron is unchanged.
+A successful cron fire confirms durable admission, not completion or message delivery.
+
 ## Images, data and inactive manifests
 
 [`runtime-images.json`](runtime-images.json) records the default runtime version,

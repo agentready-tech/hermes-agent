@@ -89,7 +89,8 @@ def test_unrelated_gateway_route_cannot_receive_main_schedule(telegram_home):
         assert conn.execute('SELECT count(*) FROM async_delegations').fetchone()[0] == 0
 
 
-def test_web_timer_does_not_switch_to_registered_telegram_chat(telegram_home):
+@pytest.mark.parametrize("legacy_kind", [None, "main", "gateway"])
+def test_panel_timer_uses_current_main_route_even_with_legacy_surface_pin(telegram_home, legacy_kind):
     from gateway.session_context import set_session_vars, clear_session_vars
     from hermes_runtime.adapters.inbox import HomeInbox
     from hermes_runtime.standalone.events import admit_cron, schedule
@@ -97,11 +98,19 @@ def test_web_timer_does_not_switch_to_registered_telegram_chat(telegram_home):
     home, _ = telegram_home
     tokens = set_session_vars(platform='tui', session_id='agentready_home')
     try:
-        job = schedule('Return this in the web conversation', 'every 1h')
+        job = schedule('Return this in the shared conversation', 'every 1h')
     finally:
         clear_session_vars(tokens)
-    assert job['origin']['reply_to'] == {'kind':'main'}
-    admit_cron(job, execution_id='web-fire')
-    assert len(HomeInbox().pending()) == 1
+    if legacy_kind is not None:
+        job['origin']['reply_to'] = {'kind': legacy_kind}
+        if legacy_kind == 'gateway':
+            job['origin']['reply_to']['origin'] = {'platform': 'telegram', 'chat_id': 'obsolete-binding'}
+    first = admit_cron(job, execution_id='panel-fire')
+    assert admit_cron(job, execution_id='panel-fire') == first
+    assert not HomeInbox().pending()
     with sqlite3.connect(home / 'state.db') as conn:
-        assert conn.execute('SELECT count(*) FROM async_delegations').fetchone()[0] == 0
+        events = [json.loads(row[0]) for row in conn.execute('SELECT event_json FROM async_delegations')]
+    assert len(events) == 1
+    assert events[0]['platform'] == 'telegram'
+    assert events[0]['chat_id'] == '42'
+    assert events[0]['thread_id'] == '77'

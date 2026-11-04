@@ -13,7 +13,7 @@ from tests.waiting import async_wait_until
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("producer", ["timer", "mail", "mail-busy"])
+@pytest.mark.parametrize("producer", ["timer", "timer-panel", "timer-panel-busy", "mail", "mail-busy"])
 async def test_main_event_replies_through_telegram_and_shared_history(tmp_path, monkeypatch, producer):
     from gateway.config import Platform, PlatformConfig
     from gateway.platforms.base import BasePlatformAdapter, SendResult
@@ -89,12 +89,13 @@ async def test_main_event_replies_through_telegram_and_shared_history(tmp_path, 
         with sqlite3.connect(home / 'state.db') as db:
             before = db.execute('SELECT id FROM sessions ORDER BY id').fetchall()
         assert before == [(HOME_SESSION_ID,)]
-        if producer == 'timer':
+        if producer.startswith('timer'):
             import tools.cronjob_tools
             from tools.registry import registry
             from cron import scheduler
             from cron.jobs import get_job
-            tokens = set_session_vars(platform='telegram', chat_id='schedule-chat', chat_type='dm',
+            tokens = set_session_vars(platform='tui' if 'panel' in producer else 'telegram',
+                                      chat_id='' if 'panel' in producer else 'schedule-chat', chat_type='dm',
                                       user_id='fixture-user', session_key=HOME_SESSION_KEY, session_id=HOME_SESSION_ID)
             try:
                 result = json.loads(registry.dispatch('cronjob_manage', {'action':'create', 'schedule':'every 1h',
@@ -104,7 +105,15 @@ async def test_main_event_replies_through_telegram_and_shared_history(tmp_path, 
                 clear_session_vars(tokens)
             assert result['success'], result
             monkeypatch.setattr(scheduler, '_launch_external_cron_worker', lambda *_: None)
-            assert await asyncio.to_thread(scheduler.run_one_job, get_job(result['job_id']))
+            from hermes_runtime.adapters.turns import ActiveHomeTurn
+            turn = ActiveHomeTurn() if producer == 'timer-panel-busy' else None
+            try:
+                assert await asyncio.to_thread(scheduler.run_one_job, get_job(result['job_id']))
+                if turn:
+                    assert turn.take() == [], 'Panel cannot capture the scheduled reply transport'
+            finally:
+                if turn:
+                    turn.finish(error='Synthetic foreground turn finished')
         else:
             from hermes_runtime.adapters.turns import ActiveHomeTurn
             from hermes_runtime.standalone.workspace import admit_batches
@@ -130,7 +139,7 @@ async def test_main_event_replies_through_telegram_and_shared_history(tmp_path, 
                 print('ADMISSIONS', db.execute('SELECT principal_id,status,outcome FROM session_admissions').fetchall())
             print('WATCHER', watcher.done(), repr(watcher.exception()) if watcher.done() else 'running')
             raise
-        assert ('SCHEDULED' if producer == 'timer' else 'MAIL') + '_TELEGRAM_ROUTE_PROOF' in json.dumps(provider.calls)
+        assert ('SCHEDULED' if producer.startswith('timer') else 'MAIL') + '_TELEGRAM_ROUTE_PROOF' in json.dumps(provider.calls)
         assert adapter.deliveries[-1]['chat_id'] == 'schedule-chat'
         assert len([call for call in provider.calls if 'messages' in call]) == 2, 'A replay must not start another inference'
         with sqlite3.connect(home / 'state.db') as db:

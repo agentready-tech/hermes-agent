@@ -511,6 +511,7 @@ def _format_job(job: dict[str, Any]) -> dict[str, Any]:
     }
     from hermes_runtime.standalone.events import is_main_schedule
     if is_main_schedule(job):
+        result.pop("deliver", None)
         result["execution_scope"] = "main"
     for key in _FORMAT_JOB_OPTIONAL_KEYS:
         if job.get(key):

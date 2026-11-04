@@ -166,4 +166,10 @@ def test_model_schema_describes_main_scheduling_under_docker(main_home, monkeypa
     definition = registry.get_definitions({"cronjob_manage"})[0]["function"]
     assert "existing persistent main conversation" in definition["description"]
     assert "Docker" in definition["description"]
-    assert "always runs in a fresh session" not in definition["parameters"]["properties"]["deliver"]["description"]
+    assert not {"deliver", "failure_deliver"} & definition["parameters"]["properties"].keys()
+    result = _tool("create", prompt="Remind me", schedule="every 1h")
+    assert result["success"]
+    assert "deliver" not in result and "origin" not in result
+    assert "deliver" not in result["job"] and "origin" not in result["job"]
+    listed = _tool("list")["jobs"]
+    assert all("deliver" not in job and "origin" not in job for job in listed)

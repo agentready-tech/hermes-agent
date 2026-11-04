@@ -508,6 +508,13 @@ def _manual_run_completion(
     """Async-delegation completion block for a finished background manual run."""
     duration = round(time.time() - started_at, 2)
     refreshed = get_job(job_id) or {}
+    from hermes_runtime.standalone.events import is_main_schedule
+    if is_main_schedule(refreshed):
+        return {"status": "completed" if res.get("success") else "error",
+                "summary": ("The scheduled prompt was admitted into the main conversation; task execution "
+                            "and automatic delivery remain pending." if res.get("success") else
+                            "Main-session admission failed: " + str(res.get("error") or "unknown error")),
+                "error": res.get("error"), "api_calls": 0, "duration_seconds": duration}
     lines = [
         f"Cron job '{job_name}' ({job_id}) finished its manual run.",
         f"Result: {'ok' if res.get('success') else 'FAILED'}"
@@ -635,6 +642,7 @@ def _with_guidance(result: dict[str, Any], job: dict[str, Any], deliver: Optiona
     """Attach mode/delivery guidance (create and update echo the same notes)."""
     from hermes_runtime.standalone.events import is_main_schedule
     if is_main_schedule(job):
+        result.pop("deliver", None)
         result["guidance"] = ["The timer admits this prompt into the existing main conversation. "
                               "A successful cron fire confirms admission, not completion of the task."]
         return result
@@ -1064,16 +1072,16 @@ def _cronjob_schema_overrides() -> dict:
     params["properties"]["script"]["description"] = _script_description(display_hermes_home())
     from hermes_runtime.standalone.events import main_scheduling_enabled
     if main_scheduling_enabled():
-        params["properties"]["deliver"]["description"] = (
-            "Omit for main-inbox scheduling. Put any destination for the eventual result in the prompt; "
-            "the main agent handles it when the timer fires.")
+        for key in ("deliver", "failure_deliver"):
+            params["properties"].pop(key, None)
         return {"parameters": params, "description":
                 "Manage schedules for the existing persistent main conversation. Use action='list' before "
                 "creating or changing jobs; action='create' needs prompt and schedule. The native timer "
                 "admits the prompt into the main inbox with the existing history, memory and projects. "
                 "It never creates a separate session. Use update/pause/resume/remove with job_id; run "
-                "admits an existing job immediately. Keep tool/script/skill and delivery instructions in "
-                "the prompt. Successful admission is not completion; the main history contains the outcome. "
+                "admits an existing job immediately. Keep tool/script/skill instructions in the prompt. "
+                "Delivery through the shared history and bound messaging route is automatic. "
+                "Successful admission is not completion; the main history contains the outcome. "
                 "This tool works independently of the terminal backend, including Docker."}
     return {"parameters": params}
 

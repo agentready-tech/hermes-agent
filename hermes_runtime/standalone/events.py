@@ -30,8 +30,7 @@ def validate_main_schedule(job):
         raise ValueError("Main-inbox schedules accept prompts; put tool/script work and preferences in the prompt. "
                          "Scheduled work must continue the existing main session.")
     if job.get("deliver") not in (None, "", "local", "origin", "bot-chat") or job.get("failure_deliver"):
-        raise ValueError("Main-inbox schedules return to the main conversation; put any other delivery "
-                         "destination in the prompt for the main agent to handle.")
+        raise ValueError("Main-inbox schedule delivery is automatic through the existing main conversation.")
 
 
 def main_schedule_options(arguments):
@@ -43,17 +42,8 @@ def main_schedule_options(arguments):
 
 
 def main_schedule_origin():
-    from gateway.session_context import get_session_env
-    from hermes_runtime.adapters.state import main_gateway_origin
-
-    platform = str(get_session_env("HERMES_SESSION_PLATFORM") or "")
-    chat = str(get_session_env("HERMES_SESSION_CHAT_ID") or "")
-    origin = main_gateway_origin() if platform and chat else {}
-    if origin and origin.get("platform") == platform and origin.get("chat_id") == chat:
-        reply_to = {"kind": "gateway", "origin": origin}
-    else:
-        reply_to = {"kind": "main"}
-    return {"platform": CRON_ORIGIN, "chat_id": "main", "reply_to": reply_to}
+    # This marks the main inbox, not a creator-owned delivery destination.
+    return {"platform": CRON_ORIGIN, "chat_id": "main"}
 
 
 def manual_schedule_context(job):
@@ -85,19 +75,16 @@ def enqueue(prompt, source, event_id, metadata=None):
     return {"message_id": identity, "pending": pending}
 
 
-def _admit_scheduled_prompt(prompt, event_id, metadata, reply_to):
+def _admit_scheduled_prompt(prompt, event_id, metadata):
     from hermes_runtime.adapters.state import main_gateway_origin, current_home_session_id
     from hermes_runtime.events import event_prompt
     from tools.delegate_project_recovery import publish_wakeup
 
-    # Old jobs predate reply routing. New jobs explicitly retain their creator's
-    # surface, so a web-created timer never switches to the last Telegram chat.
-    origin = main_gateway_origin() if reply_to is None else reply_to.get("origin", {})
+    # The committed main route owns all proactive replies, regardless of which
+    # interface created the timer. Never revive a stale creator-surface pin.
+    origin = main_gateway_origin()
     if not origin:
         return enqueue(prompt, "cron", event_id, metadata)
-    current = main_gateway_origin()
-    if any(origin.get(key) != current.get(key) for key in ("platform", "chat_id", "thread_id", "session_key")):
-        raise ValueError("The scheduled reply route is no longer bound to this main conversation; update the job from its original chat")
     origin = {**origin, "origin_session_id": current_home_session_id()}
     identity = "main-cron-" + hashlib.sha256(event_id.encode()).hexdigest()
     # The native gateway owns this wake and its reply. A raw session-id wake is
@@ -129,8 +116,7 @@ def admit_cron(job, *, extra_prompt=None, cancel_event=None, execution_id=None):
     request_id = execution_id or job.get("execution_id") or uuid.uuid4().hex
     job["execution_id"] = request_id
     receipt = _admit_scheduled_prompt("\n\n".join(p for p in (job.get("prompt"), extra_prompt) if p),
-                                     f"{job['id']}:{request_id}", {"job_id": job["id"], "execution_id": request_id},
-                                     (job.get("origin") or {}).get("reply_to"))
+                                     f"{job['id']}:{request_id}", {"job_id": job["id"], "execution_id": request_id})
     response = f"Accepted into main-session inbox: {receipt['message_id']}. Task execution is pending in the main conversation."
     return True, response + "\n", response, None
 
