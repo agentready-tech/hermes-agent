@@ -459,6 +459,69 @@
         "targetedTestsPassed": 315
       },
       "description": "Bounded complete managed compaction summaries, one smaller semantic retry after output truncation, and fenced archive-backed recovery in the same home session."
+    },
+    "6d634e8550b5-compression-owner": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:09c2b12e81b3f486f258f5ed70e1ce62df79427b7a83f09b46986709019607e4",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes:6d634e8550b5-owner-compression",
+      "configDigest": "sha256:53f42d5f17e1a409f1d1fbf11d774cd3e291f1e8a7bb39d797aed63e6f82df42",
+      "platform": "linux/amd64",
+      "sourceRevision": "6d634e8550b541f3f11b9d45a857f3fb843c4557",
+      "base": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:40ffbc81fce189932c21aa34abd7bca4fbdc71298ce2abefa8a1fc0e684da478"
+      },
+      "publisherRecipe": {
+        "repository": "agentready-tech/AgentReady",
+        "revision": "3eea5fd4d22178b786492dcbd858b52b5c9d4282",
+        "path": "deploy/kubernetes/runtime_patch.py"
+      },
+      "sourceFiles": {
+        "agent/context_compressor.py": {
+          "sha256": "6ae272d77b41c9b1b65767b9e2c4306b783de5010fd46ef7510c738f789e25a9"
+        },
+        "agent/context_compressor_summary.py": {
+          "sha256": "e54875016ff4b61c62ae8a35f22b171b653fce5e8ea4c55c3e4e4b282c0cc723"
+        },
+        "agent/conversation_compression.py": {
+          "sha256": "154483d493456af96b9e886aa429b399f44ef79c6f26cd8f036b2e78826971e7"
+        },
+        "hermes_runtime/adapters/compaction.py": {
+          "sha256": "070463d379d9fdec8db4c29dc3716c0ab03c70601812dad02ee8e6a92be16cfc"
+        },
+        "hermes_runtime/checkpoints.py": {
+          "sha256": "06f8c91b923607a30e76c3a433566e953ab40badbab9a57a9f6d7f8c07ce2d44"
+        }
+      },
+      "deployedFiles": {
+        "agent/context_compressor.py": "6ae272d77b41c9b1b65767b9e2c4306b783de5010fd46ef7510c738f789e25a9",
+        "agent/context_compressor_summary.py": "e54875016ff4b61c62ae8a35f22b171b653fce5e8ea4c55c3e4e4b282c0cc723",
+        "agent/conversation_compression.py": "154483d493456af96b9e886aa429b399f44ef79c6f26cd8f036b2e78826971e7",
+        "hermes_runtime/adapters/compaction.py": "070463d379d9fdec8db4c29dc3716c0ab03c70601812dad02ee8e6a92be16cfc",
+        "hermes_runtime/checkpoints.py": "06f8c91b923607a30e76c3a433566e953ab40badbab9a57a9f6d7f8c07ce2d44"
+      },
+      "distribution": {
+        "mode": "registry",
+        "registryPublished": true,
+        "visibility": "private",
+        "publishedManifestDigest": "sha256:09c2b12e81b3f486f258f5ed70e1ce62df79427b7a83f09b46986709019607e4",
+        "pullVerified": true,
+        "preloadedOnCurrentWorker": true,
+        "workerImagePullPolicy": "Never",
+        "publisherRevision": "3eea5fd4d22178b786492dcbd858b52b5c9d4282",
+        "workflowRunId": 41885697035,
+        "workflowAttempt": 1,
+        "thinArchiveSha256": "5934cb3c8b6a5c51301353fe3ded9b89b25db71a41b3f9514e5bf29bb4fb3f2a"
+      },
+      "validation": {
+        "isolatedRuntimeSmoke": true,
+        "network": "none",
+        "realCredentialsUsed": false,
+        "sourceChecksPassed": 12,
+        "compressionRecoveryVerified": true,
+        "targetedTestsPassed": 315
+      },
+      "description": "Owner-compatible managed compaction repair; original connector and provider capabilities preserved.",
+      "ownerLegacyConnectorBoundaryPreserved": true,
+      "preservedPanelSha256": "56a9db1b205d8ead70cba43a484bff7cd3e22b4bbba95bc2d58b646922192460"
     }
   }
 }
