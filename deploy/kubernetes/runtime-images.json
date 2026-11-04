@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "bc60c875c1ae-integrations-managed",
+  "defaultRuntimeVersion": "6d634e8550b5-compression-managed",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -398,6 +398,67 @@
       "description": "Native agent-managed custom HTTP MCP and declared JSON API connections, protected profile-owned credentials and persistent skills.",
       "ownerLegacyConnectorBoundaryPreserved": true,
       "preservedPanelSha256": "56a9db1b205d8ead70cba43a484bff7cd3e22b4bbba95bc2d58b646922192460"
+    },
+    "6d634e8550b5-compression-managed": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:5b5f5afb072140c24006611aa23db296d58cbb755921371e22321cf47320d02a",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes:6d634e8550b5-managed-compression",
+      "configDigest": "sha256:b9bc3c9b70bfa5d7bd1e3f96eaddad596afc77774bf421ee4678cd70355d2c04",
+      "platform": "linux/amd64",
+      "sourceRevision": "6d634e8550b541f3f11b9d45a857f3fb843c4557",
+      "base": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:d7a960e207017089fd2eac373abdefd4b65e5aba5f38d7d71a58100512fec670"
+      },
+      "publisherRecipe": {
+        "repository": "agentready-tech/AgentReady",
+        "revision": "7ee8e8cbb5f1a02de91ab11b48a611d5188d1736",
+        "path": "deploy/kubernetes/runtime_patch.py"
+      },
+      "sourceFiles": {
+        "agent/context_compressor.py": {
+          "sha256": "6ae272d77b41c9b1b65767b9e2c4306b783de5010fd46ef7510c738f789e25a9"
+        },
+        "agent/context_compressor_summary.py": {
+          "sha256": "e54875016ff4b61c62ae8a35f22b171b653fce5e8ea4c55c3e4e4b282c0cc723"
+        },
+        "agent/conversation_compression.py": {
+          "sha256": "154483d493456af96b9e886aa429b399f44ef79c6f26cd8f036b2e78826971e7"
+        },
+        "hermes_runtime/adapters/compaction.py": {
+          "sha256": "070463d379d9fdec8db4c29dc3716c0ab03c70601812dad02ee8e6a92be16cfc"
+        },
+        "hermes_runtime/checkpoints.py": {
+          "sha256": "06f8c91b923607a30e76c3a433566e953ab40badbab9a57a9f6d7f8c07ce2d44"
+        }
+      },
+      "deployedFiles": {
+        "agent/context_compressor.py": "6ae272d77b41c9b1b65767b9e2c4306b783de5010fd46ef7510c738f789e25a9",
+        "agent/context_compressor_summary.py": "e54875016ff4b61c62ae8a35f22b171b653fce5e8ea4c55c3e4e4b282c0cc723",
+        "agent/conversation_compression.py": "154483d493456af96b9e886aa429b399f44ef79c6f26cd8f036b2e78826971e7",
+        "hermes_runtime/adapters/compaction.py": "070463d379d9fdec8db4c29dc3716c0ab03c70601812dad02ee8e6a92be16cfc",
+        "hermes_runtime/checkpoints.py": "06f8c91b923607a30e76c3a433566e953ab40badbab9a57a9f6d7f8c07ce2d44"
+      },
+      "distribution": {
+        "mode": "registry",
+        "registryPublished": true,
+        "visibility": "private",
+        "publishedManifestDigest": "sha256:5b5f5afb072140c24006611aa23db296d58cbb755921371e22321cf47320d02a",
+        "pullVerified": true,
+        "preloadedOnCurrentWorker": true,
+        "workerImagePullPolicy": "Never",
+        "publisherRevision": "7ee8e8cbb5f1a02de91ab11b48a611d5188d1736",
+        "workflowRunId": 41882816512,
+        "workflowAttempt": 1,
+        "thinArchiveSha256": "c112c1e602c4a3c9c737ecd369061f4ad7b3262b9b372ce5a34ed0e4b73d334b"
+      },
+      "validation": {
+        "isolatedRuntimeSmoke": true,
+        "network": "none",
+        "realCredentialsUsed": false,
+        "sourceChecksPassed": 12,
+        "compressionRecoveryVerified": true,
+        "targetedTestsPassed": 315
+      },
+      "description": "Bounded complete managed compaction summaries, one smaller semantic retry after output truncation, and fenced archive-backed recovery in the same home session."
     }
   }
 }
