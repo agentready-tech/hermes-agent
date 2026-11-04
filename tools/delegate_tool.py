@@ -503,9 +503,11 @@ def delegate_task(
     if parent_agent is None:
         return tool_error("delegate_task requires a parent agent context.")
 
+    requested_background = is_truthy_value(background, default=False) if background is not None else None
     normalized_action = (action or "").strip().lower()
     from tools.delegate_tool_control import control_action
-    control = control_action(parent_agent, normalized_action, subagent_id, message, event_id, query, timeout_seconds)
+    control = control_action(parent_agent, normalized_action, subagent_id, message, event_id, query, timeout_seconds,
+                             background=requested_background)
     if control is not None:
         return control
     if normalized_action and normalized_action != "spawn":
@@ -521,7 +523,7 @@ def delegate_task(
     top_role = _normalize_role(role)
     # background applies to single tasks AND batches: a batch is ONE async unit
     # that joins on every child and re-enters as a single consolidated message.
-    background = is_truthy_value(background, default=False) if background is not None else False
+    background = bool(requested_background)
 
     if getattr(parent_agent, "_delegate_role", "") == "leaf":
         return tool_error("This leaf can message its parent/peers but cannot spawn children. Use message, peers or wait.")
@@ -573,7 +575,7 @@ def delegate_task(
             project_tasks = [{**task, "images": task_images[i], "output_schema": task_schemas[i]}
                              for i, task in enumerate(task_list)]
             from tools.delegate_projects import project_action
-            return json.dumps(project_action(parent_agent, "spawn", tasks=project_tasks), ensure_ascii=False)
+            return json.dumps(project_action(parent_agent, "spawn", tasks=project_tasks, background=background), ensure_ascii=False)
         except (ValueError, TypeError) as exc:
             return tool_error(str(exc))
 

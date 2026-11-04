@@ -18,6 +18,21 @@ def _origin():
     return {"session_key": wake, "origin_ui_session_id": ui, "wake": delivery, **_capture_routing_origin()}
 
 
+def _dispatch_origin(parent, background):
+    origin = _origin()
+    if background is not None:
+        from tools.delegate_tool_dispatch import _resolve_async_wake_sid
+        # Persistent and ephemeral model spawns must use the same turn policy.
+        # The captured history-consumer flag alone does not describe push delivery.
+        capable = _resolve_async_wake_sid(origin.get("session_key", ""), origin.get("wake", False))
+        origin = {**origin, "wake": bool(background and capable is not None)}
+    if getattr(parent, "_delegate_depth", 0) > 0:
+        origin = {**origin, "wake": False}
+    if not origin.get("wake"):
+        origin["mail_results"] = True
+    return origin
+
+
 def _publish_completed(store, project, message, result):
     """Repair the crash window between project receipt and native completion publication."""
     from tools.async_delegation import _persist_completion, _persist_dispatch
@@ -236,12 +251,12 @@ def include_projects(parent, payload, query=""):
     return payload
 
 
-def project_action(parent, action, *, tasks=None, subagent_id=None, message=None, query="", event_id=None):
+def project_action(parent, action, *, tasks=None, subagent_id=None, message=None, query="", event_id=None, background=None):
     with ProjectStore(parent) as store:
-        return _project_action(parent, store, action, tasks, subagent_id, message, query, event_id)
+        return _project_action(parent, store, action, tasks, subagent_id, message, query, event_id, background)
 
 
-def _project_action(parent, store, action, tasks, subagent_id, message, query, event_id):
+def _project_action(parent, store, action, tasks, subagent_id, message, query, event_id, background=None):
     if action == "list":
         projects = store.projects(query)
         fields = ("subagent_id", "session_id", "project_key", "goal", "status", "last_status", "last_summary", "last_message_id")
@@ -258,12 +273,7 @@ def _project_action(parent, store, action, tasks, subagent_id, message, query, e
         history = store.history(sid) if store.session_exists(sid) else []
         return {"project": {k: v for k, v in project.items() if k != "instruction"}, "messages": [{"role": m["role"], "content": str(m.get("content") or "")[:2000]} for m in history[-12:]],
                 "note": "Recent conversation excerpt; use session_search with this session_id for older evidence."}
-    origin = _origin()
-    if getattr(parent, "_delegate_depth", 0) > 0:
-        # Nested owners need results in their current turn, not in the root UI's inbox.
-        origin = {**origin, "wake": False}
-    if not origin.get("wake"):
-        origin["mail_results"] = True
+    origin = _dispatch_origin(parent, background)
     entries = []
     if action == "spawn":
         if not tasks or any(not isinstance(t.get("goal"), str) or not t["goal"].strip() for t in tasks):

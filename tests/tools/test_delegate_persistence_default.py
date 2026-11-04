@@ -36,7 +36,11 @@ def runtime(tmp_path, monkeypatch):
         parents.append(value)
         return value
 
-    yield tmp_path, seen, parent
+    # Storage/recovery cases inspect joined results; main async policy has a
+    # separate live test that deliberately omits the history declaration.
+    from gateway.session_finite import finite_turn_scope
+    with finite_turn_scope(True):
+        yield tmp_path, seen, parent
     for agent, db in parents:
         agent.close()
         db.close()
