@@ -23,7 +23,7 @@ _POLL_S = 0.25
 
 
 class _Pending:
-    __slots__ = ("event", "result", "session_id", "value", "request")
+    __slots__ = ("event", "request", "result", "session_id", "value")
 
     def __init__(self, session_id):
         self.event = threading.Event()

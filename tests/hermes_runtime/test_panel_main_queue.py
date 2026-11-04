@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests.hermes_runtime.test_main_schedule_tools import main_home
+pytest_plugins = ['tests.hermes_runtime.test_main_schedule_tools']
 
 
 @pytest.fixture

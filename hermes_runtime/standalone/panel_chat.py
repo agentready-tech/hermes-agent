@@ -161,7 +161,7 @@ async def bridge_chat(remote_url, credential, options):
                     response['error'] = {'code': 4090, 'message':
                         'Сообщение не отправлено. Проверьте подключение к сотруднику и повторите отправку.'}
                 await remote.send(json.dumps(response))
-                if (method := request.get('method')) == 'prompt.submit' and response.get('result', {}).get('status') == 'terminal':
+                if request.get('method') == 'prompt.submit' and response.get('result', {}).get('status') == 'terminal':
                     # A lost-ACK retry can find a turn already complete. Repaint from the actual
                     # transcript instead of leaving this viewer's optimistic spinner running.
                     await remote.send(json.dumps({'jsonrpc': '2.0', 'method': 'event', 'params': {
