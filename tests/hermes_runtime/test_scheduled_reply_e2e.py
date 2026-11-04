@@ -13,7 +13,7 @@ from tests.waiting import async_wait_until
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("producer", ["timer", "timer-autonomous", "timer-autonomous-busy", "mail", "mail-busy"])
+@pytest.mark.parametrize("producer", ["timer", "timer-autonomous", "timer-autonomous-busy", "mail", "mail-busy", "panel-queue"])
 async def test_main_event_replies_through_telegram_and_shared_history(tmp_path, monkeypatch, producer):
     from gateway.config import Platform, PlatformConfig
     from gateway.platforms.base import BasePlatformAdapter, SendResult
@@ -89,7 +89,33 @@ async def test_main_event_replies_through_telegram_and_shared_history(tmp_path, 
         with sqlite3.connect(home / 'state.db') as db:
             before = db.execute('SELECT id FROM sessions ORDER BY id').fetchall()
         assert before == [(HOME_SESSION_ID,)]
-        if producer.startswith('timer'):
+        if producer == 'panel-queue':
+            from types import SimpleNamespace
+            from gateway.session_controls import AuthorityConnection
+            from hermes_runtime.standalone.panel_chat import MainChat
+            connection = AuthorityConnection(authority, SimpleNamespace(write=lambda _frame: None), {
+                'user_id': 'fixture-panel', 'provider': 'local', 'profile_id': str(home),
+                'instance_id': authority.instance_id, 'native_bootstrap': True})
+
+            class Client:
+                async def rpc(self, method, **params):
+                    response = await connection.dispatch({'id': 1, 'method': method, 'params': params})
+                    assert 'error' not in response, response
+                    return response['result']
+
+            chat = MainChat(Client())
+            await chat.snapshot()
+            scheduled = authority._schedule
+            monkeypatch.setattr(authority, '_schedule', lambda _ref: None)
+            request = {'method': 'prompt.submit', 'params': {'session_id': HOME_SESSION_ID,
+                'submission_id': 'synthetic-panel-nonce', 'text': 'PANEL_TELEGRAM_ROUTE_PROOF'}}
+            one = await chat.dispatch(request)
+            two = await chat.dispatch(request)
+            assert one['admission_id'] == two['admission_id']
+            monkeypatch.setattr(authority, '_schedule', scheduled)
+            from gateway.session_contract import SessionRef
+            scheduled(SessionRef(str(home), HOME_SESSION_ID))
+        elif producer.startswith('timer'):
             import tools.cronjob_tools
             from tools.registry import registry
             from cron import scheduler
@@ -139,14 +165,16 @@ async def test_main_event_replies_through_telegram_and_shared_history(tmp_path, 
                 print('ADMISSIONS', db.execute('SELECT principal_id,status,outcome FROM session_admissions').fetchall())
             print('WATCHER', watcher.done(), repr(watcher.exception()) if watcher.done() else 'running')
             raise
-        assert ('SCHEDULED' if producer.startswith('timer') else 'MAIL') + '_TELEGRAM_ROUTE_PROOF' in json.dumps(provider.calls)
+        marker = 'PANEL' if producer == 'panel-queue' else 'SCHEDULED' if producer.startswith('timer') else 'MAIL'
+        assert marker + '_TELEGRAM_ROUTE_PROOF' in json.dumps(provider.calls)
         assert adapter.deliveries[-1]['chat_id'] == 'schedule-chat'
         assert len([call for call in provider.calls if 'messages' in call]) == 2, 'A replay must not start another inference'
         with sqlite3.connect(home / 'state.db') as db:
             assert db.execute('SELECT id FROM sessions ORDER BY id').fetchall() == before
             assert db.execute("SELECT count(*) FROM messages WHERE role='assistant' AND content=?", (expected,)).fetchone()[0] == 2
             assert db.execute("SELECT count(*) FROM agentready_inbox").fetchone()[0] == 0
-            assert db.execute("SELECT count(*) FROM session_admissions WHERE principal_id LIKE 'automation:%'").fetchone()[0] >= 1
+            if producer != 'panel-queue':
+                assert db.execute("SELECT count(*) FROM session_admissions WHERE principal_id LIKE 'automation:%'").fetchone()[0] >= 1
     finally:
         runner._running = False
         if watcher is not None:

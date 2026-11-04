@@ -101,6 +101,13 @@ async def bridge(command, config, port, credential, auth, subscriptions=None):
         remote_url = socket_url(config["url"], config["environment_id"], "reverse", urlencode({"id": identity}))
         await subscriptions.bridge(remote_url, credential)
         return
+    if kind == "chat":
+        from hermes_runtime.standalone.panel_chat import gateway_chat_available, bridge_chat
+        if gateway_chat_available():
+            remote_url = socket_url(config["url"], config["environment_id"], "reverse", urlencode({"id": identity}))
+            await bridge_chat(remote_url, credential, {"max_size": 32 * 1024 * 1024,
+                "open_timeout": 15, "close_timeout": 5, "proxy": None})
+            return
     if kind in {"rpc", "chat"}:
         target = await asyncio.to_thread(auth.rpc_url)
     else:
@@ -126,6 +133,14 @@ async def bridge(command, config, port, credential, auth, subscriptions=None):
                         if not isinstance(frame, str) or len(frame) > 16384:
                             raise ValueError("Invalid screen RPC frame")
                         frame = screen_request(frame)
+                    if kind == "chat" and inbound and isinstance(frame, str):
+                        # A Telegram binding can appear after a browser-only viewer attached.
+                        # Reconnect onto its owner before accepting another legacy write.
+                        from hermes_runtime.standalone.panel_chat import gateway_chat_available
+                        if json.loads(frame).get("method") == "prompt.submit" and gateway_chat_available():
+                            await destination.close(code=1012)
+                            await source.close(code=1012)
+                            return
                     await destination.send(frame)
             except ConnectionClosed as error:
                 code = error.rcvd.code if error.rcvd else 1012

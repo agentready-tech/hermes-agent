@@ -471,7 +471,11 @@ class AuthorityConnection:
 
     async def resume(self, ref, params):
         from gateway.session_local_inventory import snapshot_info
-        if 'latest' in params:
+        from hermes_runtime.adapters.main_authority import restore_main
+        managed_ref = restore_main(self, ref.session_id)
+        if managed_ref is not None:
+            ref = managed_ref
+        elif 'latest' in params:
             # Bare `-c` / `--resume latest`: the most recent session of that surface family the
             # actor may read (workspace first), resolved by the owner like a title.
             from gateway.session_local_title import resolve_latest_session
@@ -520,7 +524,15 @@ class AuthorityConnection:
                 'subscription_id': snapshot.subscription_id, 'revision': snapshot.handle.revision,
                 'execution_generation': snapshot.handle.execution_generation,
                 'pending': [asdict(r) for r in snapshot.pending],
-                'prompts': list(snapshot.prompts), 'info': info}
+                'prompts': list(snapshot.prompts), 'info': info,
+                'open_requests': self._open_requests(ref)}
+
+    def _open_requests(self, ref):
+        if 'session:respond' not in self.actor.capabilities:
+            return []
+        self.authority.authorize(self.actor, ref, 'session:respond')
+        from gateway.session_sudo_prompt import open_requests
+        return open_requests(ref.session_id)
 
     async def detach(self, ref, params):
         if set(params) - {'end_reason'} != {'session_id', 'subscription_id'}:

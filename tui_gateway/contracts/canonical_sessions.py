@@ -133,6 +133,7 @@ class CanonicalSnapshot(Result):
     execution_generation: int
     pending: list[CanonicalPendingAdmission]
     prompts: list[CanonicalPendingPrompt]
+    open_requests: list[dict[str, JsonValue]] | None = None
     info: CanonicalSnapshotInfo
 
 

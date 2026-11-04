@@ -14,6 +14,7 @@ import contextlib
 import logging
 import threading
 import uuid
+from copy import deepcopy
 
 logger = logging.getLogger(__name__)
 
@@ -22,17 +23,25 @@ _POLL_S = 0.25
 
 
 class _Pending:
-    __slots__ = ("event", "result", "session_id", "value")
+    __slots__ = ("event", "result", "session_id", "value", "request")
 
     def __init__(self, session_id):
         self.event = threading.Event()
         self.session_id = session_id
         self.value = ""
         self.result = None
+        self.request = None
 
 
 _lock = threading.Lock()
 _open: dict[str, _Pending] = {}
+
+
+def open_requests(session_id):
+    """Replay request descriptions only. Answers never enter the history or this projection."""
+    with _lock:
+        return [deepcopy(pending.request) for pending in _open.values()
+                if pending.session_id == session_id and pending.request is not None]
 
 
 def is_response_frame(frame) -> bool:
@@ -82,10 +91,11 @@ def _ask(events, session_id, method, params, *, cancelled, timeout):
         return None
     request_id = f"srq-{uuid.uuid4().hex[:12]}"
     pending = _Pending(session_id)
+    pending.request = {"jsonrpc": "2.0", "id": request_id, "method": method,
+                       "params": {"session_id": session_id, **params}}
     with _lock:
         _open[request_id] = pending
-    events.fanout.write({"jsonrpc": "2.0", "id": request_id, "method": method,
-                         "params": {"session_id": session_id, **params}})
+    events.fanout.write(deepcopy(pending.request))
     waited = 0.0
     reason = "timeout"
     while not pending.event.wait(_POLL_S):

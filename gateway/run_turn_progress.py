@@ -985,8 +985,10 @@ class GatewayTurnProgressMixin:
 def local_viewer_turn(runner) -> bool:
     """A local route's viewers read the canonical event stream; ``LocalSessionAdapter.send``
     publishes nothing, so status and notices go to that stream instead."""
+    from hermes_runtime.adapters.main_authority import viewer_turn
     return (getattr(runner, "_approval_owner", None) is not None
-            and getattr(getattr(runner._ctx, "source", None), "platform", None) == Platform.LOCAL)
+            and (getattr(getattr(runner._ctx, "source", None), "platform", None) == Platform.LOCAL
+                 or viewer_turn(runner)))
 
 
 def _viewer_status_kind(kind, text):
