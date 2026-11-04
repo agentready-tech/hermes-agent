@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "b18857b2a78f-botmode-managed",
+  "defaultRuntimeVersion": "bc60c875c1ae-integrations-managed",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -250,6 +250,154 @@
       },
       "description": "The same BotMode fixes over the preserved first-agent compatibility base and connector feature boundary.",
       "ownerLegacyConnectorBoundaryPreserved": true
+    },
+    "bc60c875c1ae-integrations-managed": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:d7a960e207017089fd2eac373abdefd4b65e5aba5f38d7d71a58100512fec670",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes:bc60c875c1ae-managed-integrations",
+      "configDigest": "sha256:99a0ba6148f200d498953cd0aa1a0e4a518bfd117f15150d3014adeb09005a5a",
+      "platform": "linux/amd64",
+      "sourceRevision": "bc60c875c1ae5170db2672b08f066bfb8adefef1",
+      "base": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:de2fd7e63fd55691480f2252bad1225b884e6801a428df12f3a85d015f4ada5e"
+      },
+      "publisherRecipe": {
+        "repository": "agentready-tech/AgentReady",
+        "revision": "df9405df7f32db1b7eb0ccec4ccab1cc0f8597ea",
+        "path": "deploy/kubernetes/runtime_patch.py"
+      },
+      "sourceFiles": {
+        "gateway/session_secret_prompt.py": {
+          "sha256": "fb935ad6cc3bc76655bd47ffb209246f0225e2f3c41cc46d469b700ebe22679f"
+        },
+        "hermes_runtime/standalone/instructions.py": {
+          "sha256": "89a5ec4c4c56ea0ca271d52581b1bccc1f193230a1e527562dd8a9c239415c93"
+        },
+        "tools/connectors/tool.py": {
+          "sha256": "67cd25a5755eb211536b130c240dc8272a8c5fe6e6fa770ea3e4a578f2d54fa0"
+        },
+        "tools/connectors/targets.py": {
+          "sha256": "37767774cc693d398f1f416fea17c7e95008a3ccdcf2f672368597ff4d93314f"
+        },
+        "tools/connectors/custom.py": {
+          "sha256": "851d8cf9a8c3c5fc8c8c9646ed97488da6afdc84dde7dedb9e34ec9c62c28c03"
+        },
+        "tools/connectors/custom_schema.py": {
+          "sha256": "75386856403d6f4269dd21e421850f185840b0400288e7435c2815eecf76f105"
+        },
+        "tools/connectors/http_api.py": {
+          "sha256": "e4cbdf99b30322363fa405e8063d959361b53ed4ed569d61623eacaa47eb5abc"
+        },
+        "tools/connectors/api_mcp.py": {
+          "sha256": "5157581d2f846bb8ce44fdf80fb56cd69bc8a284d219c2c542471a7cd83b445b"
+        }
+      },
+      "deployedFiles": {
+        "gateway/session_secret_prompt.py": "fb935ad6cc3bc76655bd47ffb209246f0225e2f3c41cc46d469b700ebe22679f",
+        "hermes_runtime/standalone/instructions.py": "89a5ec4c4c56ea0ca271d52581b1bccc1f193230a1e527562dd8a9c239415c93",
+        "tools/connectors/tool.py": "67cd25a5755eb211536b130c240dc8272a8c5fe6e6fa770ea3e4a578f2d54fa0",
+        "tools/connectors/targets.py": "37767774cc693d398f1f416fea17c7e95008a3ccdcf2f672368597ff4d93314f",
+        "tools/connectors/custom.py": "851d8cf9a8c3c5fc8c8c9646ed97488da6afdc84dde7dedb9e34ec9c62c28c03",
+        "tools/connectors/custom_schema.py": "75386856403d6f4269dd21e421850f185840b0400288e7435c2815eecf76f105",
+        "tools/connectors/http_api.py": "e4cbdf99b30322363fa405e8063d959361b53ed4ed569d61623eacaa47eb5abc",
+        "tools/connectors/api_mcp.py": "5157581d2f846bb8ce44fdf80fb56cd69bc8a284d219c2c542471a7cd83b445b"
+      },
+      "distribution": {
+        "mode": "registry",
+        "registryPublished": true,
+        "visibility": "private",
+        "publishedManifestDigest": "sha256:d7a960e207017089fd2eac373abdefd4b65e5aba5f38d7d71a58100512fec670",
+        "pullVerified": true,
+        "preloadedOnCurrentWorker": true,
+        "workerImagePullPolicy": "Never",
+        "publisherRevision": "df9405df7f32db1b7eb0ccec4ccab1cc0f8597ea",
+        "workflowRunId": 41870472731,
+        "workflowAttempt": 1,
+        "thinArchiveSha256": "15220c97c464db7b14912782cc59d607781b5381e9ffa6078f016e23efc66b3e"
+      },
+      "validation": {
+        "isolatedRuntimeSmoke": true,
+        "network": "none",
+        "realCredentialsUsed": false,
+        "sourceChecksPassed": 12,
+        "integrationSetupVerified": true,
+        "targetedTestsPassed": 66
+      },
+      "description": "Native agent-managed custom HTTP MCP and declared JSON API connections, protected profile-owned credentials and persistent skills."
+    },
+    "bc60c875c1ae-integrations-owner": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:40ffbc81fce189932c21aa34abd7bca4fbdc71298ce2abefa8a1fc0e684da478",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes:bc60c875c1ae-owner-integrations",
+      "configDigest": "sha256:d576f1954d726559f85014b816937bf72f9a833e2a0b8f639f90e18bfc423149",
+      "platform": "linux/amd64",
+      "sourceRevision": "bc60c875c1ae5170db2672b08f066bfb8adefef1",
+      "base": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:0a15c96a21dd216cca52960ca5d4593a76973d43c561da6ec644b65176fa9796"
+      },
+      "publisherRecipe": {
+        "repository": "agentready-tech/AgentReady",
+        "revision": "df9405df7f32db1b7eb0ccec4ccab1cc0f8597ea",
+        "path": "deploy/kubernetes/runtime_patch.py"
+      },
+      "sourceFiles": {
+        "gateway/session_secret_prompt.py": {
+          "sha256": "fb935ad6cc3bc76655bd47ffb209246f0225e2f3c41cc46d469b700ebe22679f"
+        },
+        "hermes_runtime/standalone/instructions.py": {
+          "sha256": "89a5ec4c4c56ea0ca271d52581b1bccc1f193230a1e527562dd8a9c239415c93"
+        },
+        "tools/connectors/tool.py": {
+          "sha256": "67cd25a5755eb211536b130c240dc8272a8c5fe6e6fa770ea3e4a578f2d54fa0"
+        },
+        "tools/connectors/targets.py": {
+          "sha256": "37767774cc693d398f1f416fea17c7e95008a3ccdcf2f672368597ff4d93314f"
+        },
+        "tools/connectors/custom.py": {
+          "sha256": "851d8cf9a8c3c5fc8c8c9646ed97488da6afdc84dde7dedb9e34ec9c62c28c03"
+        },
+        "tools/connectors/custom_schema.py": {
+          "sha256": "75386856403d6f4269dd21e421850f185840b0400288e7435c2815eecf76f105"
+        },
+        "tools/connectors/http_api.py": {
+          "sha256": "e4cbdf99b30322363fa405e8063d959361b53ed4ed569d61623eacaa47eb5abc"
+        },
+        "tools/connectors/api_mcp.py": {
+          "sha256": "5157581d2f846bb8ce44fdf80fb56cd69bc8a284d219c2c542471a7cd83b445b"
+        }
+      },
+      "deployedFiles": {
+        "gateway/session_secret_prompt.py": "fb935ad6cc3bc76655bd47ffb209246f0225e2f3c41cc46d469b700ebe22679f",
+        "hermes_runtime/standalone/instructions.py": "89a5ec4c4c56ea0ca271d52581b1bccc1f193230a1e527562dd8a9c239415c93",
+        "tools/connectors/tool.py": "67cd25a5755eb211536b130c240dc8272a8c5fe6e6fa770ea3e4a578f2d54fa0",
+        "tools/connectors/targets.py": "37767774cc693d398f1f416fea17c7e95008a3ccdcf2f672368597ff4d93314f",
+        "tools/connectors/custom.py": "851d8cf9a8c3c5fc8c8c9646ed97488da6afdc84dde7dedb9e34ec9c62c28c03",
+        "tools/connectors/custom_schema.py": "75386856403d6f4269dd21e421850f185840b0400288e7435c2815eecf76f105",
+        "tools/connectors/http_api.py": "e4cbdf99b30322363fa405e8063d959361b53ed4ed569d61623eacaa47eb5abc",
+        "tools/connectors/api_mcp.py": "5157581d2f846bb8ce44fdf80fb56cd69bc8a284d219c2c542471a7cd83b445b"
+      },
+      "distribution": {
+        "mode": "registry",
+        "registryPublished": true,
+        "visibility": "private",
+        "publishedManifestDigest": "sha256:40ffbc81fce189932c21aa34abd7bca4fbdc71298ce2abefa8a1fc0e684da478",
+        "pullVerified": true,
+        "preloadedOnCurrentWorker": true,
+        "workerImagePullPolicy": "Never",
+        "publisherRevision": "df9405df7f32db1b7eb0ccec4ccab1cc0f8597ea",
+        "workflowRunId": 41870472731,
+        "workflowAttempt": 1,
+        "thinArchiveSha256": "d001724a3ca84ea6d124cd9e771017d83e7dc4bbf6a5482b68425ca94fe2d813"
+      },
+      "validation": {
+        "isolatedRuntimeSmoke": true,
+        "network": "none",
+        "realCredentialsUsed": false,
+        "sourceChecksPassed": 12,
+        "integrationSetupVerified": true,
+        "targetedTestsPassed": 66
+      },
+      "description": "Native agent-managed custom HTTP MCP and declared JSON API connections, protected profile-owned credentials and persistent skills.",
+      "ownerLegacyConnectorBoundaryPreserved": true,
+      "preservedPanelSha256": "56a9db1b205d8ead70cba43a484bff7cd3e22b4bbba95bc2d58b646922192460"
     }
   }
 }
