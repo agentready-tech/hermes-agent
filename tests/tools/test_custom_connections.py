@@ -62,7 +62,7 @@ def test_api_secret_form_persists_only_ref_and_adapter_is_callable(setup_runtime
     from tools.skills_tool import bind_turn_secret_capture
     from hermes_cli.config import save_env_value_secure, load_config
     from tools.connectors.api_mcp import connection, serve
-    home, registered = setup_runtime
+    home, _registered = setup_runtime
     secret = "synthetic-api-key-not-for-history"
     prompts = []
     def capture(name, prompt, metadata):

@@ -85,7 +85,7 @@ def _adapter_secret_scope(turn, agent):
                     break
                 except TimeoutError:
                     continue
-        except Exception:
+        except Exception:  # health: allow BLE001 -- adapter SDK errors may contain secret response bodies and must not be logged
             # Adapter exceptions may contain SDK response bodies; never expose them.
             return _skipped(var_name, "cancelled", "Secret setup could not complete.")
         finally:

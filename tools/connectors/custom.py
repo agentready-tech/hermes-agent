@@ -79,7 +79,7 @@ def install(args, names):
         return _install(args, names)
     except (ValueError, TypeError, KeyError) as error:
         return tool_error(str(error))
-    except Exception:
+    except (OSError, ConnectionError, RuntimeError):
         # Vendor failures can echo authorization values; do not relay their raw text.
         return tool_error("Connection verification failed; existing connections were preserved. Check the endpoint and authentication.")
 
@@ -126,14 +126,14 @@ def _install(args, names):
         try:
             with suppress_interactive_oauth():
                 _probe_single_server(name, _interpolate_env_vars(cfg), connect_timeout=30)
-        except Exception:
+        except Exception:  # health: allow BLE001 -- untrusted MCP errors can echo the credential; sanitize without a traceback
             raise ConnectionError("Remote MCP verification failed") from None
     if not _save_mcp_server(name, cfg):
         raise ValueError("Native MCP configuration validation rejected the connection")
     try:
         register_mcp_servers({name: _interpolate_env_vars(cfg)})
         tools = _registered_tool_names(name)
-    except Exception:
+    except Exception:  # health: allow BLE001 -- MCP registration errors can contain authorization values; never relay or log them
         raise ConnectionError("MCP registration failed") from None
     return json.dumps({"targets": [{"name": name, "kind": "mcp", "state": "connected", "tools": tools}],
                        "persistent": True, "authenticationVerified": bool(args.get("server")),

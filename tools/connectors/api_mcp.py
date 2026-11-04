@@ -3,6 +3,7 @@
 import json
 import re
 import sys
+from http.client import HTTPException
 
 
 def connection(name):
@@ -44,7 +45,7 @@ def dispatch(request, spec, headers):
     try:
         result = execute(spec, params.get("name"), params.get("arguments", {}), headers)
         return {"content": [{"type": "text", "text": json.dumps(result)}], "isError": not 200 <= result["status"] < 300}
-    except Exception:
+    except (OSError, ValueError, TypeError, HTTPException):
         # No raw URL, credential, argument or transport exception enters the transcript.
         return {"content": [{"type": "text", "text": "API request failed. Check the declared operation, service availability and authentication. A failed response does not establish whether a write took effect; verify its result before retrying."}], "isError": True}
 
