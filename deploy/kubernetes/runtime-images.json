@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "6d634e8550b5-compression-managed",
+  "defaultRuntimeVersion": "0aa9932fe2ba-telegram-controls-managed",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -520,6 +520,106 @@
         "targetedTestsPassed": 315
       },
       "description": "Owner-compatible managed compaction repair; original connector and provider capabilities preserved.",
+      "ownerLegacyConnectorBoundaryPreserved": true,
+      "preservedPanelSha256": "56a9db1b205d8ead70cba43a484bff7cd3e22b4bbba95bc2d58b646922192460"
+    },
+    "0aa9932fe2ba-telegram-controls-managed": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:3a46566e27448f5514aa4455f9956438529ba6dafd23040fab74d3e4e1d56d4f",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes:0aa9932fe2ba-managed-telegram-commands",
+      "configDigest": "sha256:d3b317bb717f2027ab5482f0111a84420002d9fa65905406f9f780f11347c5f0",
+      "platform": "linux/amd64",
+      "sourceRevision": "0aa9932fe2bae24b3cae6777ccb39103ba9947ca",
+      "base": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:5b5f5afb072140c24006611aa23db296d58cbb755921371e22321cf47320d02a"
+      },
+      "publisherRecipe": {
+        "repository": "agentready-tech/AgentReady",
+        "revision": "477cd1ac5068127d9b9dbb8e5305ba316b773f61",
+        "path": "deploy/kubernetes/runtime_patch.py"
+      },
+      "sourceFiles": {
+        "plugins/platforms/telegram/adapter.py": {
+          "sha256": "71bd8dace7895d0a297a1a5b6fb64f47b74a7ac97b1432a174ddb4881f56b56b"
+        },
+        "plugins/platforms/telegram/managed_commands.py": {
+          "sha256": "393e24c66176d6da3b6970e7df861a908e8d69a160df2d93edeac6736c610e5a"
+        }
+      },
+      "deployedFiles": {
+        "plugins/platforms/telegram/adapter.py": "71bd8dace7895d0a297a1a5b6fb64f47b74a7ac97b1432a174ddb4881f56b56b",
+        "plugins/platforms/telegram/managed_commands.py": "393e24c66176d6da3b6970e7df861a908e8d69a160df2d93edeac6736c610e5a"
+      },
+      "distribution": {
+        "mode": "registry",
+        "registryPublished": true,
+        "visibility": "private",
+        "publishedManifestDigest": "sha256:3a46566e27448f5514aa4455f9956438529ba6dafd23040fab74d3e4e1d56d4f",
+        "pullVerified": true,
+        "preloadedOnCurrentWorker": true,
+        "workerImagePullPolicy": "Never",
+        "publisherRevision": "477cd1ac5068127d9b9dbb8e5305ba316b773f61",
+        "workflowRunId": 42044017619,
+        "workflowAttempt": 1,
+        "thinArchiveSha256": "39cde49a0d9dfefaacdbef0d7f8a7a31964a0c0b6daed8717ef1130437f09969"
+      },
+      "validation": {
+        "isolatedRuntimeSmoke": true,
+        "network": "none",
+        "realCredentialsUsed": false,
+        "sourceChecksPassed": 12,
+        "telegramCommandSurfaceVerified": true,
+        "targetedTestsPassed": 44
+      },
+      "description": "Controlled managed Telegram: hidden technical menus, guarded commands and callbacks, native secret transport preserved."
+    },
+    "0aa9932fe2ba-telegram-controls-owner": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:9a657f0f781273041fa8cbf7d771b0ead1045bdb12748aa2c59aabcb6d0a3856",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes:0aa9932fe2ba-owner-telegram-commands",
+      "configDigest": "sha256:e744323bf82cf1c71dadd416ccd9a4d6b9cb25bf1b8028ceab8b01b71c06e3cf",
+      "platform": "linux/amd64",
+      "sourceRevision": "0aa9932fe2bae24b3cae6777ccb39103ba9947ca",
+      "base": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:09c2b12e81b3f486f258f5ed70e1ce62df79427b7a83f09b46986709019607e4"
+      },
+      "publisherRecipe": {
+        "repository": "agentready-tech/AgentReady",
+        "revision": "477cd1ac5068127d9b9dbb8e5305ba316b773f61",
+        "path": "deploy/kubernetes/runtime_patch.py"
+      },
+      "sourceFiles": {
+        "plugins/platforms/telegram/adapter.py": {
+          "sha256": "71bd8dace7895d0a297a1a5b6fb64f47b74a7ac97b1432a174ddb4881f56b56b"
+        },
+        "plugins/platforms/telegram/managed_commands.py": {
+          "sha256": "393e24c66176d6da3b6970e7df861a908e8d69a160df2d93edeac6736c610e5a"
+        }
+      },
+      "deployedFiles": {
+        "plugins/platforms/telegram/adapter.py": "71bd8dace7895d0a297a1a5b6fb64f47b74a7ac97b1432a174ddb4881f56b56b",
+        "plugins/platforms/telegram/managed_commands.py": "393e24c66176d6da3b6970e7df861a908e8d69a160df2d93edeac6736c610e5a"
+      },
+      "distribution": {
+        "mode": "registry",
+        "registryPublished": true,
+        "visibility": "private",
+        "publishedManifestDigest": "sha256:9a657f0f781273041fa8cbf7d771b0ead1045bdb12748aa2c59aabcb6d0a3856",
+        "pullVerified": true,
+        "preloadedOnCurrentWorker": true,
+        "workerImagePullPolicy": "Never",
+        "publisherRevision": "477cd1ac5068127d9b9dbb8e5305ba316b773f61",
+        "workflowRunId": 42044017619,
+        "workflowAttempt": 1,
+        "thinArchiveSha256": "3a4adf2013320a78fbbb320b553d7c8bed035a3b8b9539ba1c64001f4a0d8627"
+      },
+      "validation": {
+        "isolatedRuntimeSmoke": true,
+        "network": "none",
+        "realCredentialsUsed": false,
+        "sourceChecksPassed": 12,
+        "telegramCommandSurfaceVerified": true,
+        "targetedTestsPassed": 44
+      },
+      "description": "Controlled managed Telegram: hidden technical menus, guarded commands and callbacks, native secret transport preserved.",
       "ownerLegacyConnectorBoundaryPreserved": true,
       "preservedPanelSha256": "56a9db1b205d8ead70cba43a484bff7cd3e22b4bbba95bc2d58b646922192460"
     }
