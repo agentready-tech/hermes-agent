@@ -2714,7 +2714,8 @@ class TelegramAdapter(TelegramSecretPromptMixin, TelegramHeldInboundMixin, BaseP
     def _bot_commands(menu_commands) -> list:
         """``BotCommand`` rows; Telegram caps a description at 256 chars (longer locales get cut)."""
         from telegram import BotCommand
-        return [BotCommand(name, str(desc or "")[:_BOT_COMMAND_DESCRIPTION_LIMIT]) for name, desc in menu_commands]
+        from plugins.platforms.telegram.managed_commands import visible_commands
+        return [BotCommand(name, str(desc or "")[:_BOT_COMMAND_DESCRIPTION_LIMIT]) for name, desc in visible_commands(menu_commands)]
 
     @staticmethod
     def _menu_fingerprint(menu_commands) -> str:
@@ -4612,6 +4613,9 @@ class TelegramAdapter(TelegramSecretPromptMixin, TelegramHeldInboundMixin, BaseP
         inline_query = getattr(update, "inline_query", None)
         if inline_query is None:
             return
+        from plugins.platforms.telegram.managed_commands import block_inline
+        if await block_inline(inline_query):
+            return
         from_user = getattr(inline_query, "from_user", None)
         user_id = str(getattr(from_user, "id", "") or "").strip()
         try:
@@ -4673,6 +4677,9 @@ class TelegramAdapter(TelegramSecretPromptMixin, TelegramHeldInboundMixin, BaseP
         """Dispatch inline keyboard button clicks on the callback_data prefix."""
         query = update.callback_query
         if not query or not query.data:
+            return
+        from plugins.platforms.telegram.managed_commands import block_callback
+        if await block_callback(query):
             return
         self._accept_update()
         data = query.data
@@ -6468,22 +6475,8 @@ class TelegramAdapter(TelegramSecretPromptMixin, TelegramHeldInboundMixin, BaseP
 
     async def _handle_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming command messages."""
-        msg = self._effective_update_message(update)
-        if not msg or not msg.text:
-            return
-        if not self._should_process_message(msg, is_command=True):
-            return
-        if not self._is_user_authorized_from_message(msg):
-            self._log_blocked_user(msg)
-            return
-        await self._ensure_forum_commands(msg)
-        event = await self._build_triggered_event(msg, update, MessageType.COMMAND)
-        # A >4096-char command paste arrives as a near-limit COMMAND chunk plus TEXT continuations; dispatching
-        # immediately would orphan them. Near-limit commands go through text batching.
-        if len(event.text or "") >= self._SPLIT_THRESHOLD:
-            self._enqueue_text_event(event)
-            return
-        await self.handle_message(event)
+        from plugins.platforms.telegram.managed_commands import handle_command
+        await handle_command(self, update)
 
     async def _handle_location_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming location/venue pin messages."""
