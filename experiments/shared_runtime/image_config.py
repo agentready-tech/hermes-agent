@@ -5,7 +5,7 @@ from pathlib import Path
 from experiments.shared_runtime.model_peer import NAMES
 
 
-def initialize(root, url, sandboxes):
+def initialize(root, url, sandboxes, image):
     root.mkdir(parents=True, exist_ok=True)
     for name, home in [('control', root), *[(n, root / 'profiles' / n) for n in NAMES]]:
         home.mkdir(parents=True, exist_ok=True)
@@ -20,7 +20,7 @@ def initialize(root, url, sandboxes):
                   'delegation': {'max_concurrent_children': 1, 'worktree_isolation': False}}
         if name in NAMES:
             config['platforms'] = {'telegram': {'enabled': True, 'token': 'fixture-' + name}}
-            config['terminal'] = {'backend': 'docker', 'docker_container': sandboxes[name],
+            config['terminal'] = {'backend': 'docker', 'docker_container': sandboxes[name], 'docker_image': image,
                                   'cwd': '/workspace', 'docker_env': {'HERMES_HOME': '/agent'},
                                   'persistent_shell': True, 'worktree_isolation': False}
         (home / 'config.yaml').write_text(json.dumps(config))

@@ -3,6 +3,7 @@ import json
 import urllib.request
 
 from experiments.shared_runtime.image_probe import reset_owned
+from experiments.shared_runtime.image_config import initialize
 from experiments.shared_runtime.model_peer import start_model
 
 
@@ -37,3 +38,15 @@ def test_disposable_state_reset_preserves_all_mount_root_inodes(tmp_path):
     reset_owned(root, workspaces)
     assert {d: d.stat().st_ino for d in directories} == inodes
     assert all(not (d / 'obsolete').exists() for d in directories)
+
+
+def test_generated_profiles_resolve_the_actual_sandbox_image(tmp_path, monkeypatch):
+    from gateway.run import _profile_runtime_scope
+    from tools.terminal_scope import terminal_env
+    root = tmp_path / '.hermes'
+    image = 'fixture/runtime:exact-source-version'
+    monkeypatch.setenv('HERMES_HOME', str(root))
+    initialize(root, 'http://127.0.0.1:1/v1', {'alpha': 'sandbox-a', 'bravo': 'sandbox-b'}, image)
+    for name in ('alpha', 'bravo'):
+        with _profile_runtime_scope(root / 'profiles' / name):
+            assert terminal_env('TERMINAL_DOCKER_IMAGE') == image
