@@ -53,8 +53,7 @@ class Subscriptions:
         return profile.setup_status() if profile and hasattr(profile, "setup_status") else {"available": False, "logged_in": False}
 
     def _request(self, path, payload=None, method=None):
-        self.auth.rpc_url()  # Reuse the connector's native cookie authentication.
-        return self.auth.request(path, payload, method=method)
+        return self.auth.authenticated_request(path, payload, method=method)
 
     def status(self):
         config = self._config()
@@ -172,8 +171,8 @@ class Subscriptions:
         # Use the native session model switch, not a chat prompt or a second agent. Busy
         # sessions defer it until the next turn. Credentials are resolved by Hermes itself.
         from websockets.asyncio.client import connect
-        target = await asyncio.to_thread(self.auth.rpc_url)
-        async with connect(target, proxy=None, max_size=32 * 1024 * 1024) as socket:
+        target, options = await asyncio.to_thread(self.auth.rpc_connection)
+        async with connect(target, proxy=None, max_size=32 * 1024 * 1024, **options) as socket:
             async def call(identity, method, params):
                 await socket.send(json.dumps({"jsonrpc": "2.0", "id": identity, "method": method, "params": params}))
                 async with asyncio.timeout(45):
@@ -183,7 +182,10 @@ class Subscriptions:
                             if result.get("error"):
                                 raise SubscriptionError("Настройка сохранена, но текущий диалог не переключён. Повторите применение.")
                             return result["result"]
-            session = await call(1, "session.resume", {"session_id": "agentready_home", "source": "agentready", "close_on_disconnect": False, "inline_images": False})
+            resume = {"session_id": "agentready_home"}
+            if not self.auth.gateway_owned:
+                resume.update(source="agentready", close_on_disconnect=False, inline_images=False)
+            session = await call(1, "session.resume", resume)
             # Managed custom routes need the endpoint and key-env from config, not the old
             # subscription's endpoint. Native model switching resolves the explicit provider.
             result = await call(2, "config.set", {"session_id": session["session_id"], "key": "model",

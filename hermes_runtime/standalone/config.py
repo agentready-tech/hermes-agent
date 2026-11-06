@@ -19,6 +19,27 @@ def settings(home):
     return read_config(home).get("autonomous", {})
 
 
+def dashboard_enabled(autonomous):
+    dashboard = autonomous.get("dashboard", {})
+    if not isinstance(dashboard, dict) or type(dashboard.get("enabled", True)) is not bool:
+        raise ValueError("autonomous.dashboard.enabled must be true or false")
+    return dashboard.get("enabled", True)
+
+
+def _initialize_dashboard_credentials(home):
+    from dotenv import dotenv_values
+    from utils import atomic_write_text
+    env = home / ".env"
+    existing = dotenv_values(env) if env.exists() else {}
+    defaults = {"HERMES_DASHBOARD_SESSION_TOKEN": secrets.token_urlsafe(32),
+                "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "hermes",
+                "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": secrets.token_urlsafe(24)}
+    missing = {k: v for k, v in defaults.items() if k not in existing}
+    if missing:
+        previous = env.read_text() if env.exists() else ""
+        atomic_write_text(env, previous.rstrip("\n") + "\n" + "".join(f"{k}={v}\n" for k, v in missing.items()), mode=0o600)
+
+
 def initialize(home):
     """Add service defaults without replacing any existing user configuration."""
     from hermes_cli.config_defaults import DEFAULT_CONFIG
@@ -39,9 +60,11 @@ def initialize(home):
     if not isinstance(autonomous, dict):
         raise ValueError("autonomous must be a mapping in config.yaml")
     for key, value in {"enabled": True, "host": "127.0.0.1", "port": 9119,
+                       "dashboard": {"enabled": True},
                        "gmail": {"enabled": False, "query": "in:inbox", "poll_seconds": 60,
                                  "allowed_senders": []}}.items():
         autonomous.setdefault(key, value)
+    with_dashboard = dashboard_enabled(autonomous)
     # Persist these defaults for native consumers that read raw YAML, while
     # retaining any policy the operator explicitly selected for this home.
     terminal = config.setdefault("terminal", {})
@@ -70,16 +93,8 @@ def initialize(home):
     yaml.dump(config, output)
     atomic_write_text(path, output.getvalue(), mode=0o600)
     # Native auth, model and channel secrets all stay in the same .env.
-    env = home / ".env"
-    from dotenv import dotenv_values
-    existing = dotenv_values(env) if env.exists() else {}
-    defaults = {"HERMES_DASHBOARD_SESSION_TOKEN": secrets.token_urlsafe(32),
-                "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "hermes",
-                "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": secrets.token_urlsafe(24)}
-    missing = {k: v for k, v in defaults.items() if k not in existing}
-    if missing:
-        previous = env.read_text() if env.exists() else ""
-        atomic_write_text(env, previous.rstrip("\n") + "\n" + "".join(f"{k}={v}\n" for k, v in missing.items()), mode=0o600)
+    if with_dashboard:
+        _initialize_dashboard_credentials(home)
     for directory in ("workspace", "logs", "skills", "scripts"):
         (home / directory).mkdir(exist_ok=True)
     return config

@@ -15,7 +15,7 @@ from urllib.request import urlopen
 
 import psutil
 
-from hermes_runtime.standalone.config import child_environment, initialize
+from hermes_runtime.standalone.config import child_environment, dashboard_enabled, initialize
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def status(home):
     value = json.loads(path.read_text())
     value["ok"] = alive(value["owner"]) and set(value["children"]) == set(value["expected"]) and bool(value["children"]) and all(
         alive(c) for c in value["children"].values())
-    if value["ok"]:
+    if value["ok"] and "backend" in value["expected"]:
         try:
             with urlopen(f"http://127.0.0.1:{value['port']}/api/health", timeout=2) as response:
                 value["ok"] = bool(json.load(response).get("ok"))
@@ -172,12 +172,13 @@ def run(home, *, host=None, port=None):
     environment = child_environment(home)
     from hermes_runtime.standalone.service import _argv, _command
     native = _command("hermes_runtime", home=home)
-    import hermes_cli
-    frontend = "dashboard" if (Path(hermes_cli.__file__).parent / "web_dist" / "index.html").is_file() else "serve"
     specs = {
-        "backend": [*native, frontend, "--host", host, "--port", str(port), "--isolated", "--no-open", "--skip-build"],
         "gateway": [*native, "gateway", "run", "--no-supervise", "--external-supervisor"],
     }
+    if dashboard_enabled(config):
+        import hermes_cli
+        frontend = "dashboard" if (Path(hermes_cli.__file__).parent / "web_dist" / "index.html").is_file() else "serve"
+        specs["backend"] = [*native, frontend, "--host", host, "--port", str(port), "--isolated", "--no-open", "--skip-build"]
     if config.get("gmail", {}).get("enabled"):
         specs["gmail"] = _argv(home, sys.executable, "gmail-worker")
     if (config.get("workspace", {}).get("url") or config.get("workspace", {}).get("native") is True

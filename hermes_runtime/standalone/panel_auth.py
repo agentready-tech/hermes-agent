@@ -11,6 +11,8 @@ from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_ope
 class NativeScreenAuth:
     """One profile worker's cookie session; each viewer gets a fresh, single-use WS ticket."""
 
+    gateway_owned = False
+
     def __init__(self, port, legacy_token, *, username=None, password=None):
         self.origin = f"http://127.0.0.1:{int(port)}"
         self.websocket = f"ws://127.0.0.1:{int(port)}/api/ws"
@@ -52,3 +54,13 @@ class NativeScreenAuth:
                     return target + "?" + urlencode({"token": self.legacy_token, **channel})
             ticket = self.request("/api/auth/ws-ticket", {})["ticket"]
             return target + "?" + urlencode({"ticket": ticket, **channel})
+
+    def rpc_connection(self, events=False):
+        return self.rpc_url(events), {}
+
+    def display_url(self, ticket):
+        return self.origin.replace("http:", "ws:") + "/api/display/ws?" + urlencode({"display_ticket": ticket})
+
+    def authenticated_request(self, path, payload=None, *, method=None):
+        self.rpc_url()
+        return self.request(path, payload, method=method)

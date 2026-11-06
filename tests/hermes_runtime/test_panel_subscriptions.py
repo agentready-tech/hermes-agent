@@ -20,6 +20,15 @@ def service(tmp_path, monkeypatch):
     calls = []
 
     class Auth:
+        gateway_owned = False
+
+        def rpc_connection(self):
+            return self.rpc_url(), {}
+
+        def authenticated_request(self, path, payload=None, method=None):
+            self.rpc_url()
+            return self.request(path, payload, method)
+
         def rpc_url(self):
             return "ws://127.0.0.1:9/api/ws"
 
@@ -64,11 +73,13 @@ def test_login_is_native_scoped_cancellable_and_never_leaks_credentials(service)
     assert value.models("openai") == {"models": [{"id": "model-live", "label": "model-live"}]}
 
 
-def test_subscription_switch_and_return_use_native_home_without_a_prompt(service):
+@pytest.mark.parametrize("gateway_owned", [False, True])
+def test_subscription_switch_and_return_use_native_home_without_a_prompt(service, gateway_owned):
     async def exercise():
         from websockets.asyncio.server import serve
         value, config, _ = service
         before = copy.deepcopy(config)
+        value.auth.gateway_owned = gateway_owned
         received = []
 
         async def native(socket):
@@ -93,6 +104,8 @@ def test_subscription_switch_and_return_use_native_home_without_a_prompt(service
         assert {row["method"] for row in received} == {"session.resume", "config.set"}
         assert all(row["params"]["session_id"] in {"agentready_home", "native-home"} for row in received)
         assert received[-1]["params"]["value"] == "managed-model --provider custom"
+        resumes = [row['params'] for row in received if row['method'] == 'session.resume']
+        assert all(('source' not in params and 'close_on_disconnect' not in params) == gateway_owned for params in resumes)
 
     asyncio.run(exercise())
 

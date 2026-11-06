@@ -103,27 +103,29 @@ async def bridge(command, config, port, credential, auth, subscriptions=None):
         return
     if kind == "chat":
         from hermes_runtime.standalone.panel_chat import gateway_chat_available, bridge_chat
-        if gateway_chat_available():
+        if auth.gateway_owned or gateway_chat_available():
             remote_url = socket_url(config["url"], config["environment_id"], "reverse", urlencode({"id": identity}))
             await bridge_chat(remote_url, credential, {"max_size": 32 * 1024 * 1024,
                 "open_timeout": 15, "close_timeout": 5, "proxy": None})
             return
+    native_options = {}
     if kind in {"rpc", "chat"}:
-        target = await asyncio.to_thread(auth.rpc_url)
+        target, native_options = await asyncio.to_thread(auth.rpc_connection)
     else:
         ticket = command.get("ticket")
         if not isinstance(ticket, str) or len(ticket) > 4096:
             raise ValueError("Invalid native display ticket")
-        target = f"ws://127.0.0.1:{port}/api/display/ws?" + urlencode({"display_ticket": ticket})
+        target = await asyncio.to_thread(auth.display_url, ticket)
     remote_url = socket_url(config["url"], config["environment_id"], "reverse", urlencode({"id": identity}))
     options = {"max_size": (32 if kind == "chat" else 4) * 1024 * 1024, "open_timeout": 15, "close_timeout": 5, "proxy": None}
-    async with connect(target, **options) as native, connect(remote_url,
+    async with connect(target, **options, **native_options) as native, connect(remote_url,
             additional_headers={"Authorization": f"Bearer {credential}"}, **options) as remote:
         events = None
         if kind == "chat":
             # Panel authorizes and filters chat RPCs; Hermes keeps its existing chat backend.
             with suppress(OSError, WebSocketException, TimeoutError):
-                events = await connect(await asyncio.to_thread(auth.rpc_url, True), **options)
+                event_url, event_options = await asyncio.to_thread(auth.rpc_connection, True)
+                events = await connect(event_url, **options, **event_options)
         async def pump(source, destination, inbound):
             try:
                 async for frame in source:
@@ -209,20 +211,25 @@ async def connection(config, port, credential, auth, subscriptions=None):
 async def worker(home):
     from websockets.exceptions import WebSocketException
     from agent.secret_scope import get_secret
-    from hermes_runtime.standalone.config import settings
+    from hermes_runtime.standalone.config import dashboard_enabled, settings
     from hermes_runtime.standalone.computer import start_desktop
     from hermes_runtime.standalone.panel_auth import NativeScreenAuth
     config = settings(home)
     panel = config.get("panel", {})
     credential = get_secret("HERMES_PANEL_CREDENTIAL") or ""
     dashboard_token = get_secret("HERMES_DASHBOARD_SESSION_TOKEN") or ""
-    if not panel.get("url") or not credential or not dashboard_token:
+    with_dashboard = dashboard_enabled(config)
+    if not panel.get("url") or not credential or (with_dashboard and not dashboard_token):
         raise ValueError("Panel connection is not registered for this Hermes home")
     if config.get("computer", {}).get("enabled"):
         await asyncio.to_thread(start_desktop)
-    auth = NativeScreenAuth(config["port"], dashboard_token,
-        username=get_secret("HERMES_DASHBOARD_BASIC_AUTH_USERNAME"),
-        password=get_secret("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"))
+    if with_dashboard:
+        auth = NativeScreenAuth(config["port"], dashboard_token,
+            username=get_secret("HERMES_DASHBOARD_BASIC_AUTH_USERNAME"),
+            password=get_secret("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"))
+    else:
+        from hermes_runtime.standalone.panel_gateway_auth import GatewayPanelAuth
+        auth = GatewayPanelAuth(home)
     from hermes_runtime.standalone.panel_subscriptions import Subscriptions
     subscriptions = Subscriptions(home, auth)
     delay = 1
