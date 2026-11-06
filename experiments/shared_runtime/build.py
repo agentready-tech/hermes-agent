@@ -39,6 +39,9 @@ def main():
     docker_config.mkdir(mode=0o700)
     plugins = Path('/Applications/Docker.app/Contents/Resources/cli-plugins')
     config = {'cliPluginsExtraDirs': [str(plugins)]} if plugins.is_dir() else {}
+    # An entirely empty auth map makes Docker auto-detect the macOS helper.
+    # An explicit anonymous public-registry entry keeps this build independent.
+    config['auths'] = {'https://index.docker.io/v1/': {}}
     (docker_config / 'config.json').write_text(json.dumps(config))
     build_env = {key: os.environ[key] for key in ('PATH', 'HOME', 'LANG', 'TZ') if key in os.environ}
     build_env.update(DOCKER_HOST=endpoint, DOCKER_CONFIG=str(docker_config))
