@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -28,6 +29,19 @@ def main():
     if not args.version.startswith('2026.11.6.prototype.') or not args.version.rsplit('.', 1)[-1].isdigit():
         raise ValueError('A versioned local prototype tag is required')
     args.output.mkdir(parents=True, exist_ok=False)
+    endpoint = subprocess.check_output(['docker', 'context', 'inspect', '--format',
+        '{{.Endpoints.docker.Host}}'], text=True, timeout=30).strip()
+    if not endpoint.startswith('unix://'):
+        raise ValueError('The prototype may use only the local Docker engine')
+    # Public dependencies need no registry account. Keep the user's locked
+    # macOS keychain and existing Docker credentials outside this build.
+    docker_config = args.output / 'docker-config'
+    docker_config.mkdir(mode=0o700)
+    plugins = Path('/Applications/Docker.app/Contents/Resources/cli-plugins')
+    config = {'cliPluginsExtraDirs': [str(plugins)]} if plugins.is_dir() else {}
+    (docker_config / 'config.json').write_text(json.dumps(config))
+    build_env = {key: os.environ[key] for key in ('PATH', 'HOME', 'LANG', 'TZ') if key in os.environ}
+    build_env.update(DOCKER_HOST=endpoint, DOCKER_CONFIG=str(docker_config))
     source = args.output / 'source'
     source.mkdir()
 
@@ -56,7 +70,8 @@ def main():
         status(phase)
         with (args.output / log).open('wb') as stream:
             try:
-                result = subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, timeout=5400, check=False)
+                result = subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT,
+                                        env=build_env, timeout=5400, check=False)
             except subprocess.TimeoutExpired:
                 status('failed', lastPhase=phase, log=log, error='build_timeout')
                 raise
@@ -71,7 +86,7 @@ def main():
         '--build-arg', 'SOURCE_REVISION=' + revision, '--build-arg', 'PROTOTYPE_VERSION=' + args.version,
         '--tag', image, str(source)], 'image.log')
     identity = subprocess.check_output(['docker', 'image', 'inspect', '--format', '{{.Id}}', image],
-                                       text=True, timeout=30).strip()
+                                       env=build_env, text=True, timeout=30).strip()
     status('image_built', image=image, imageId=identity, architecture='linux/arm64',
            sourceArchiveSha256=hashlib.sha256((args.output / 'source.tar').read_bytes()).hexdigest(),
            committedSourceVerified=True, githubPushDeferred=True, benchmarkComplete=False)
