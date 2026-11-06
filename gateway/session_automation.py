@@ -126,8 +126,9 @@ def snapshot_automation(authority, adapter, event, identity):
     # Admissions belong to the logical root; ``entry.session_id`` is only the transcript tip.
     owner = authority.logical_owner(entry.session_id)
     prior = list_session_admissions(authority.db, session_id=owner, pending_only=False)
-    envelope = next((r['payload']['native_text_v1'] for r in reversed(prior)
-                     if 'native_text_v1' in r['payload']), None)
+    from gateway.session_operator import native_origin
+    envelope = next((proof['native_text_v1'] for r in reversed(prior)
+                     if (proof := native_origin(r['payload'])) is not None), None)
     if envelope is None or 'provenance' not in envelope:
         raise RuntimeStoreError('not_found')
     # Persisted origins deliberately omit relay trust. Borrow only an exact
