@@ -23,6 +23,8 @@ not just the assistant's claims. Pushing code, starting a process or asking a te
 completion of an outcome that also requires verification. If a wakeup might already exist,
 ask the assistant to inspect/reuse it before creating another. Never repeat an external action
 whose outcome is unknown: the next step must first establish its actual outcome.
+Native tool_continuations evidence overrides receipt prose about future events. A not_started
+call has not performed its work; only a confirmed return_path establishes automatic continuation.
 Continue when an external result is ready but has not been processed, or when the assistant
 is blocked but its candidate answer neither explains the obstacle nor asks the necessary question.
 IMPORTANT: evaluate whether THIS candidate_response may be delivered as the final answer.
@@ -184,8 +186,11 @@ def build_continuation_nudge(
         if not request or not final_response.strip():
             return None
 
+        from agent.tool_continuation import continuation_evidence
+
         payload = {"request": request, "recent_messages": _recent_messages(messages),
-                   "candidate_response": _text(final_response, 4000)}
+                   "candidate_response": _text(final_response, 4000),
+                   "tool_continuations": continuation_evidence(agent)}
         action = _next_action(settings, payload)
         if not action:
             return None

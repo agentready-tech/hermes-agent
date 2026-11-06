@@ -147,6 +147,19 @@ for each tool_call in response.tool_calls:
     6. Append {"role": "tool", "content": result} to history
 ```
 
+### Managed tool continuations
+
+In the managed home session, `not_started` means the call performed no work. Its
+reason distinguishes incoming input, a busy resource, and an earlier deferred call.
+The receipt itself never registers a wakeup. Before allowing a stop, the native
+gate checks the owning conversation's operation and durable inbox. A live deferred
+operation or an undelivered completion event can establish a return path.
+Without that evidence, the model gets one reassessment of the batch under the
+latest user instructions, bounded by `agent.continuation_guard.max_continuations`.
+If it makes no progress or exhausts the limit, the final answer includes an explicit
+incomplete-work notice. This check also applies when the optional semantic judge
+is disabled or unavailable, and never retries an uncertain external action itself.
+
 ### Agent-Level Tools
 
 Some tools are intercepted by `agent/tool_executor.py` (called from `agent/conversation_loop.py`) *before* reaching `handle_function_call()`:

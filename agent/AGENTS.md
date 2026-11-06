@@ -57,6 +57,9 @@ event-driven return of control. `tool_concurrent_batch.py` owns concurrent worke
 `tool_resource_cleanup.py` preserves resources used by deferred operations. A background worker
 never appends parent conversation rows; its result enters the durable home inbox. Keep native
 middleware, approvals, per-call occurrence identities and segment barriers intact.
+`tool_continuation.py` checks native receipts against the owning operation and durable inbox
+before stop. `not_started` is unexecuted work, not a wakeup subscription; re-evaluate it under
+the latest user input. An uncertain operation must never be retried automatically.
 
 ## Message-flow invariants (every change is reviewed against these)
 
