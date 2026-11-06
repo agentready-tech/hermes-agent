@@ -1,0 +1,32 @@
+name: Recover AgentSee release metadata
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  metadata:
+    if: github.repository == 'agentready-tech/hermes-agent'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Read only package and immutable release metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -m 700 "$RUNNER_TEMP/release-metadata"
+          gh api orgs/agentready-tech/packages/container/hermes-agent --jq '{name,visibility,package_type,repositoryFullName:.repository.full_name,repositoryId:.repository.id}' > "$RUNNER_TEMP/release-metadata/package.json"
+          gh api repos/agentready-tech/hermes-agent --jq '{id,full_name,private}' > "$RUNNER_TEMP/release-metadata/repository.json"
+          gh api --paginate orgs/agentready-tech/packages/container/hermes-agent/versions --jq '.[] | select(.metadata.container.tags | index("2026.11.6.1")) | {id,name,tags:.metadata.container.tags}' > "$RUNNER_TEMP/release-metadata/version.json"
+      - name: Save safe package metadata
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-metadata-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-metadata/*.json
+          retention-days: 7
+          if-no-files-found: error
