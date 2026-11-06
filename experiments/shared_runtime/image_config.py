@@ -6,12 +6,13 @@ from pathlib import Path
 from experiments.shared_runtime.model_peer import NAMES
 
 
-def initialize(root, url, sandboxes, image):
+def initialize(root, url, sandboxes, image, *, standalone=False):
     root.mkdir(parents=True, exist_ok=True)
     for name, home in [('control', root), *[(n, root / 'profiles' / n) for n in NAMES]]:
         home.mkdir(parents=True, exist_ok=True)
         (home / 'workspace').mkdir(exist_ok=True)
-        config = {'_config_version': 12, 'gateway': {'multiplex_profiles': name == 'control'},
+        gateway = {'multiplex_profiles': True} if name == 'control' else ({'standalone': True} if standalone else {})
+        config = {'_config_version': 12, 'gateway': gateway,
                   'model': {'provider': 'custom', 'default': 'fixture-' + name, 'base_url': url,
                             'key_env': 'OPENAI_API_KEY', 'context_length': 131072},
                   'auxiliary': {'title_generation': {'enabled': False}},

@@ -155,7 +155,8 @@ def main():
                 event.clear()
             server.roster.clear()
             server.foreign_refused.clear()
-            initialize(root, f'http://127.0.0.1:{server.server_port}/v1', plan['sandboxes'], plan['image'])
+            initialize(root, f'http://127.0.0.1:{server.server_port}/v1', plan['sandboxes'], plan['image'],
+                       standalone=mode == 'separate')
             trialdir = output / f'trial-{index}-{mode}'
             trialdir.mkdir()
             workers = Workers(root, mode, trialdir).start()
