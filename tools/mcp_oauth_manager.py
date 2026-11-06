@@ -111,6 +111,7 @@ class HermesMCPOAuthProvider(HermesProviderMixin, *_SDK_BASES):
             build_protected_resource_metadata_discovery_urls, create_oauth_metadata_request,
             handle_auth_metadata_response, handle_protected_resource_response)
         from tools.mcp_oauth_provider import stamp_default_user_agent
+        from tools.environments.network_transport import http_transport
         server_url = self.context.server_url
 
         async def _send(client, url: str, label: str):
@@ -119,7 +120,8 @@ class HermesMCPOAuthProvider(HermesProviderMixin, *_SDK_BASES):
             except httpx.HTTPError as exc:
                 logger.debug("MCP OAuth '%s': %s discovery to %s failed: %s", self._hermes_server_name, label, url, exc)
                 return None
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        # HTTPX environment proxy mounts would bypass the sandbox transport.
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False, transport=http_transport(httpx)) as client:
             # PRM discovery to learn the authorization_server URL.
             for url in build_protected_resource_metadata_discovery_urls(None, server_url):
                 resp = await _send(client, url, "PRM")

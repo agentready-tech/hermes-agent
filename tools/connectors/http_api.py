@@ -107,14 +107,7 @@ def execute(spec, name, arguments, headers):
     url, body = request_parts(spec, operation, arguments)
     request = Request(url, data=body, method=operation["method"],
                       headers={"Accept": "application/json", "Content-Type": "application/json", **headers})
-    opener = build_opener(NoRedirect())
-    try:
-        response = opener.open(request, timeout=30)
-    except HTTPError as error:
-        response = error
-    with response:
-        status = response.code
-        data = response.read(MAX_RESPONSE + 1)
+    status, data = response_data(request)
     if len(data) > MAX_RESPONSE:
         raise ValueError("API response exceeded the size limit")
     # Do not expose a provider's reflected authorization, including JSON-escaped values.
@@ -128,3 +121,33 @@ def execute(spec, name, arguments, headers):
     except ValueError:
         result = {"text": text}
     return {"status": status, "data": result}
+
+
+def response_data(request):
+    """Bounded HTTP I/O follows the existing terminal backend, including its egress."""
+    from tools.environments.network_transport import SandboxTransportUnavailable, http_transport, sandbox_environment
+    try:
+        environment = sandbox_environment()
+    except SandboxTransportUnavailable:
+        raise OSError("API connection cannot use its configured sandbox") from None
+    if environment is None:
+        opener = build_opener(NoRedirect())
+        try:
+            response = opener.open(request, timeout=30)
+        except HTTPError as error:
+            response = error
+        with response:
+            return response.code, response.read(MAX_RESPONSE + 1)
+    import httpx
+    try:
+        with httpx.Client(transport=http_transport(httpx, async_mode=False), trust_env=False,
+                          follow_redirects=False, timeout=30) as client:
+            with client.stream(request.method, request.full_url, content=request.data, headers=dict(request.header_items())) as response:
+                data = bytearray()
+                for chunk in response.iter_bytes():
+                    data.extend(chunk[:MAX_RESPONSE + 1 - len(data)])
+                    if len(data) > MAX_RESPONSE:
+                        break
+                return response.status_code, bytes(data)
+    except (httpx.HTTPError, SandboxTransportUnavailable):
+        raise OSError("API connection failed inside its configured sandbox") from None

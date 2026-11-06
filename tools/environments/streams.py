@@ -130,30 +130,41 @@ def run_in(env: BaseEnvironment, argv: Sequence[str], *, child_env: Optional[dic
 # the Bot Screen's RFB relay uses, so it works on every backend that can exec.
 
 _TCP_RELAY = (
-    "import os,socket,sys,threading\n"
+    "import os,socket,sys,threading,time\n"
     "s=socket.create_connection((sys.argv[1],int(sys.argv[2])))\n"
+    "grace=float(sys.argv[3]) if len(sys.argv)>3 else None\n"
+    "def finish():\n"
+    "  time.sleep(grace)\n"
+    "  try: s.shutdown(socket.SHUT_RDWR)\n"
+    "  except OSError: pass\n"
     "def up():\n"
     "  while True:\n"
     "    d=os.read(0,65536)\n"
     "    if not d: break\n"
     "    s.sendall(d)\n"
-    "  s.shutdown(socket.SHUT_WR)\n"
+    "  try: s.shutdown(socket.SHUT_WR)\n"
+    "  except OSError: return\n"
+    "  if grace is not None: threading.Thread(target=finish,daemon=True).start()\n"
     "threading.Thread(target=up,daemon=True).start()\n"
-    "while True:\n"
-    "  d=s.recv(65536)\n"
-    "  if not d: break\n"
-    "  os.write(1,d)\n"
+    "try:\n"
+    "  while True:\n"
+    "    d=s.recv(65536)\n"
+    "    if not d: break\n"
+    "    os.write(1,d)\n"
+    "except OSError: pass\n"
+    "finally: s.close()\n"
 )
 
-_forwards: dict[tuple[int, str, int], PortForward] = {}
+_forwards: dict[tuple[int, str, int, Optional[float]], PortForward] = {}
 _forwards_lock = threading.Lock()
 
 
 class PortForward:
     """Local ``127.0.0.1:<local_port>`` whose connections land on ``remote_host:remote_port`` inside ``env``."""
 
-    def __init__(self, env: BaseEnvironment, remote_host: str, remote_port: int, *, user: Optional[str]):
+    def __init__(self, env: BaseEnvironment, remote_host: str, remote_port: int, *, user: Optional[str], close_grace: Optional[float] = None):
         self.env, self.remote_host, self.remote_port, self.user = env, remote_host, remote_port, user
+        self.close_grace = close_grace
         self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server.bind(("127.0.0.1", 0))
@@ -172,8 +183,10 @@ class PortForward:
 
     def _serve(self, conn: socket.socket) -> None:
         try:
-            proc = open_stream(self.env, ["python3", "-c", _TCP_RELAY, self.remote_host, str(self.remote_port)],
-                               user=self.user)
+            argv = ["python3", "-c", _TCP_RELAY, self.remote_host, str(self.remote_port)]
+            if self.close_grace is not None:
+                argv.append(str(self.close_grace))
+            proc = open_stream(self.env, argv, user=self.user)
         except Exception:
             conn.close()
             return
@@ -218,12 +231,13 @@ class PortForward:
 
 
 def forward_port(env: BaseEnvironment, remote_port: int, *, remote_host: str = "127.0.0.1",
-                 user: Optional[str] = None) -> int:
+                 user: Optional[str] = None, close_grace: Optional[float] = None) -> int:
     """Local port on 127.0.0.1 that reaches ``remote_host:remote_port`` inside ``env``; one listener per
     (env, host, port) is kept for the process lifetime (daemon threads, nothing to clean up)."""
-    key = (id(env), remote_host, int(remote_port))
+    # HTTP closes own idle streams; long-lived desktop relays retain TCP half-close semantics.
+    key = (id(env), remote_host, int(remote_port), close_grace)
     with _forwards_lock:
         fwd = _forwards.get(key)
         if fwd is None or fwd._closed:
-            fwd = _forwards[key] = PortForward(env, remote_host, int(remote_port), user=user)
+            fwd = _forwards[key] = PortForward(env, remote_host, int(remote_port), user=user, close_grace=close_grace)
     return fwd.local_port

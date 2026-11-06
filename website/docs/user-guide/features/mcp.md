@@ -14,6 +14,14 @@ MCP lets Hermes Agent connect to external tool servers so the agent can use tool
 
 If you have ever wanted Hermes to use a tool that already exists somewhere else, MCP is usually the cleanest way to do it.
 
+MCP follows the active profile's terminal backend. With a remote sandbox, stdio server
+executables and working directories belong inside that sandbox; HTTP, SSE, OAuth and
+custom API connections use its network route too. An unavailable sandbox causes a
+connection error, never a fallback to execution on the Hermes host. With the local
+terminal backend, MCP continues to run locally. Reviewed native credential brokers
+keep the profile's private store beside Hermes and perform external I/O in the sandbox;
+the profile home and vault are never mounted into arbitrary MCP servers.
+
 :::tip Coming from Claude Code?
 The `mcpServers` block in your `~/.claude.json` maps to `mcp_servers` in Hermes' `config.yaml` — and `hermes import-agent claude-code` migrates it (along with skills and instructions) automatically. See [Import from Other Agents](../import-from-other-agents.md).
 :::

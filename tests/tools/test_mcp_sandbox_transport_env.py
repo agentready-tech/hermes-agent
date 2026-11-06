@@ -41,6 +41,8 @@ def test_mcp_env_keeps_active_profile_and_transport_without_secrets_or_global_mu
 
 
 def test_actual_stdio_children_resolve_each_own_sandbox_from_profile_config(tmp_path, monkeypatch):
+    # Isolate the child-environment contract; remote execution has its own SDK fixture.
+    monkeypatch.setattr("tools.mcp_sandbox_stdio.stdio_sandbox", lambda _config: None)
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "wrong-launch-profile"))
     monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "192.0.2.27")
     monkeypatch.setenv("KUBERNETES_SERVICE_PORT", "6443")

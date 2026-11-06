@@ -19,6 +19,7 @@ from tools.mcp_tool_node_abi import node_abi_error
 from tools import mcp_tool_config as _config
 from tools import mcp_tool_lifecycle as _lifecycle
 from tools import mcp_tool_registration as _registration
+from tools.environments.network_transport import http_transport, sandbox_environment, sandbox_identity
 
 logger = logging.getLogger("tools.mcp_tool")
 
@@ -73,7 +74,7 @@ def _mcp_proxy_mounts(httpx_mod, url: str, ssl_verify, client_cert, server_name:
         if not proxy_url:
             continue
         # verify/cert apply to the CONNECT+TLS leg, so the proxy transport needs its own copy.
-        mounts[f"{scheme}://"] = _make_mcp_body_cap_transport(httpx_mod, httpx_mod.AsyncHTTPTransport(
+        mounts[f"{scheme}://"] = _make_mcp_body_cap_transport(httpx_mod, http_transport(httpx_mod,
             proxy=proxy_url, verify=ssl_verify, **_present(cert=client_cert)))
     return mounts or None
 
@@ -124,7 +125,11 @@ def _http_endpoint(server_name: str, config: dict) -> tuple[str, dict]:
 
 def _stdio_launch(config: dict) -> tuple:
     """(command, env, cwd) a stdio child is spawned with, resolved in the current profile's scope."""
-    command, env = _config._resolve_stdio_command(config["command"], _config._build_safe_env(config.get("env")))
+    from tools.mcp_sandbox_stdio import stdio_sandbox
+    env = _config._build_safe_env(config.get("env"))
+    command = config["command"]
+    if stdio_sandbox(config) is None:
+        command, env = _config._resolve_stdio_command(command, env)
     # A stdio child inherits this process's cwd when none is configured. Hosted sessions (ACP,
     # gateway) pin a logical cwd via agent.runtime_cwd; without it the child resolves relative
     # paths against the daemon's launch dir, not the session workspace. Explicit config always
@@ -145,8 +150,13 @@ def _connect_inputs(server_name: str, config: dict) -> tuple[list, set]:
     if "url" in config:
         url, headers = _http_endpoint(server_name, config)
         configured_header_names = {key.lower() for key in headers}
-        return [url, _apply_identity_header(server_name, config, headers)], configured_header_names
-    return list(_stdio_launch(config)), set()
+        inputs = [url, _apply_identity_header(server_name, config, headers)]
+        identity = sandbox_identity(sandbox_environment())
+        return inputs + ([identity] if identity else []), configured_header_names
+    from tools.mcp_sandbox_stdio import stdio_sandbox
+    inputs = list(_stdio_launch(config))
+    identity = sandbox_identity(stdio_sandbox(config))
+    return inputs + ([identity] if identity else []), set()
 
 
 class MCPServerTransportMixin:
@@ -365,9 +375,21 @@ class MCPServerTransportMixin:
         inputs, _ = _connect_inputs(self.name, config)
         # Hash the inputs this attempt spawns with, never a second resolution of them.
         self._resolved_identity = _registration._identity_digest(inputs)
-        command, safe_env, stdio_cwd = inputs
-        # OSV malware preflight, then the cached-npx swap (ordering enforced there).
-        command, args = await _core._preflight_stdio_command(self.name, command, config.get("args", []))
+        command, safe_env, stdio_cwd = inputs[:3]
+        from tools.mcp_sandbox_stdio import custody_arguments, custody_broker, remote_parameters, send_startup, stdio_sandbox
+        sandbox = stdio_sandbox(config)
+        # The malware guard always runs; cached host executables cannot run in a sandbox.
+        if sandbox is None:
+            command, args = await _core._preflight_stdio_command(self.name, command, config.get("args", []))
+        else:
+            command, args = await _core._preflight_stdio_command(self.name, command, config.get("args", []), cache_commands=False)
+        startup = None
+        if custody_broker(config):
+            # The custody exception must load installed code, ignoring Python env/cwd injection.
+            args = custody_arguments(config)
+        if sandbox is not None:
+            remote_argv, safe_env, startup = remote_parameters(sandbox, {**config, "command": command, "args": args}, safe_env)
+            command, args, stdio_cwd = remote_argv[0], remote_argv[1:], None
         server_params = _core.StdioServerParameters(
             command=command, args=args, env=safe_env or None, cwd=stdio_cwd,
             # Windows pipes can split non-UTF-8 bytes at chunk boundaries; substitute, don't raise.
@@ -401,6 +423,8 @@ class MCPServerTransportMixin:
         stderr = _config._StderrTee(_config._get_mcp_stderr_log())
         try:
             async with _core.stdio_client(server_params, errlog=stderr.sink) as (read_stream, write_stream):
+                if startup is not None:
+                    await send_startup(write_stream, startup)
                 # New PIDs for force-kill cleanup, minus non-MCP children (slash_worker, LSP) racing
                 # into the window: they share the TUI's pgid — leaking them would killpg() the TUI.
                 new_pids = _filter_mcp_children(_lifecycle._snapshot_child_pids() - pids_before)
@@ -449,13 +473,13 @@ class MCPServerTransportMixin:
         # Same redirect boundary as the transport client too: httpx strips Authorization on a
         # cross-origin hop natively, but forwards every other configured header verbatim — under
         # strict_redirect_headers those must not leave the configured origin on the probe either.
-        probe_transport = _httpx.AsyncHTTPTransport(verify=ssl_verify, **_present(cert=client_cert))
+        probe_transport = http_transport(_httpx, verify=ssl_verify, **_present(cert=client_cert))
         _build_client = _make_redirect_header_stripper(
             _httpx, _httpx.URL(url), strict=strict_redirect_headers,
             configured_header_names={key.lower() for key in probe_headers})
         try:
             async with _build_client(
-                    follow_redirects=True, timeout=_httpx.Timeout(timeout), transport=probe_transport,
+                    follow_redirects=True, trust_env=False, timeout=_httpx.Timeout(timeout), transport=probe_transport,
                     **_present(mounts=_mcp_proxy_mounts(_httpx, url, ssl_verify, client_cert, self.name))) as client:
                 resp = await client.head(url, headers=probe_headers)  # cheapest; GET on 405/501
                 if resp.status_code in (405, 501):
@@ -538,9 +562,9 @@ class MCPServerTransportMixin:
         # would otherwise suppress. Client MUST come from the SDK's httpx (httpx2 on mcp >= 2.0).
         _httpx_mod = _core.sdk_httpx()
         def _sse_client_factory(headers=None, timeout=None, auth=None):
-            inner_transport = _httpx_mod.AsyncHTTPTransport(verify=ssl_verify, **_present(cert=client_cert))
+            inner_transport = http_transport(_httpx_mod, verify=ssl_verify, **_present(cert=client_cert))
             return _httpx_mod.AsyncClient(
-                follow_redirects=True,
+                follow_redirects=True, trust_env=False,
                 timeout=timeout if timeout is not None else _httpx_mod.Timeout(30.0, read=300.0),
                 transport=_make_mcp_body_cap_transport(_httpx_mod, inner_transport),
                 **_present(mounts=_mcp_proxy_mounts(_httpx_mod, url, ssl_verify, client_cert, self.name),
@@ -554,6 +578,8 @@ class MCPServerTransportMixin:
         """Streamable HTTP context manager: mcp >= 1.24.0 gets a caller-owned httpx client; on the
         deprecated API (mcp < 1.24.0) the SDK owns the client."""
         if not _core._MCP_NEW_HTTP:
+            if sandbox_environment() is not None:
+                raise ImportError("Sandbox HTTP MCP requires a current MCP SDK with an owned HTTP transport")
             if strict_cfg_headers:  # fail closed: without an owned client redirects can't be hooked
                 raise ImportError(f"MCP server '{self.name}' requires mcp >= 1.24.0 to "
                                   "enforce the portable redirect-header boundary "
@@ -567,8 +593,8 @@ class MCPServerTransportMixin:
             httpx, httpx.URL(url), strict=strict_cfg_headers, configured_header_names=configured_header_names)
         # verify/cert live on the inner transport: a custom transport= makes client-level TLS kwargs
         # inert — and suppresses httpx's own proxy auto-detection, hence the explicit mounts=.
-        inner_transport = httpx.AsyncHTTPTransport(verify=ssl_verify, **_present(cert=client_cert))
-        client_kwargs: dict = {"follow_redirects": True, "timeout": httpx.Timeout(float(connect_timeout), read=300.0),
+        inner_transport = http_transport(httpx, verify=ssl_verify, **_present(cert=client_cert))
+        client_kwargs: dict = {"follow_redirects": True, "trust_env": False, "timeout": httpx.Timeout(float(connect_timeout), read=300.0),
                                **({"headers": headers} if headers else {}),
                                "event_hooks": {"response": [_make_http_rejection_recorder(self._http_rejection)]},
                                "transport": _make_mcp_body_cap_transport(httpx, inner_transport),
@@ -595,7 +621,7 @@ class MCPServerTransportMixin:
         # Hash the endpoint this attempt connects to: a second read of the runtime file could
         # publish another endpoint's identity alongside this session.
         self._resolved_identity = _registration._identity_digest(inputs)
-        url, headers = inputs
+        url, headers = inputs[:2]
         logger.debug("MCP server '%s': connecting to %s", self.name, url)
         self._http_rejection = {}  # last 4xx/5xx the owned client saw this attempt (recorder hook)
         # Seed MCP-Protocol-Version (user override wins) from the HANDSHAKE version, not the latest: a

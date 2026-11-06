@@ -264,6 +264,14 @@ def _query_osv(package: str, ecosystem: str, version: Optional[str] = None) -> l
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json", "User-Agent": "hermes-agent-osv-check/1.0"},
         method="POST")
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        result = json.loads(resp.read())
+    from tools.environments.network_transport import http_transport, sandbox_environment
+    if sandbox_environment() is None:
+        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+            result = json.loads(resp.read())
+    else:
+        import httpx
+        with httpx.Client(transport=http_transport(httpx, async_mode=False), trust_env=False, timeout=_TIMEOUT) as client:
+            response = client.post(_OSV_ENDPOINT, content=req.data, headers=dict(req.header_items()))
+            response.raise_for_status()
+            result = response.json()
     return [v for v in result.get("vulns", []) if v.get("id", "").startswith("MAL-")]

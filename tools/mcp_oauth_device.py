@@ -207,6 +207,7 @@ async def login_device(name, server_url, oauth_config):
     from tools.mcp_oauth_manager import HermesMCPOAuthProvider, get_manager
     from tools.mcp_oauth_provider import prepare_oauth_config
     from tools.mcp_tool import sdk_httpx
+    from tools.environments.network_transport import http_transport
 
     cfg, storage = prepare_oauth_config(name, server_url, oauth_config)
     # Device flow never binds a callback socket or uses the hosted browser CIMD.
@@ -216,7 +217,9 @@ async def login_device(name, server_url, oauth_config):
                                      token_user_agent=cfg.get("user_agent"))
     httpx = sdk_httpx()
     try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+        # HTTPX environment proxy mounts would bypass the sandbox transport.
+        async with httpx.AsyncClient(timeout=10, follow_redirects=False, trust_env=False,
+                                     transport=http_transport(httpx)) as client:
             await _discover(client, provider)
             await _register(client, provider, cfg)
             tokens = await _authorize(client, provider, cfg)

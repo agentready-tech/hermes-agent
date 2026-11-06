@@ -36,7 +36,7 @@ from tools.mcp_tool_health import MCPServerHealthMixin
 _OSV_MALWARE_CHECK_TIMEOUT_S = 12.0
 
 
-async def _preflight_stdio_command(server_name: str, command: str, args: list) -> tuple[str, list]:
+async def _preflight_stdio_command(server_name: str, command: str, args: list, *, cache_commands: bool = True) -> tuple[str, list]:
     """OSV malware preflight (off-loop, wall-clock bound, fail-open on timeout), THEN the
     cached-npx swap. The preflight must see the REAL command/args: anything that rewrites argv to a
     wrapper or resolved binary has to happen after it, or the check silently inspects the wrapper
@@ -56,7 +56,7 @@ async def _preflight_stdio_command(server_name: str, command: str, args: list) -
     # npx resolves the package and then FORKS, staying resident as the real server's parent for
     # nothing (~48 MB per server, measured). Hermes already supervises the child (shared death
     # supervisor), so a cached package is spawned directly; a cache miss leaves npx untouched.
-    if os.path.basename(command).lower().startswith("npx"):
+    if cache_commands and os.path.basename(command).lower().startswith("npx"):
         # A sealed Windows payload's own npx cannot start its node through cmd.exe.
         packaged = await asyncio.to_thread(_packaged_npx_entry, command, args)
         if packaged:
