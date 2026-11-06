@@ -20,6 +20,7 @@ def _origin():
 
 
 def _dispatch_origin(parent, background):
+    from tools.delegate_tool_dispatch import _resolve_async_session_key
     origin = _origin()
     from tools.delegate_tool_dispatch import _resolve_async_session_key
     # Capture the owning route before child construction changes the task-local session id.
@@ -32,6 +33,10 @@ def _dispatch_origin(parent, background):
         # The captured history-consumer flag alone does not describe push delivery.
         capable = _resolve_async_wake_sid(origin.get("origin_session_id", ""), origin.get("wake", False))
         origin = {**origin, "wake": bool(background and capable is not None)}
+    # A push channel's API wake id is empty. Persist its actual gateway route,
+    # just as ephemeral delegates do, before a child or recovery worker rebinds context.
+    route, ui = _resolve_async_session_key(parent, origin.get("origin_ui_session_id", ""))
+    origin = {**origin, "session_key": route, "origin_ui_session_id": ui}
     if getattr(parent, "_delegate_depth", 0) > 0:
         origin = {**origin, "wake": False}
     if not origin.get("wake"):

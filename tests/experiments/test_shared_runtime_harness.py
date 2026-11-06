@@ -50,3 +50,21 @@ def test_generated_profiles_resolve_the_actual_sandbox_image(tmp_path, monkeypat
     for name in ('alpha', 'bravo'):
         with _profile_runtime_scope(root / 'profiles' / name):
             assert terminal_env('TERMINAL_DOCKER_IMAGE') == image
+
+
+def test_paid_profiles_native_resolver_keeps_real_route_and_bounded_output(tmp_path, monkeypatch):
+    from experiments.shared_runtime.paid_probe import configure
+    from gateway.run import _profile_runtime_scope, _resolve_runtime_agent_kwargs
+    from hermes_cli.config import load_config_readonly
+    root = tmp_path / '.hermes'
+    monkeypatch.setenv('HERMES_HOME', str(root))
+    configure(root, 'sk-or-only-a-test-fixture', 'fixture/paid-model')
+    for name in ('alpha', 'bravo'):
+        with _profile_runtime_scope(root / 'profiles' / name):
+            runtime = _resolve_runtime_agent_kwargs()
+            assert runtime['base_url'] == 'https://openrouter.ai/api/v1'
+            assert runtime['api_key'] == 'sk-or-only-a-test-fixture'
+            assert runtime['request_overrides']['extra_body']['max_tokens'] == 128
+            config = load_config_readonly()
+            assert config['agent']['api_max_retries'] == 1
+            assert config['platform_toolsets']['telegram'] == []
