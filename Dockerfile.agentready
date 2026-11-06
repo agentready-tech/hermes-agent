@@ -1,47 +1,31 @@
-# Local verification of the fork against the reviewed upstream runtime.
-# AgentReady's release Dockerfile fetches this same source by immutable commit.
-ARG HERMES_BASE_IMAGE=nousresearch/hermes-agent:v0.22.2
-FROM ${HERMES_BASE_IMAGE}
+# Extend only the native source image built from the same commit in agentsee-release.yml.
+ARG HERMES_SOURCE_IMAGE
+FROM registry.k8s.io/kubectl:v1.35.8@sha256:1ec2791a3ddd245559e18a887f2dcd25cdfee7a649c5b73ca2715e3d7f6bf6f8 AS kubectl
+FROM docker:28.5.1-dind@sha256:ea9d20492ca1caaaba78e68453433895d256173c79281756e88b745647fcbcfd AS init
+FROM ${HERMES_SOURCE_IMAGE}
 ARG HERMES_GIT_SHA
-LABEL org.opencontainers.image.source="https://github.com/agentready-tech/hermes-agent" \
-    org.opencontainers.image.revision="${HERMES_GIT_SHA}" \
-    io.agentsee.runtime.capabilities="auxiliary-gateway-v1,workspace-inbox-v1"
+ARG AGENTSEE_RELEASE_VERSION
 USER root
 WORKDIR /opt/hermes
-# Native modules move between releases; overlay the complete source snapshot.
-COPY --link --chmod=a+rX,go-w . /opt/hermes/
-# These scripts are intentionally non-executable in Git; native Docker builds
-# install their executable copies after the source copy as well.
-COPY --chmod=0755 docker/entrypoint-dispatch.sh /opt/hermes/docker/entrypoint-dispatch.sh
-COPY --chmod=0755 docker/hermes-exec-shim.sh /opt/hermes/bin/hermes
-RUN test -n "${HERMES_GIT_SHA}" && python3 scripts/write_install_stamp.py \
-    --output /opt/hermes/install-stamp.json --commit "${HERMES_GIT_SHA}" \
-    --branch codex/agentready-runtime --source ci --distribution docker --update-mechanism external
-# The base image's immutable provenance must identify this fork too. Retain the
-# native PM runtime pointer when replacing its install stamp.
-RUN python3 - <<'PY'
-import json
-from pathlib import Path
-stamp_path = Path("/opt/hermes/install-stamp.json")
-stamp = json.loads(stamp_path.read_text())
-stamp["pmRuntime"] = "/opt/hermes/pm-runtime"
-stamp_path.write_text(json.dumps(stamp) + "\n")
-marker_path = Path("/etc/hermes/image-provenance.json")
-marker = json.loads(marker_path.read_text())
-marker.update(image="agentready-tech/hermes-agent", revision=stamp["commit"])
-marker_path.write_text(json.dumps(marker) + "\n")
-marker_path.chmod(0o444)
-PY
-# This is a disposable build output. PM requires a fresh destination and owns
-# the pinned dependencies; never carry a previous release's editable environment.
-RUN rm -rf /opt/hermes/.venv && python3 -m pm.build_env --source /opt/hermes \
-    --python /usr/local/bin/python3 --cache /opt/hermes/uv-cache --out /opt/hermes/.venv \
-    --no-install-project --sealed --record-selection \
-    --extra all --extra messaging --extra otlp --extra anthropic --extra bedrock \
-    --extra azure-identity --extra matrix --extra google-chat
-RUN /opt/hermes/.venv/bin/python -m docker.build_agent
-# PM writes private facts by default; image metadata is shared with the
-# unprivileged runtime user. Match the native image's final sealing step.
-RUN chmod 0644 /opt/hermes/tools/facts.json && \
-    rm -f /opt/hermes/.venv/.lock /opt/hermes/pm-runtime/.lock
+RUN /opt/hermes/.venv/bin/python deploy/kubernetes/release_source.py verify /opt/hermes
+COPY --from=kubectl /bin/kubectl /usr/local/bin/kubectl
+COPY --from=init /usr/local/bin/docker-init /usr/local/bin/agentsee-init
+ADD --checksum=sha256:79b8aa8594ca03b44569646cca6a7bd36b22616224d8ad7e6f28d75ad43e3659 https://codeload.github.com/NousResearch/hermes-official-plugins/tar.gz/2da429264671788748f69bca7d5a2216c1885b92 /opt/claude-provider.tar.gz
+RUN mkdir -p plugins/model-providers/claude-subscription-directsdk-experimental \
+    && tar -xzf /opt/claude-provider.tar.gz --strip-components=2 \
+       -C plugins/model-providers/claude-subscription-directsdk-experimental \
+       hermes-official-plugins-2da429264671788748f69bca7d5a2216c1885b92/claude-subscription-directsdk \
+    && rm /opt/claude-provider.tar.gz \
+    && npm install --global --prefix /usr/local --include=optional --ignore-scripts --no-audit --no-fund @anthropic-ai/claude-code@2.1.293 \
+    && node /usr/local/lib/node_modules/@anthropic-ai/claude-code/install.cjs \
+    && claude --version \
+    && /opt/hermes/.venv/bin/python deploy/kubernetes/release_source.py record-plugin /opt/hermes \
+    && /opt/hermes/.venv/bin/python deploy/kubernetes/release_source.py verify /opt/hermes
+RUN /opt/hermes/.venv/bin/python -c 'import json,os; from pathlib import Path; p=Path("/etc/hermes/image-provenance.json"); v=json.loads(p.read_text()); v.update(image="agentready-tech/hermes-agent", revision=os.environ["HERMES_GIT_SHA"], version=os.environ["AGENTSEE_RELEASE_VERSION"]); p.write_text(json.dumps(v)+"\n"); p.chmod(0o444)'
+LABEL org.opencontainers.image.source="https://github.com/agentready-tech/hermes-agent" \
+      org.opencontainers.image.revision="${HERMES_GIT_SHA}" \
+      org.opencontainers.image.version="${AGENTSEE_RELEASE_VERSION}" \
+      io.agentsee.runtime.policy="common" \
+      io.agentsee.runtime.source="clean-git-archive" \
+      io.agentsee.runtime.capabilities="auxiliary-gateway-v1,workspace-inbox-v1,subscriptions-v1,agent-sandbox-v1"
 CMD ["hermes-autonomous", "run", "--host", "0.0.0.0"]

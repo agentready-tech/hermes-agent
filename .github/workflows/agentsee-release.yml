@@ -1,0 +1,63 @@
+name: Publish AgentSee Hermes release
+
+on:
+  push:
+    tags: ['agentsee-v*']
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: agentsee-hermes-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'agentready-tech/hermes-agent'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify release packaging guards
+        run: python3 -m unittest discover -s tests/deploy/kubernetes -p test_release_source.py -v
+      - name: Reserve disk space for a fresh source build
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h /
+      - name: Install registry verification tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends skopeo
+      - name: Build the tagged fork, verify source and publish one common image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 deploy/kubernetes/publish_release.py
+      - name: Save exact published image and release receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: hermes-release-${{ github.ref_name }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/agentsee-hermes-release/hermes-release.oci.tar
+            ${{ runner.temp }}/agentsee-hermes-release/release-proof.json
+            ${{ runner.temp }}/agentsee-hermes-release/source-proof.json
+            ${{ runner.temp }}/agentsee-hermes-release/source/agentsee-source-manifest.json
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+      - name: Save bounded build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: hermes-release-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/agentsee-hermes-release/status.json
+            ${{ runner.temp }}/agentsee-hermes-release/failure.private.log
+            ${{ runner.temp }}/agentsee-hermes-release/native-build.log
+            ${{ runner.temp }}/agentsee-hermes-release/release-build.log
+            ${{ runner.temp }}/agentsee-hermes-release/registry-pull.log
+          retention-days: 3
+          if-no-files-found: ignore
