@@ -43,14 +43,16 @@ class TurnLeaseToken:
     """Held-lease handle from :meth:`SessionTurnLeaseRegistry.acquire`; ``released`` makes
     release idempotent."""
 
-    __slots__ = ("generation", "lease", "owner_key", "released", "session_id")
+    __slots__ = ("generation", "lease", "owner_key", "profile_home", "released", "session_id")
 
-    def __init__(self, session_id: str, owner_key: str, generation: int, lease: "_SessionLease") -> None:
+    def __init__(self, session_id: str, owner_key: str, generation: int, lease: "_SessionLease",
+                 profile_home: str = "") -> None:
         self.session_id, self.owner_key, self.generation = session_id, owner_key, generation
         self.released = False
         # The concrete lease, so release resolves by identity even after a rotation re-aliases
         # ``session_id`` (both ids map to this same lease).
         self.lease = lease
+        self.profile_home = profile_home
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return (f"TurnLeaseToken(session_id={self.session_id!r}, owner_key={self.owner_key!r}, "
@@ -76,10 +78,10 @@ class SessionTurnLeaseRegistry:
     visibility scope as the routing-key guards it extends); call only from the gateway loop."""
 
     def __init__(self, max_entries: int = DEFAULT_MAX_LEASES) -> None:
-        self._leases: dict[str, _SessionLease] = {}
+        self._leases: dict[str | tuple[str, str], _SessionLease] = {}
         self._max_entries = max(1, int(max_entries))
 
-    def _get_or_create(self, session_id: str) -> _SessionLease:
+    def _get_or_create(self, session_id: str | tuple[str, str]) -> _SessionLease:
         if (lease := self._leases.get(session_id)) is None:
             self._evict_idle()
             lease = self._leases[session_id] = _SessionLease()
@@ -96,15 +98,17 @@ class SessionTurnLeaseRegistry:
             self._leases.pop(sid, None)
 
     async def acquire(
-        self, session_id: str, *, owner_key: str, generation: int, timeout: Optional[float] = None
+        self, session_id: str, *, owner_key: str, generation: int, timeout: Optional[float] = None,
+        profile_home: str = "",
     ) -> Optional[TurnLeaseToken]:
         """Acquire the lease for ``session_id``, waiting if held. Raises
         :class:`TurnLeaseTimeoutError` when the wait budget expires; None for a falsy id."""
         if not session_id:
             return None
         wait = float(timeout) if timeout and timeout > 0 else DEFAULT_LEASE_WAIT
-        lease = self._get_or_create(session_id)
-        token = TurnLeaseToken(session_id, owner_key, int(generation), lease=lease)
+        key = (profile_home, session_id) if profile_home else session_id
+        lease = self._get_or_create(key)
+        token = TurnLeaseToken(session_id, owner_key, int(generation), lease=lease, profile_home=profile_home)
         if lease.lock.locked():
             logger.warning(
                 "turn lease contention on session %s: routing key %s (gen %s) waiting behind "
@@ -147,7 +151,8 @@ class SessionTurnLeaseRegistry:
         lease = token.lease
         if lease.holder is not token:
             return False
-        existing = self._leases.get(new_session_id)
+        key = (token.profile_home, new_session_id) if token.profile_home else new_session_id
+        existing = self._leases.get(key)
         if existing is not None and existing is not lease and not existing.idle:
             logger.warning(
                 "turn lease rebind blocked: session %s rotated to %s mid-turn (holder: routing key "
@@ -157,7 +162,7 @@ class SessionTurnLeaseRegistry:
                 token.session_id, new_session_id, token.owner_key, token.generation,
                 *_holder_desc(existing.holder), new_session_id)
             return False
-        self._leases[new_session_id] = lease
+        self._leases[key] = lease
         lease.last_used = time.time()
         token.session_id = new_session_id
         return True

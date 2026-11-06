@@ -6,7 +6,7 @@ from hermes_runtime.events import event_prompt
 from hermes_runtime.sessions import (
     HOME_SESSION_ID,
     HOME_SESSION_TITLE,
-    HOME_SESSION_KEY,
+    home_session_key,
 )
 from hermes_runtime.adapters.turns import forward_to_active_turn
 
@@ -28,13 +28,13 @@ def recover_home(self, recovered, *, session_key, source, now):
         db.reopen_session(target)
         entry = self._create_entry_from_recovered_row(
             row=row,
-            session_key=HOME_SESSION_KEY,
+            session_key=home_session_key(),
             source=source,
             now=now,
         )
         self._record_gateway_session_peer(
             target,
-            HOME_SESSION_KEY,
+            home_session_key(),
             source,
             display_name=HOME_SESSION_TITLE,
         )
@@ -82,7 +82,7 @@ async def admit_busy_event(self, event, session_key):
     owner cannot take this event now: preserve it in native admission/queue.
     """
     from hermes_runtime.adapters.hermes import enabled
-    if not enabled() or session_key != HOME_SESSION_KEY:
+    if not enabled() or session_key != home_session_key():
         return None
     from hermes_cli.commands import resolve_command
     from tools.approval import has_blocking_approval

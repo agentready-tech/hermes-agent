@@ -5,12 +5,12 @@ import time
 import uuid
 from datetime import datetime
 
-from hermes_runtime.sessions import HOME_SESSION_KEY, HOME_SESSION_TITLE
+from hermes_runtime.sessions import home_session_key, HOME_SESSION_TITLE
 
 
 def _move_local_index(conn, lineage, route):
     for row in conn.execute("SELECT scope,entry_json FROM gateway_routing WHERE session_key=?",
-                            (HOME_SESSION_KEY,)).fetchall():
+                            (home_session_key(),)).fetchall():
         entry = json.loads(row["entry_json"])
         if entry["session_id"] not in lineage:
             continue
@@ -18,7 +18,7 @@ def _move_local_index(conn, lineage, route):
         conn.execute("INSERT INTO gateway_routing(scope,session_key,entry_json,updated_at) VALUES(?,?,?,?)",
                      (row["scope"], route, json.dumps(entry), time.time()))
         conn.execute("DELETE FROM gateway_routing WHERE scope=? AND session_key=?",
-                     (row["scope"], HOME_SESSION_KEY))
+                     (row["scope"], home_session_key()))
 
 
 def _move_unstarted_messages(conn, lineage, home_id):
@@ -33,7 +33,7 @@ def _move_unstarted_messages(conn, lineage, home_id):
         for row in rows:
             payload = json.loads(row["payload_json"])
             envelope = payload.get("native_text_v1")
-            if not isinstance(envelope, dict) or envelope.get("route") != HOME_SESSION_KEY:
+            if not isinstance(envelope, dict) or envelope.get("route") != home_session_key():
                 continue
             candidate = SessionSource.from_dict(envelope["source"])
             if candidate.platform == Platform.LOCAL:
@@ -61,12 +61,12 @@ def _restore_main_route(conn, home_id, source, scope):
     from gateway.session import SessionEntry
 
     now = datetime.now()
-    entry = SessionEntry(HOME_SESSION_KEY, home_id, now, now, origin=source,
+    entry = SessionEntry(home_session_key(), home_id, now, now, origin=source,
                          platform=source.platform, display_name=HOME_SESSION_TITLE)
     conn.execute("INSERT INTO gateway_routing(scope,session_key,entry_json,updated_at) VALUES(?,?,?,?)",
-                 (scope, HOME_SESSION_KEY, json.dumps(entry.to_dict()), time.time()))
+                 (scope, home_session_key(), json.dumps(entry.to_dict()), time.time()))
     conn.execute("UPDATE sessions SET source=?,session_key=?,user_id=?,chat_id=?,chat_type=?,origin_json=?,"
-                 "ended_at=NULL,end_reason=NULL WHERE id=?", (source.platform.value, HOME_SESSION_KEY,
+                 "ended_at=NULL,end_reason=NULL WHERE id=?", (source.platform.value, home_session_key(),
                  source.user_id, source.chat_id, source.chat_type, json.dumps(source.to_dict()), home_id))
 
 
@@ -85,7 +85,7 @@ def repair_local_home_routes(db):
         for row in conn.execute("SELECT key,value FROM state_meta WHERE key GLOB ?",
                                 (POLICY_PREFIX + "*",)).fetchall():
             receipt = json.loads(row["value"])
-            if receipt.get("route") != HOME_SESSION_KEY:
+            if receipt.get("route") != home_session_key():
                 continue
             source = SessionSource.from_dict(receipt["entry"]["origin"])
             from gateway.config import Platform
@@ -97,7 +97,7 @@ def repair_local_home_routes(db):
             receipt["route"] = receipt["entry"]["session_key"] = route
             conn.execute("UPDATE state_meta SET value=? WHERE key=?", (json.dumps(receipt), row["key"]))
             conn.executemany("UPDATE sessions SET session_key=? WHERE id=? AND session_key=?",
-                             [(route, sid, HOME_SESSION_KEY) for sid in lineage])
+                             [(route, sid, home_session_key()) for sid in lineage])
             recovered_source = _move_unstarted_messages(conn, lineage, home_id)
             if recovered_source is not None:
                 _restore_main_route(conn, home_id, recovered_source, scope)

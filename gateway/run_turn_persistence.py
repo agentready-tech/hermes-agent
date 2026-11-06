@@ -310,8 +310,8 @@ class GatewayTurnPersistenceMixin:
         OPPOSITE case (a concurrent path holds the lock and is shrinking it). Returns
         ``(response, session_entry)``."""
         from hermes_runtime.adapters.hermes import enabled
-        from hermes_runtime.sessions import HOME_SESSION_KEY
-        if enabled() and session_key == HOME_SESSION_KEY:
+        from hermes_runtime.sessions import home_session_key
+        if enabled() and session_key == home_session_key():
             # Keep the shared home even if compaction cannot recover this turn.
             return response, session_entry
         # When compression is exhausted, the session is permanently too large to process. (#9893) Never wipe

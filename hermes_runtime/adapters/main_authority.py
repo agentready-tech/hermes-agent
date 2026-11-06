@@ -7,7 +7,7 @@ from hermes_state_runtime import RuntimeStoreError
 def restore_main(connection, session_id):
     from hermes_runtime.adapters.hermes import enabled
     from hermes_runtime.adapters.state import resolve_home
-    from hermes_runtime.sessions import HOME_SESSION_ID, HOME_SESSION_KEY
+    from hermes_runtime.sessions import HOME_SESSION_ID, home_session_key
     if not enabled() or resolve_home(session_id) is None:
         return None
     # This is the same-home connector, authenticated by the gateway's private bootstrap.
@@ -19,7 +19,7 @@ def restore_main(connection, session_id):
         store = authority.runner.session_store
         with store._lock:
             store._ensure_loaded_locked()
-            entry = store._entries.get(HOME_SESSION_KEY)
+            entry = store._entries.get(home_session_key())
         if entry is None or entry.origin is None or resolve_home(entry.session_id) is None:
             raise RuntimeStoreError('not_found')
         from gateway.config import Platform
@@ -27,7 +27,7 @@ def restore_main(connection, session_id):
             raise RuntimeStoreError('session_busy')
         # Publish the already committed route in memory. No new session, policy, history or
         # routing receipt is created; compression continues under the original logical owner.
-        authority._publish_route(entry.origin, HOME_SESSION_ID, HOME_SESSION_KEY)
+        authority._publish_route(entry.origin, HOME_SESSION_ID, home_session_key())
     return SessionRef(authority.profile_id, HOME_SESSION_ID)
 
 

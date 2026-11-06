@@ -488,6 +488,7 @@ class GatewayTurnPrepareMixin:
         a resend notice). Released in _handle_message's finally, granted per (routing key, run
         generation) so a stale unwind can't release a newer turn's."""
         from gateway.run import _float_env
+        from hermes_constants import get_hermes_home
         _lease_registry = getattr(self, "_turn_leases", None)
         if _lease_registry is None:
             return
@@ -495,6 +496,8 @@ class GatewayTurnPrepareMixin:
             _lease_token = await _lease_registry.acquire(
                 session_entry.session_id, owner_key=_quick_key, generation=run_generation,
                 timeout=_float_env("HERMES_TURN_LEASE_TIMEOUT", DEFAULT_LEASE_WAIT),
+                profile_home=(str(get_hermes_home().resolve())
+                              if getattr(getattr(self, 'config', None), 'multiplex_profiles', False) is True else ''),
             )
         except TurnLeaseTimeoutError:
             # The cleanup finally starts later; restore the tokens here or this exit leaks identity.
