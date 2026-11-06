@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "30c6a6bbd50b-browser-resources-managed",
+  "defaultRuntimeVersion": "9a11f9b7e082-computer-use-sandbox-managed",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -762,6 +762,59 @@
       "description": "Owned temporary tab cleanup and native Memory Saver; human takeover and persistent profiles preserved.",
       "ownerLegacyConnectorBoundaryPreserved": true,
       "preservedPanelSha256": "56a9db1b205d8ead70cba43a484bff7cd3e22b4bbba95bc2d58b646922192460"
+    },
+    "9a11f9b7e082-computer-use-sandbox-managed": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:6ee3917fa634f4a871669ae1b35923157fe7f4691e7d4d9e29f9bcd08e6a51f4",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes:9a11f9b7e082-managed-computer-use-sandbox",
+      "configDigest": "sha256:2a7f734a795b955df477e7c70105cd1f496e59364d6db365be44e30fb5b0d854",
+      "platform": "linux/amd64",
+      "sourceRevision": "9a11f9b7e082bae387bdeb764c8d38a9b2358196",
+      "base": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:bfd0213942989f13f80a6c6a4be3ab61d73ee57df1bc9e5173b691ff907bcab0"
+      },
+      "publisherRecipe": {
+        "repository": "agentready-tech/AgentReady",
+        "revision": "94cbe8404d2c65142a1719dbb910d0b3b5297931",
+        "path": "deploy/kubernetes/runtime_patch.py"
+      },
+      "sourceFiles": {
+        "tools/computer_use/cua_backend_daemon.py": {
+          "sha256": "e608c530e9d0fd2fcd13a4d3b739e62aa9b2eccc2a8c786acc2a538eb930f288"
+        },
+        "tools/computer_use/cua_backend_sandbox.py": {
+          "sha256": "17c8a400566a4f5e60595ddc3353070dba5c4c7f8f8ab9b49bda2e52f41e6b67"
+        },
+        "tools/computer_use/cua_backend_session.py": {
+          "sha256": "104b4a4009f174a8f423937e2b0412b25674151c06e75c3284b42b010c3676b0"
+        }
+      },
+      "deployedFiles": {
+        "tools/computer_use/cua_backend_daemon.py": "e608c530e9d0fd2fcd13a4d3b739e62aa9b2eccc2a8c786acc2a538eb930f288",
+        "tools/computer_use/cua_backend_sandbox.py": "17c8a400566a4f5e60595ddc3353070dba5c4c7f8f8ab9b49bda2e52f41e6b67",
+        "tools/computer_use/cua_backend_session.py": "104b4a4009f174a8f423937e2b0412b25674151c06e75c3284b42b010c3676b0"
+      },
+      "distribution": {
+        "mode": "registry",
+        "registryPublished": true,
+        "visibility": "private",
+        "publishedManifestDigest": "sha256:6ee3917fa634f4a871669ae1b35923157fe7f4691e7d4d9e29f9bcd08e6a51f4",
+        "pullVerified": true,
+        "preloadedOnCurrentWorker": true,
+        "workerImagePullPolicy": "Never",
+        "publisherRevision": "94cbe8404d2c65142a1719dbb910d0b3b5297931",
+        "workflowRunId": 42196242544,
+        "workflowAttempt": 1,
+        "thinArchiveSha256": "afc1da061db73e29da03ad1fc69e62e0d4c8ad860fd9839853a5968a8eafdc8c"
+      },
+      "validation": {
+        "isolatedRuntimeSmoke": true,
+        "network": "none",
+        "realCredentialsUsed": false,
+        "sourceChecksPassed": 12,
+        "computerUseSandboxDaemonVerified": true,
+        "targetedTestsPassed": 138
+      },
+      "description": "Private computer-use daemons and recovery stay in the selected sandbox; deployed to Mikhail and future default only."
     }
   }
 }
