@@ -100,7 +100,7 @@ async def test_the_viewer_response_frame_is_routed_by_the_authority_connection(t
         return 'ok'
     authority = await _authority(tmp_path, monkeypatch, answer)
     connection = AuthorityConnection(authority, object(), {'user_id': 'owner'})
-    pending = session_sudo_prompt._Pending('s')
+    pending = session_sudo_prompt._Pending('s', profile_home=authority.profile_id)
     session_sudo_prompt._open['srq-abc'] = pending
     try:
         reply = await connection.dispatch({'jsonrpc': '2.0', 'id': 'srq-abc', 'result': {'value': 'pw'}})

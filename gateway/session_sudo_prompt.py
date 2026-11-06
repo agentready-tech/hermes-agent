@@ -15,6 +15,7 @@ import logging
 import threading
 import uuid
 from copy import deepcopy
+from hermes_constants import hermes_home_key
 
 logger = logging.getLogger(__name__)
 
@@ -23,11 +24,12 @@ _POLL_S = 0.25
 
 
 class _Pending:
-    __slots__ = ("event", "request", "result", "session_id", "value")
+    __slots__ = ("event", "profile_home", "request", "result", "session_id", "value")
 
-    def __init__(self, session_id):
+    def __init__(self, session_id, *, profile_home=None):
         self.event = threading.Event()
         self.session_id = session_id
+        self.profile_home = hermes_home_key(profile_home)
         self.value = ""
         self.result = None
         self.request = None
@@ -37,11 +39,12 @@ _lock = threading.Lock()
 _open: dict[str, _Pending] = {}
 
 
-def open_requests(session_id):
+def open_requests(session_id, *, profile_home=None):
     """Replay request descriptions only. Answers never enter the history or this projection."""
     with _lock:
         return [deepcopy(pending.request) for pending in _open.values()
-                if pending.session_id == session_id and pending.request is not None]
+                if pending.session_id == session_id and pending.request is not None
+                and pending.profile_home == hermes_home_key(profile_home)]
 
 
 def is_response_frame(frame) -> bool:
@@ -50,12 +53,13 @@ def is_response_frame(frame) -> bool:
             and frame["id"].startswith("srq-") and ("result" in frame or "error" in frame))
 
 
-def resolve(frame, *, session_ok=lambda session_id: True) -> bool:
+def resolve(frame, *, session_ok=lambda session_id: True, profile_home=None) -> bool:
     """Settle the open request *frame* answers; False when nothing (here) waits for that id.
     ``session_ok`` lets the caller refuse an answer from a connection not entitled to that session."""
     with _lock:
         pending = _open.get(frame["id"])
-        if pending is None or not session_ok(pending.session_id):
+        if (pending is None or pending.profile_home != hermes_home_key(profile_home)
+                or not session_ok(pending.session_id)):
             return False
         _open.pop(frame["id"], None)
     result = frame.get("result") if "error" not in frame else None
