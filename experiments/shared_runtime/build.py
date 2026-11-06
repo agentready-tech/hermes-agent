@@ -24,10 +24,18 @@ def export_source(root, revision, output):
     return source
 
 
+def stamp_source(source, revision, version):
+    subprocess.run([sys.executable, '-B', str(source / 'scripts/write_install_stamp.py'), '--output',
+        str(source / 'install-stamp.json'), '--commit', revision, '--branch', BRANCH,
+        '--display-version', version, '--source', 'local', '--distribution', 'docker',
+        '--update-mechanism', 'external'], check=True, timeout=30)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output', type=Path)
     parser.add_argument('--version', required=True)
+    parser.add_argument('--dependency-build', type=Path)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     sys.path.insert(0, str(root))
@@ -69,10 +77,7 @@ def main():
     manifest = dict(schemaVersion=1, sourceRevision=revision, source='clean-git-archive',
                     moduleRoots=sorted(MODULE_ROOTS | {'experiments'}), files=files)
     (source / MANIFEST).write_text(json.dumps(manifest, sort_keys=True) + '\n')
-    subprocess.run([sys.executable, str(source / 'scripts/write_install_stamp.py'), '--output',
-        str(source / 'install-stamp.json'), '--commit', revision, '--branch', BRANCH,
-        '--display-version', args.version, '--source', 'local', '--distribution', 'docker',
-        '--update-mechanism', 'external'], check=True, timeout=30)
+    stamp_source(source, revision, args.version)
     dependency = 'agentsee/shared-runtime-deps:' + args.version
     image = 'agentsee/shared-runtime:' + args.version
 
@@ -89,8 +94,14 @@ def main():
             status('failed', lastPhase=phase, log=log, exitCode=result.returncode)
             raise RuntimeError('Prototype build failed in ' + phase)
 
-    build('building_native_dependency_stage', ['docker', 'build', '--platform', 'linux/arm64', '--target',
-        'python_deps', '--file', str(source / 'Dockerfile'), '--tag', dependency, str(source)], 'dependencies.log')
+    cache = None
+    if args.dependency_build:
+        from experiments.shared_runtime.dependency_cache import reuse_dependency_stage
+        status('verifying_native_dependency_cache')
+        cache = reuse_dependency_stage(args.dependency_build, args.output, dependency, build_env)
+    else:
+        build('building_native_dependency_stage', ['docker', 'build', '--platform', 'linux/arm64', '--target',
+            'python_deps', '--file', str(source / 'Dockerfile'), '--tag', dependency, str(source)], 'dependencies.log')
     build('building_local_prototype_image', ['docker', 'build', '--platform', 'linux/arm64', '--file',
         str(source / 'experiments/shared_runtime/Dockerfile'), '--build-arg', 'DEPENDENCY_IMAGE=' + dependency,
         '--build-arg', 'SOURCE_REVISION=' + revision, '--build-arg', 'PROTOTYPE_VERSION=' + args.version,
@@ -99,7 +110,8 @@ def main():
                                        env=build_env, text=True, timeout=30).strip()
     status('image_built', image=image, imageId=identity, architecture='linux/arm64',
            sourceArchiveSha256=hashlib.sha256((args.output / 'source.tar').read_bytes()).hexdigest(),
-           committedSourceVerified=True, githubPushDeferred=True, benchmarkComplete=False)
+           committedSourceVerified=True, githubPushDeferred=True, benchmarkComplete=False,
+           dependencyCacheReused=cache is not None, dependencyImageId=cache['imageId'] if cache else None)
 
 
 if __name__ == '__main__':
