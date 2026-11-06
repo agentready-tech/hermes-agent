@@ -62,7 +62,7 @@ async def exercise(workers, server, output):
         measures['warm'] = measure(workers.pids)
         write(workers.output / 'partial-proof.json', {'phase': 'warm', 'measurements': measures, 'proof': proof})
         await clients.both('SPAWN')
-        await asyncio.to_thread(wait_for, lambda: all(e.is_set() for e in server.child_entered.values()),
+        await asyncio.to_thread(wait_for, lambda: workers.check_alive() and all(e.is_set() for e in server.child_entered.values()),
                                 timeout=60, what='NATIVE_CHILDREN_RUNNING')
         sandbox_proof(output, 'child')
         await clients.both('FOLLOWUP')
@@ -86,13 +86,14 @@ async def exercise(workers, server, output):
         server.release['alpha'].set()
 
         def alpha_only():
+            workers.check_alive()
             a = project_snapshot(workers.root / 'profiles' / 'alpha')['messages']
             b = project_snapshot(workers.root / 'profiles' / 'bravo')['messages']
             return a[0]['state'] == 'completed' and a[0]['published'] and b[0]['state'] == 'running'
         await asyncio.to_thread(wait_for, alpha_only, timeout=60, what='OWN_ONLY_ALPHA_COMPLETION')
         await clients.completion('alpha')
         server.release['bravo'].set()
-        await asyncio.to_thread(wait_for, lambda: children_complete(workers.root), timeout=60, what='CHILD_DELIVERY')
+        await asyncio.to_thread(wait_for, lambda: workers.check_alive() and children_complete(workers.root), timeout=60, what='CHILD_DELIVERY')
         await clients.completion('bravo')
         proof['independentPersistentChildrenAndDelivery'] = True
         proof['childIds'] = ids
@@ -119,7 +120,7 @@ async def restart_proof(workers, before):
         await clients.both('RESTORED')
         counts = {n: (await clients.view(n))['message_count'] for n in NAMES}
         await asyncio.gather(*(clients.turn(n, 'SEND_' + n + ':' + before['childIds'][n]) for n in NAMES))
-        await asyncio.to_thread(wait_for, lambda: children_complete(workers.root), timeout=60, what='REUSED_CHILD_DELIVERY')
+        await asyncio.to_thread(wait_for, lambda: workers.check_alive() and children_complete(workers.root), timeout=60, what='REUSED_CHILD_DELIVERY')
         await asyncio.gather(*(clients.completion(n, after=counts[n]) for n in NAMES))
     return {'fullProcessRestart': True, 'sameHomeSessionId': True, 'persistentChildIdsUnchanged': True,
             'existingChildrenAcceptedNewWork': True, 'memory': memory_proof(workers.root)}

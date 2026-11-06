@@ -6,7 +6,7 @@ from pathlib import Path
 import uuid
 
 from dotenv import dotenv_values
-from experiments.shared_runtime.local_run import command
+from experiments.shared_runtime.local_docker import command
 
 
 def main():
@@ -37,10 +37,10 @@ def main():
     (output / 'provider-key.private').write_text(key)
     identity = 'hermes-prototype-paid-' + uuid.uuid4().hex[:10]
     plan = dict(phase='preparing', image=args.image, sourceRevision=revision, model=model,
-                harnessContainer=identity, productionTouched=False)
+                harnessContainer=identity, productionTouched=False, nativeStateStorage='container-linux-filesystem')
     (output / 'launch.json').write_text(json.dumps(plan, indent=2))
     cid = command(['docker', 'run', '-d', '--pull=never', '--name', identity,
-        '--label', 'io.agentsee.prototype=' + identity, '--cap-drop=ALL',
+        '--label', 'io.agentsee.prototype=' + identity, '--cap-drop=ALL', '--ulimit', 'core=0',
         '--security-opt=no-new-privileges', '--mount', f'type=bind,src={output},dst=/probe',
         '--entrypoint', '/opt/hermes/.venv/bin/python', args.image,
         '/opt/hermes/experiments/shared_runtime/paid_probe.py'])
