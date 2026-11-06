@@ -92,8 +92,8 @@ class SessionRecoveryMixin:
         """Session key for *source* (profile from *source*; key from *key_source* if given)."""
         from hermes_runtime.adapters.hermes import enabled
         if enabled() and source.platform != Platform.LOCAL:
-            from hermes_runtime.sessions import HOME_SESSION_KEY
-            return HOME_SESSION_KEY
+            from hermes_runtime.sessions import home_session_key
+            return home_session_key()
         from gateway.session import build_session_key
         return build_session_key(
             key_source if key_source is not None else source,

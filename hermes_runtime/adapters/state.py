@@ -25,12 +25,12 @@ def main_gateway_origin():
     """Use the main conversation's committed gateway route for native proactive replies."""
     from gateway.config import Platform, load_gateway_config
     from gateway.session import SessionEntry
-    from hermes_runtime.sessions import HOME_SESSION_KEY
+    from hermes_runtime.sessions import home_session_key
 
     scope = str(load_gateway_config().sessions_dir.resolve())
     with sqlite3.connect(state_db_path()) as connection:
         row = connection.execute("SELECT entry_json FROM gateway_routing WHERE scope=? AND session_key=?",
-                                 (scope, HOME_SESSION_KEY)).fetchone()
+                                 (scope, home_session_key())).fetchone()
     if row is None:
         return {}
     entry = SessionEntry.from_dict(json.loads(row[0]))
@@ -40,7 +40,7 @@ def main_gateway_origin():
         return {}
     origin = {key: value for key, value in source.to_dict().items()
               if key in {"platform", "chat_id", "chat_type", "thread_id", "user_id", "scope_id", "profile"}}
-    return {**origin, "session_key": HOME_SESSION_KEY, "origin_session_id": current_home_session_id(),
+    return {**origin, "session_key": home_session_key(), "origin_session_id": current_home_session_id(),
             "origin_ui_session_id": ""}
 
 
