@@ -12,6 +12,18 @@ import sys
 BRANCH = 'codex/shared-hermes-runtime-prototype'
 
 
+def export_source(root, revision, output):
+    source = output / 'source'
+    source.mkdir()
+    with (output / 'source.tar').open('wb') as stream:
+        subprocess.run(['git', '-C', str(root), '-c', 'tar.umask=0022', 'archive', revision],
+                       stdout=stream, check=True, timeout=60)
+    # The private launcher uses umask 077. Preserve tracked modes rather than
+    # changing every Docker COPY checksum and rebuilding unchanged dependencies.
+    subprocess.run(['tar', '-xpf', str(output / 'source.tar'), '-C', str(source)], check=True, timeout=60)
+    return source
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output', type=Path)
@@ -45,17 +57,12 @@ def main():
     (docker_config / 'config.json').write_text(json.dumps(config))
     build_env = {key: os.environ[key] for key in ('PATH', 'HOME', 'LANG', 'TZ') if key in os.environ}
     build_env.update(DOCKER_HOST=endpoint, DOCKER_CONFIG=str(docker_config))
-    source = args.output / 'source'
-    source.mkdir()
-
     def status(phase, **data):
         value = dict(phase=phase, sourceRevision=revision, version=args.version, productionTouched=False, **data)
         (args.output / 'status.json').write_text(json.dumps(value, indent=2))
 
     status('exporting_clean_source')
-    with (args.output / 'source.tar').open('wb') as stream:
-        subprocess.run(['git', '-C', str(root), 'archive', revision], stdout=stream, check=True, timeout=60)
-    subprocess.run(['tar', '-xf', str(args.output / 'source.tar'), '-C', str(source)], check=True, timeout=60)
+    source = export_source(root, revision, args.output)
     names = git(root, 'ls-tree', '-r', '--name-only', revision).splitlines()
     files = {name: digest(source / name) for name in names
              if source_path(name) or (name.startswith('experiments/') and name.endswith('.py'))}
