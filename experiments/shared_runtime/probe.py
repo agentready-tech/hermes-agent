@@ -58,6 +58,8 @@ def initialize(root, url):
                             'key_env': 'OPENAI_API_KEY', 'context_length': 131072},
                   'auxiliary': {'title_generation': {'enabled': False}},
                   'platform_toolsets': {'cli': [], 'telegram': []}, 'memory': {'memory_enabled': False}}
+        if name != 'control':
+            config['platforms'] = {'telegram': {'enabled': True, 'token': 'fixture-' + name}}
         (home / 'config.yaml').write_text(json.dumps(config))
         (home / '.env').write_text('OPENAI_API_KEY=fixture-' + name + '\nTELEGRAM_ALLOWED_USERS=9001\n')
 

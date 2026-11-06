@@ -438,7 +438,7 @@ class SessionPersistenceMixin:
         ``_flush_messages_to_session_db`` and written only to the DB row, never mutating the live message
         list used by the API call (#48677 is thus closed for every persist caller, not just this one).
         """
-        from agent.agent_runtime_helpers import note_turn_persisted
+        from agent.turn_overlap import note_turn_persisted
         with _persist_lock(self):
             # Only the scaffolding goes here. Closing a tool tail this uncovers is the exit
             # owner's job (``_close_transcript_tail``, ``abort_turn_on_interrupt``): only it knows

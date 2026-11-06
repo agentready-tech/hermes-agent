@@ -596,7 +596,7 @@ def _bind_turn_identity(
     agent._current_api_request_id = ""
     # Tripwire: warn when this turn starts before the previous turn-end persist
     # (concurrent turns interleave transcript writes). Cleared in _persist_session.
-    from agent.agent_runtime_helpers import note_turn_start
+    from agent.turn_overlap import note_turn_start
     note_turn_start(agent, turn_id)
     return effective_task_id, turn_id
 
