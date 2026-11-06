@@ -59,7 +59,9 @@ class ToolOperationStore:
                 "AND group_id<>? AND state='running' LIMIT 1", (resource, group)).fetchone()
             if busy:
                 return {"status": "not_started", "waiting_for": busy[0],
-                    "message": "This resource is still in use. Continue after its completion event."}, False
+                    "reason": "resource_busy",
+                    "message": "This call did not start because the resource is in use. "
+                    "Check the owning operation's outcome before retrying; this receipt does not register a wakeup."}, False
             identity = "op-" + uuid.uuid4().hex
             conn.execute("INSERT INTO tool_operations(operation_id,session_id,tool_call_uid,tool_call_id,tool_name,"
                 "arguments_json,origin_json,resource_key,group_id,owner_pid,owner_birth,state,created_at) "
@@ -158,3 +160,21 @@ class ToolOperationStore:
         with self.inbox.transaction() as conn:
             return bool(conn.execute("SELECT 1 FROM tool_operations WHERE session_id=? AND state='running' LIMIT 1",
                 (session_id,)).fetchone())
+
+    def continuation_state(self, identity, session_id):
+        """A receipt's prose is not proof of a return to this conversation."""
+        with self.inbox.transaction() as conn:
+            row = conn.execute("SELECT state,deferred,delivered_at,owner_pid,owner_birth "
+                "FROM tool_operations WHERE operation_id=? AND session_id=?",
+                (identity, session_id)).fetchone()
+            if row is None:
+                return {"state": "unavailable", "return_path": None}
+            queued = conn.execute("SELECT 1 FROM agentready_inbox WHERE event_key=? AND delivered_at IS NULL",
+                (json.dumps(["tool_operation", identity]),)).fetchone()
+            path = None
+            if queued:
+                path = "durable_inbox"
+            elif (row["state"] == "running" and row["deferred"] and row["delivered_at"] is None
+                    and _owner_alive(row["owner_pid"], row["owner_birth"])):
+                path = "deferred_operation"
+            return {"state": row["state"], "return_path": path}

@@ -615,6 +615,7 @@ _PER_TURN_RESET_STATE: tuple[tuple[str, Any], ...] = (
     ("_run_budget_wrapup_injected", False), ("_verification_stop_nudges", 0),
     ("_pre_verify_nudges", 0),
     ("_continuation_guard_nudges", 0),
+    ("_managed_tool_receipts", None), ("_managed_tool_recheck_requested", False),
 )
 
 

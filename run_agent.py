@@ -1311,7 +1311,7 @@ class AIAgent(
             with scoped_connection_surface(agent_connection_surface(self)):
                 if incoming_event(self):
                     self._managed_tools_deferred = True
-                    skip_after_defer(self, messages, tool_calls)
+                    skip_after_defer(self, messages, tool_calls, reason="incoming_event")
                 elif len(tool_calls) <= 1:
                     self._execute_tool_calls_sequential(*args)
                 else:

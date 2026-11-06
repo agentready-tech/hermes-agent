@@ -337,8 +337,8 @@ def finish_text_response(
     )
     _pending_verification_response = _sg.pending_verification_response
     _pending_verification_response_previewed = _sg.pending_verification_response_previewed
+    final_response = _sg.final_response
     if _sg.continue_turn:
-        final_response = None
         return _verdict("continue")
 
     # Plugins rewrite the reply BEFORE it is appended and flushed: SQLite treats a non-blank

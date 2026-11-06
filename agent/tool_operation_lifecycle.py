@@ -35,6 +35,9 @@ def begin_group(agent, messages):
     """Snapshot durable call identities already assigned to the assistant row."""
     from agent.message_metadata import index_tool_call_uids
     agent._managed_tools_deferred = False
+    agent._managed_tool_receipts = []
+    agent._managed_tool_dependency = None
+    agent._managed_tool_recheck_requested = False
     if not enabled() or getattr(agent, "_agentready_active_turn", None) is None:
         return
     agent._managed_tool_group = uuid.uuid4().hex
@@ -83,6 +86,7 @@ class ToolOperation:
             return None
         if "operation_id" not in self.row:
             self.agent._managed_tools_deferred = True
+            self.agent._managed_tool_dependency = self.row.get("waiting_for")
             return DeferredToolResult(json.dumps(self.row))
         if self.row["state"] in {"completed", "failed"}:
             return json.loads(self.row["result_json"])
@@ -90,6 +94,7 @@ class ToolOperation:
 
     def receipt(self, status="running"):
         self.agent._managed_tools_deferred = True
+        self.agent._managed_tool_dependency = self.row["operation_id"]
         message = ("Execution continues. Its result will arrive as an event in this session. "
             "Do not rerun this call while waiting." if status == "running" else
             "Execution outcome is not confirmed. Check the external outcome before retrying. "
@@ -130,18 +135,28 @@ def append_receipt(agent, messages, name, call_id, result):
     from agent.tool_dispatch_helpers import make_tool_result_message
     from agent.tool_executor import _flush_session_db_after_tool_progress
     agent._current_tool = None
-    disposition = "none" if json.loads(result).get("status") == "not_started" else "unknown"
+    receipt = json.loads(result)
+    receipts = getattr(agent, "_managed_tool_receipts", None)
+    if receipts is None:
+        agent._managed_tool_receipts = receipts = []
+    receipts.append({**receipt, "tool_call_id": call_id, "tool": name})
+    disposition = "none" if receipt.get("status") == "not_started" else "unknown"
     messages.append(make_tool_result_message(name, result, call_id, effect_disposition=disposition))
     return _flush_session_db_after_tool_progress(agent, messages, stage="deferred tool receipt")
 
 
-def skip_after_defer(agent, messages, calls):
+def skip_after_defer(agent, messages, calls, *, reason="dependency"):
     if not getattr(agent, "_managed_tools_deferred", False):
         return False
     from agent.message_sanitization import coalesce_tool_call_id
     for call in calls:
-        result = DeferredToolResult(json.dumps({"status": "not_started", "tool": call.function.name,
-            "message": "An earlier call is still running. Re-evaluate this dependent call after its completion event."}))
+        receipt = {"status": "not_started", "tool": call.function.name, "reason": reason,
+            "message": "This call did not start. Re-evaluate it after handling the incoming message."
+            if reason == "incoming_event" else
+            "This call did not start. Check the preceding operation's actual outcome before retrying."}
+        if waiting_for := getattr(agent, "_managed_tool_dependency", None):
+            receipt["waiting_for"] = waiting_for
+        result = DeferredToolResult(json.dumps(receipt))
         if not append_receipt(agent, messages, call.function.name, coalesce_tool_call_id(call), result):
             break
     return True
