@@ -87,3 +87,19 @@ def test_local_wire_reports_native_adapter_connection_state(monkeypatch):
         assert not wire.is_connected
 
     asyncio.run(exercise())
+
+
+def test_separate_workers_load_their_own_native_session_directory(tmp_path, monkeypatch):
+    from pathlib import Path
+    from gateway.run import load_gateway_config_for_runner
+    from gateway.run_bootstrap import _launch_home_may_multiplex
+    root = tmp_path / '.hermes'
+    home = root / 'profiles' / 'alpha'
+    monkeypatch.setenv('HERMES_HOME', str(home))
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    initialize(root, 'http://127.0.0.1:1/v1',
+               {'alpha': 'sandbox-a', 'bravo': 'sandbox-b'}, 'fixture/runtime', standalone=True)
+    config = load_gateway_config_for_runner()
+    assert _launch_home_may_multiplex(config)
+    assert not config.multiplex_profiles
+    assert config.sessions_dir == home / 'sessions'
