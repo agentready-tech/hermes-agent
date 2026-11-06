@@ -7,7 +7,9 @@ import json
 import threading
 import time
 from typing import Any, Dict, List, Optional
+from pathlib import Path
 from agent.interrupt_compat import request_hard_interrupt
+from hermes_constants import hermes_home_key
 from tools.registry import tool_error
 
 logger = logging.getLogger("tools.delegate_tool")  # log-record parity with the origin module
@@ -52,8 +54,23 @@ def _register_subagent(record: dict[str, Any]) -> None:
     if not sid:
         return
     record.setdefault("accepting_steer", True)
+    record['_profile_home'] = _agent_profile_home(record.get('agent'))
     with _active_subagents_lock:
         _active_subagents[sid] = record
+
+
+def _agent_profile_home(agent):
+    """Durable DB ownership survives a parent rebuild and an unbound registry callback."""
+    path = getattr(getattr(agent, '_session_db', None), 'db_path', None)
+    return hermes_home_key(Path(path).parent) if isinstance(path, (str, Path)) and path else hermes_home_key()
+
+
+def _record_matches_home(record, home):
+    owner = record.get('_profile_home')
+    if owner is None:
+        from agent.secret_scope import is_multiplex_active
+        return not is_multiplex_active()
+    return owner == home
 
 def _unregister_subagent(subagent_id: str, *, agent: Any = None) -> None:
     """Drop the live record (exact agent identity when given) and keep a bounded attribution stub."""
@@ -168,13 +185,14 @@ def _capture_gateway_steer_authority(owner_session_id: Optional[str]) -> tuple[A
         return None, None
 
 # Registry record fields never exposed to the TUI/RPC snapshot.
-_PRIVATE_RECORD_KEYS = frozenset({"agent", "owner_session_id", "owner_transport", "owner_session_record", "accepting_steer"})
+_PRIVATE_RECORD_KEYS = frozenset({"agent", "owner_session_id", "owner_transport", "owner_session_record", "accepting_steer", "_profile_home"})
 
 def list_active_subagents() -> list[dict[str, Any]]:
-    """Copy of the running subagent tree ({subagent_id, parent_id, depth, goal, model,
-    started_at, tool_count, status, ...}); safe from any thread."""
+    """Copy of the owning profile's running subagent tree; internal host fields stay private."""
+    home = hermes_home_key()
     with _active_subagents_lock:
-        return [{k: v for k, v in r.items() if k not in _PRIVATE_RECORD_KEYS} for r in _active_subagents.values()]
+        return [{k: v for k, v in r.items() if k not in _PRIVATE_RECORD_KEYS}
+                for r in _active_subagents.values() if _record_matches_home(r, home)]
 
 def _is_descendant_of(child_agent: Any, parent_agent: Any, max_hops: int = 8) -> bool:
     """True when *child_agent* sits below *parent_agent* in the spawn tree (walks the ``_delegate_parent_ref`` weakref
@@ -223,6 +241,8 @@ def _owns_subagent_record(record: dict[str, Any], parent_agent: Any) -> bool:
     a weakref to the old one. Delivery routes by durable session id; control must
     use the same spine or running children go invisible/unsteerable.
     """
+    if not _record_matches_home(record, _agent_profile_home(parent_agent)):
+        return False
     if _is_descendant_of(record.get("agent"), parent_agent):
         return True
     owner_sid = str(record.get("owner_agent_session_id") or "")

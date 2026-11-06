@@ -32,6 +32,9 @@ def sample(roots):
     total = {key: sum(row[key] for row in rows) for key in rows[0]}
     cgroup = Path('/sys/fs/cgroup/memory.current')
     total['cgroupCurrentIncludingController'] = int(cgroup.read_text()) if cgroup.exists() else None
+    cgroup_stat = Path('/sys/fs/cgroup/memory.stat')
+    total['cgroupAnonIncludingController'] = (int(dict(line.split() for line in cgroup_stat.read_text().splitlines())['anon'])
+                                            if cgroup_stat.exists() else None)
     total['runtimeProcessCount'] = len(rows)
     return total
 

@@ -47,6 +47,8 @@ class Workers:
                 except (OSError, ValueError, RuntimeError):
                     return False
                 if descriptor.get('state') == 'ready':
+                    if descriptor.get('pid') != process.pid:
+                        raise RuntimeError('GATEWAY_PID_MISMATCH:' + name)
                     self.descriptors[name] = descriptor
                     return True
                 return False
@@ -66,7 +68,7 @@ class Workers:
 
     @property
     def pids(self):
-        return [p.pid for p in self.processes]
+        return [d['pid'] for d in self.descriptors.values()]
 
 
 class Clients:
@@ -112,3 +114,14 @@ class Clients:
 
     async def both(self, phase):
         return dict(zip(NAMES, await asyncio.gather(*(self.turn(n, phase + '_' + n) for n in NAMES))))
+
+    async def completion(self, name, *, after=0):
+        """A published child receipt alone does not prove the parent's admitted result turn."""
+        async with asyncio.timeout(60):
+            while True:
+                view = await self.view(name)
+                replied = any(m.get('role') == 'assistant' and 'COMPLETION_' + name in str(m.get('content', ''))
+                              for m in view['messages'][after:])
+                if replied and not view['running'] and all(r['status'] == 'terminal' for r in view['pending']):
+                    return view
+                await asyncio.sleep(.1)
