@@ -32,3 +32,24 @@ all of its previous memory consumption disappears.
 
 Tests use local fixture services only. They do not log into a real provider,
 operate a real desktop, alter production agents or exercise real model requests.
+
+## Browser working tabs
+
+Browser instructions default each executor to one working tab, reusing it when
+navigating to another website. A subagent may keep its own tab; extra tabs are
+for simultaneous work and should close as soon as they are no longer needed.
+
+AgentReady profiles can also request cleanup of ordinary user-opened tabs after
+successful browser work:
+
+```yaml
+browser:
+  close_idle_user_tabs: true
+```
+
+The setting lives in each agent's existing configuration. Unconfigured Hermes
+profiles retain user tabs. Idle user-tab cleanup waits for other known browser
+executors and running desktop operations. Tabs owned by another task, retained
+results, unfinished forms and active human control remain protected. A change
+of human control during cleanup invalidates that cleanup admission. Native
+driver shutdown prevents its background startup tab from being recreated.

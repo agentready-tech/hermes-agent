@@ -161,6 +161,11 @@ class ToolOperationStore:
             return bool(conn.execute("SELECT 1 FROM tool_operations WHERE session_id=? AND state='running' LIMIT 1",
                 (session_id,)).fetchone())
 
+    def has_running_resource(self, resource):
+        with self.inbox.transaction() as conn:
+            return bool(conn.execute("SELECT 1 FROM tool_operations WHERE resource_key=? AND state='running' LIMIT 1",
+                (resource,)).fetchone())
+
     def continuation_state(self, identity, session_id):
         """A receipt's prose is not proof of a return to this conversation."""
         with self.inbox.transaction() as conn:

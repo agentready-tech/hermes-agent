@@ -12,6 +12,23 @@ _contexts: dict[tuple[str, str], dict[str, tuple]] = {}
 _lock = threading.RLock()
 
 
+def _close_idle_user_tabs(home, task):
+    from hermes_cli.config import read_raw_config
+    browser = read_raw_config().get('browser') or {}
+    if not isinstance(browser, dict) or browser.get('close_idle_user_tabs') is not True:
+        return False
+    with _lock:
+        if any(other_home == home and other_task != task and contexts
+               for (other_home, other_task), contexts in _contexts.items()):
+            return False
+    from hermes_runtime.adapters.hermes import enabled, managed_home
+    if enabled():
+        from hermes_runtime.adapters.tool_operations import ToolOperationStore
+        if ToolOperationStore(managed_home()).has_running_resource('desktop'):
+            return False
+    return True
+
+
 def prepare_native_tabs(code: str, task: str, cmd: list, env: dict) -> str:
     home = str(get_hermes_home())
     endpoint = env.get("BU_CDP_WS") or env.get("BU_CDP_URL") or ""
@@ -45,9 +62,12 @@ def finish_native_tabs(agent, task: str, *, completed: bool, interrupted: bool, 
     key = home, task
     with _lock:
         contexts = dict(_contexts.get(key, {}))
+    if not contexts:
+        return
+    close_user_tabs = _close_idle_user_tabs(home, task)
     for name, (cmd, env, browser, epoch, started_after) in contexts.items():
         code = wrap_code("pass", home=home, endpoint=browser, task=task, cleanup=True,
-                         driver_epoch=epoch, driver_started_after=started_after)
+                         driver_epoch=epoch, driver_started_after=started_after, close_user_tabs=close_user_tabs)
         result = run_fenced({"features": {"local": True}},
                             lambda: _run_cli_killing_process_group(cmd, code, env, 15))
         if getattr(result, "returncode", None) == 0:

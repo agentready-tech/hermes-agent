@@ -97,6 +97,51 @@ def test_cleanup_is_idempotent_and_browser_identity_isolated(tmp_path, browser):
         assert close_finished_tabs(r, b.cdp) == 0
 
 
+def test_explicit_idle_user_tab_cleanup_preserves_other_executor_and_unfinished_form(tmp_path, browser):
+    b, _ = browser
+    with managed_tabs({}, str(tmp_path), 'browser', 'task'):
+        pass
+    with managed_tabs({}, str(tmp_path), 'browser', 'sibling'):
+        sibling = b.current
+    b.tabs['user-form'] = {'targetId': 'user-form', 'type': 'page'}
+    b.safe['user-form'] = False
+    resources = TabResources(str(tmp_path), 'browser', 'task')
+    with resources.locked():
+        assert close_finished_tabs(resources, b.cdp, close_unowned=True) == 2
+        assert resources.retained_unowned
+    assert set(b.tabs) == {sibling, 'user-form'}
+
+
+def test_idle_user_cleanup_stops_if_control_changes_during_safety_check(tmp_path, browser):
+    b, _ = browser
+    resources = TabResources(str(tmp_path), 'browser', 'task')
+
+    def takeover(method, **params):
+        result = b.cdp(method, **params)
+        if method == 'Runtime.evaluate':
+            path = tmp_path / 'bot-desktop' / 'lease.json'
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({'holder': 'agent', 'epoch': 2}))
+        return result
+
+    with resources.locked():
+        assert close_finished_tabs(resources, takeover, close_unowned=True) == 0
+    assert not b.closed and 'human' in b.tabs
+
+
+def test_idle_user_cleanup_waits_for_other_profile_owned_browser_work(monkeypatch, tmp_path):
+    from hermes_cli import config
+    from hermes_runtime.adapters import hermes
+    monkeypatch.setattr(config, 'read_raw_config', lambda: {'browser': {'close_idle_user_tabs': True}})
+    monkeypatch.setattr(hermes, 'enabled', lambda: False)
+    home = str(tmp_path)
+    contexts = {(home, 'sibling'): {'driver': ()}, ('another-home', 'foreign'): {'driver': ()}}
+    monkeypatch.setattr(runtime, '_contexts', contexts)
+    assert not runtime._close_idle_user_tabs(home, 'task')
+    contexts.pop((home, 'sibling'))
+    assert runtime._close_idle_user_tabs(home, 'task')
+
+
 def test_human_takeover_even_if_handed_back_blocks_old_tab_cleanup(tmp_path, browser):
     b, _ = browser
     with managed_tabs({}, str(tmp_path), "browser", "task"):

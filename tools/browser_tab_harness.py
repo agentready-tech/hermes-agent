@@ -27,15 +27,18 @@ def _driver_created_after(helpers, started_after):
             and psutil.Process(helpers._send({"meta": "ping"})["pid"]).create_time() >= started_after)
 
 
-def _retire_driver(resources, helpers, epoch, started_after):
+def _retire_driver(resources, helpers, epoch, started_after, close_user_tabs=False):
     from tools.bot_desktop import lease
     if any(row.get("task") == resources.task for row in resources.tabs.values()):
         return False
     # A daemon left by an earlier gateway has no current admission proof.
-    if not _driver_created_after(helpers, started_after):
+    if close_user_tabs and resources.retained_unowned:
+        return False
+    if not close_user_tabs and not _driver_created_after(helpers, started_after):
         return False
     current = lease.get(resources.home)
-    if current.holder != lease.AGENT or epoch != current.epoch:
+    expected_epoch = resources.admission_epoch if close_user_tabs else epoch
+    if current.holder != lease.AGENT or expected_epoch != current.epoch:
         return False
     # Native shutdown closes the daemon's exact startup tab and stops recovery.
     if helpers._send({"meta": "shutdown"}).get("ok") is not True:
@@ -45,7 +48,7 @@ def _retire_driver(resources, helpers, epoch, started_after):
 
 @contextlib.contextmanager
 def managed_tabs(namespace: dict, home: str, endpoint: str, task: str, *, cleanup=False,
-                 driver_epoch=None, driver_started_after=None):
+                 driver_epoch=None, driver_started_after=None, close_user_tabs=False):
     from browser_harness import helpers
     resources = TabResources(home, endpoint, task)
     original = helpers.cdp
@@ -72,10 +75,11 @@ def managed_tabs(namespace: dict, home: str, endpoint: str, task: str, *, cleanu
         try:
             from tools.bot_desktop.lease import assert_agent_may_act
             admitted = assert_agent_may_act(home)
+            resources.admission_epoch = admitted.epoch
             helpers.cdp = namespace["cdp"] = tracked
             namespace["keep_tab"] = keep_tab
             if cleanup:
-                close_finished_tabs(resources, original)
+                close_finished_tabs(resources, original, close_unowned=close_user_tabs)
             else:
                 # Never steer the first call onto an existing human/sibling tab.
                 try:
@@ -88,7 +92,7 @@ def managed_tabs(namespace: dict, home: str, endpoint: str, task: str, *, cleanu
                     helpers.switch_tab(target)
             yield
             if cleanup:
-                retired = _retire_driver(resources, helpers, driver_epoch, driver_started_after)
+                retired = _retire_driver(resources, helpers, driver_epoch, driver_started_after, close_user_tabs)
         finally:
             # Popups created by an owned page share its owner; a concurrently
             # opened human tab has no owned opener and is never adopted.
@@ -107,13 +111,14 @@ def managed_tabs(namespace: dict, home: str, endpoint: str, task: str, *, cleanu
 
 
 def wrap_code(code: str, *, home: str, endpoint: str, task: str, cleanup=False,
-              driver_epoch=None, driver_started_after=None) -> str:
+              driver_epoch=None, driver_started_after=None, close_user_tabs=False) -> str:
     """Use the installed runtime, not the harness package's unrelated site path."""
     from pathlib import Path
     source = str(Path(__file__).resolve().parent.parent)
     prefix = (f"import sys as _hermes_sys\n_hermes_sys.path.insert(0, {source!r})\n"
               "from tools.browser_tab_harness import managed_tabs as _hermes_managed_tabs\n"
               f"with _hermes_managed_tabs(globals(), {home!r}, {endpoint!r}, {task!r}, "
-              f"cleanup={cleanup!r}, driver_epoch={driver_epoch!r}, driver_started_after={driver_started_after!r}):\n")
+              f"cleanup={cleanup!r}, driver_epoch={driver_epoch!r}, driver_started_after={driver_started_after!r}, "
+              f"close_user_tabs={close_user_tabs!r}):\n")
     import textwrap
     return prefix + textwrap.indent(code or "pass", "    ") + "\n"

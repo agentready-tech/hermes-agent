@@ -41,6 +41,20 @@ def operation_home(monkeypatch):
         _reset_queued_handlers()
 
 
+def test_user_tab_cleanup_waits_for_other_running_desktop_operation(operation_home, monkeypatch):
+    from hermes_cli import config
+    from hermes_runtime.adapters.tool_operations import ToolOperationStore
+    from tools import browser_tab_runtime
+    monkeypatch.setattr(config, 'read_raw_config', lambda: {'browser': {'close_idle_user_tabs': True}})
+    monkeypatch.setattr(browser_tab_runtime, '_contexts', {})
+    store = ToolOperationStore(operation_home)
+    row, started = store.admit('sibling', 'desktop-test-uid', 'call', 'computer_use', {}, 'desktop', 'other-group')
+    assert started
+    assert not browser_tab_runtime._close_idle_user_tabs(str(operation_home), 'main')
+    store.complete(row['operation_id'], {'success': True})
+    assert browser_tab_runtime._close_idle_user_tabs(str(operation_home), 'main')
+
+
 def test_incoming_event_releases_wait_and_completion_is_delivered_once(operation_home, monkeypatch):
     from agent import tool_executor
     from hermes_runtime.adapters.inbox import HomeInbox

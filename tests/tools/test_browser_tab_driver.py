@@ -56,6 +56,7 @@ def native_drivers(monkeypatch, tmp_path):
         monkeypatch.setattr(cli, "_attach_vault_supervisor", lambda *args: None)
         monkeypatch.setattr(cli, "_workspace_dir", lambda *args: None)
         monkeypatch.setattr(runtime, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.setenv('HERMES_HOME', str(tmp_path))
         monkeypatch.setattr(session, "run_fenced", lambda info, fn: fn())
         monkeypatch.setattr(lifecycle, "preserve_resources", lambda *args: False)
         try:
@@ -68,7 +69,12 @@ def native_drivers(monkeypatch, tmp_path):
 
 @pytest.mark.platforms("posix")
 @pytest.mark.parametrize("runtime_restarted", [False, True])
-def test_actual_named_driver_shutdown_removes_its_startup_tab_and_preserves_sibling(native_drivers, runtime_restarted):
+@pytest.mark.parametrize('close_user_tabs', [False, True])
+def test_actual_named_driver_shutdown_removes_its_startup_tab_and_preserves_sibling(
+    native_drivers, runtime_restarted, close_user_tabs, monkeypatch,
+):
+    from hermes_cli import config
+    monkeypatch.setattr(config, 'read_raw_config', lambda: {'browser': {'close_idle_user_tabs': close_user_tabs}})
     tabs = native_drivers
     for task in ("parent", "child"):
         result = json.loads(cli.browser_exec("pass", task_id=task))
@@ -88,5 +94,6 @@ def test_actual_named_driver_shutdown_removes_its_startup_tab_and_preserves_sibl
     assert result["success"], result
     assert set(tabs) == child_tabs, "The child's live driver and tab remain usable"
     runtime.finish_native_tabs(object(), "child", completed=True, interrupted=False, failed=False)
-    wait_until(lambda: len(tabs) == (2 if runtime_restarted else 1), what="child driver's native shutdown")
-    assert "human" in tabs
+    remaining = 0 if close_user_tabs else (2 if runtime_restarted else 1)
+    wait_until(lambda: len(tabs) == remaining, what="child driver's native shutdown")
+    assert ('human' in tabs) is not close_user_tabs
