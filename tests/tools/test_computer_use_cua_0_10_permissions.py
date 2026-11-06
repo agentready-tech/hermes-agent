@@ -40,7 +40,7 @@ def test_any_explicit_hermes_bypass_maps_to_unrestricted_mode():
         assert computer_use._cua_permission_mode("session-a") == "unrestricted"
 
 
-def test_gateway_session_key_yolo_maps_to_unrestricted_mode():
+def test_gateway_session_key_yolo_maps_to_unrestricted_mode(monkeypatch):
     """Gateway /yolo keys bypass off the gateway session_key contextvar,
     not the DB session_id the tool path passes. Mode resolution must consult
     both namespaces or /yolo is silently dead on messaging platforms."""
@@ -48,6 +48,8 @@ def test_gateway_session_key_yolo_maps_to_unrestricted_mode():
     from tools import approval_context
     from tools.computer_use import tool as computer_use
 
+    # Pin the non-YOLO policy: the product's default may itself bypass approval.
+    monkeypatch.setattr(approval_context, "_get_approval_mode", lambda: "smart")
     gateway_key = "agent:main:telegram:private:12345"
     token = approval_context.set_current_session_key(gateway_key)
     try:

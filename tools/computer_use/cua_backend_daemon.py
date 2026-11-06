@@ -113,6 +113,7 @@ class _EmbeddedCuaDaemon:
         if manifest and not os.path.isfile(manifest):
             raise ValueError(f"capability manifest not found: {manifest}")
         self.capability_manifest: Optional[str] = manifest or None
+        self._source_capability_manifest = self.capability_manifest
         # bounded always forwards (driver validates it); other modes accept only v3 — a legacy manifest aborts startup.
         self.manifest_applies = bool(manifest) and (
             permission_mode == "bounded" or _cb()._manifest_is_mode_independent(manifest))
@@ -124,12 +125,15 @@ class _EmbeddedCuaDaemon:
         self._mcp_args: list[str] = list(_driver._CUA_DRIVER_ARGS)
         self._process: Any = None
         self._owns_runtime = self._running = False
+        self._sandbox_transport: Any = None
         self._stderr_tail: deque[str] = deque(maxlen=20)
         token = uuid.uuid4().hex[:12]
         self.socket_path = (rf"\\.\pipe\hermes-cua-{token}" if sys.platform == "win32"
                             else os.path.join(tempfile.gettempdir(), f"hc-{token}.sock"))
 
     def child_env(self) -> dict[str, str]:
+        if self._sandbox_transport is not None:
+            return self._sandbox_transport.client_env()
         env = {**_cb().cua_driver_child_env(), "CUA_DRIVER_PERMISSION_MODE": self.permission_mode}
         if self.permission_mode == "unrestricted":
             env["CUA_DRIVER_DANGEROUSLY_BYPASS_APPROVALS"] = "1"
@@ -155,6 +159,8 @@ class _EmbeddedCuaDaemon:
         # The private daemon owns the cursor overlay, so the overlay policy must apply to this long-lived serve
         # process, not only its MCP proxy. Appended BEFORE the macOS app-launch wrapping so the flag travels inside
         # `open ... --args` with the rest of the serve args.
+        if self._sandbox_transport is not None:
+            return [*serve_args, "--no-overlay"]
         return _driver._mcp_args_with_overlay_flag(serve_args, driver_cmd=self._command)
 
     def start(self) -> None:
@@ -162,12 +168,21 @@ class _EmbeddedCuaDaemon:
             return
         # Keep an explicit command fixed, but reselect managed drivers on every
         # launch: PM may have acquired a new pin since construction or last stop.
-        driver_cmd = self._driver_cmd or _driver.resolve_cua_driver_cmd()
-        if not driver_cmd:
-            raise RuntimeError(_driver.cua_driver_install_hint())
-        self._command, self._mcp_args = _driver._resolve_mcp_invocation(driver_cmd)
+        from tools.computer_use.cua_backend_sandbox import sandbox_daemon_transport
+        self._sandbox_transport = sandbox_daemon_transport(self.permission_mode)
+        if self._sandbox_transport is not None:
+            self._command, self._mcp_args = "cua-driver", ["mcp", "--no-overlay"]
+            self.socket_path, remote_manifest = self._sandbox_transport.prepare(self._source_capability_manifest)
+            if self.manifest_applies:
+                self.capability_manifest = remote_manifest
+            command = self._driver_invocation(self._serve_args())
+        else:
+            driver_cmd = self._driver_cmd or _driver.resolve_cua_driver_cmd()
+            if not driver_cmd:
+                raise RuntimeError(_driver.cua_driver_install_hint())
+            self._command, self._mcp_args = _driver._resolve_mcp_invocation(driver_cmd)
+            command = _embedded_daemon_spawn_command(self._command, self._serve_args(), platform=sys.platform)
         env = self._sanitized_env()
-        command = _embedded_daemon_spawn_command(self._command, self._serve_args(), platform=sys.platform)
         self._process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                          stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
                                          env=env)
@@ -191,22 +206,37 @@ class _EmbeddedCuaDaemon:
 
     def _socket_ready(self, env: dict[str, str]) -> bool:
         """``cua-driver status --socket`` exits 0 once the private daemon accepts connections."""
-        probe = _cb()._run_quiet([self._command, "status", "--socket", self.socket_path], timeout=2.0, env=env, swallow=_QUIET_ERRORS)
+        probe = _cb()._run_quiet(self._driver_invocation(["status", "--socket", self.socket_path]),
+                                 timeout=2.0, env=env, swallow=_QUIET_ERRORS)
         return probe is not None and probe.returncode == 0
 
     def proxy_invocation(self) -> tuple[str, list[str]]:
         if not self._running:
             raise RuntimeError("embedded cua-driver daemon is not running")
-        return self._command, [*self._mcp_args, "--embedded", "--socket", self.socket_path]
+        argv = self._driver_invocation([*self._mcp_args, "--embedded", "--socket", self.socket_path])
+        return argv[0], argv[1:]
+
+    def _driver_invocation(self, args: list[str]) -> list[str]:
+        if self._sandbox_transport is not None:
+            return self._sandbox_transport.invocation([self._command, *args])
+        return [self._command, *args]
+
+    def call_invocation(self, name: str, arguments: str) -> list[str]:
+        """CLI recovery stays with this private daemon, including its sandbox placement."""
+        return self._driver_invocation(["call", name, arguments, "--socket", self.socket_path])
 
     def stop(self) -> None:
         process, self._process = self._process, None
         owns_runtime, self._owns_runtime, self._running = self._owns_runtime, False, False
         if owns_runtime:
-            _cb()._run_quiet([self._command, "stop", "--socket", self.socket_path], timeout=3.0, stdout=subprocess.DEVNULL,
+            _cb()._run_quiet(self._driver_invocation(["stop", "--socket", self.socket_path]), timeout=3.0, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, env=self._sanitized_env(), swallow=_QUIET_ERRORS)
         if process is not None:
             _wait_or_kill(process)
-        if sys.platform != "win32" and os.path.exists(self.socket_path):
+        if self._sandbox_transport is not None:
+            self._sandbox_transport.close()
+            self._sandbox_transport = None
+            self.capability_manifest = self._source_capability_manifest
+        elif sys.platform != "win32" and os.path.exists(self.socket_path):
             with contextlib.suppress(OSError):
                 os.remove(self.socket_path)
