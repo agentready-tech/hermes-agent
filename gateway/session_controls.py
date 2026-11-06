@@ -535,7 +535,7 @@ class AuthorityConnection:
             return []
         self.authority.authorize(self.actor, ref, 'session:respond')
         from gateway.session_sudo_prompt import open_requests
-        return open_requests(ref.session_id)
+        return open_requests(ref.session_id, profile_home=self.authority.profile_id)
 
     async def detach(self, ref, params):
         if set(params) - {'end_reason'} != {'session_id', 'subscription_id'}:
@@ -653,7 +653,7 @@ class AuthorityConnection:
             except RuntimeStoreError:
                 return False
             return True
-        if not resolve(frame, session_ok=entitled):
+        if not resolve(frame, session_ok=entitled, profile_home=self.authority.profile_id):
             import logging
             logging.getLogger(__name__).debug('dropping response for unknown server request id=%r', frame.get('id'))
 

@@ -30,3 +30,16 @@ credential in the trusted host is outside the sandbox's authority.
 Build images only from a clean committed snapshot of this experiment branch.
 The canonical stable fork branch remains `codex/agentready-runtime`; plain `main`
 continues to be the upstream baseline. Push is deferred while GitHub is unavailable.
+
+`local_run.py OUTPUT --image agentsee/shared-runtime:VERSION` verifies a clean
+checkout and the exact image revision, creates two labelled disposable sandboxes,
+and dispatches the committed Linux `image_probe.py`. Only the trusted experiment
+controller receives the local Docker socket. Each sandbox has no network and can
+see only its own agent directory and workspace. The controller is excluded from
+runtime PSS; its cgroup total is reported separately. No GUI/browser is included.
+
+The scripted inference run exercises actual native terminal, memory and persistent
+delegation tools, blocked children with responsive parents, own-only list/read/stop,
+completion delivery, then a full gateway process restart using the same folders.
+Four trials reverse the shared/separate ordering. The paid provider probe remains
+a separate acceptance item; neither a scripted model nor unit tests prove it.
