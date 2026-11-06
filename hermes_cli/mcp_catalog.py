@@ -11,7 +11,7 @@ import shutil
 import subprocess
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any, Dict, Iterator, List, Optional
 
 import hermes_yaml as yaml
@@ -436,9 +436,13 @@ def _run_bootstrap(cwd: Path, commands: list[str]) -> None:
             raise CatalogError(f"bootstrap step failed (exit {rc}): {cmd}", failure_class="bootstrap_failed")
 
 
-def _do_git_install(entry: CatalogEntry) -> Path:
-    """Clone the entry's repo into ``~/.hermes/mcp-installs/<name>`` and run bootstrap. Returns the dir."""
+def _do_git_install(entry: CatalogEntry) -> PurePath:
+    """Clone and bootstrap in the owning terminal backend, returning its install path."""
     assert entry.install is not None and entry.install.type == "git"
+    from hermes_cli.mcp_catalog_sandbox import installation_environment, install_git
+    environment = installation_environment()
+    if environment is not None:
+        return install_git(environment, entry)
     install = entry.install
     dest = _install_root() / entry.name
 
@@ -481,7 +485,7 @@ def _do_git_install(entry: CatalogEntry) -> Path:
     return dest
 
 
-def _expand_install_dir(value: str, install_dir: Optional[Path]) -> str:
+def _expand_install_dir(value: str, install_dir: Optional[PurePath]) -> str:
     if _INSTALL_DIR_VAR not in value:
         return value
     if install_dir is None:
@@ -536,7 +540,7 @@ def _inline_non_secret_value(obj: Any, name: str, value: str) -> Any:
     return obj
 
 
-def _build_server_config(entry: CatalogEntry, install_dir: Optional[Path]) -> dict:
+def _build_server_config(entry: CatalogEntry, install_dir: Optional[PurePath]) -> dict:
     """Translate a manifest into the ``mcp_servers.<name>`` block format used by hermes_cli/mcp_config.py."""
     cfg: dict = {}
     t = entry.transport
@@ -849,6 +853,12 @@ def _install_entry(entry: CatalogEntry, *, enable: bool, preloaded_env: Optional
 
 def uninstall_entry(name: str, *, purge_install_dir: bool = True) -> bool:
     """Remove a catalog-installed MCP from config and (optionally) its clone dir. True if anything removed."""
+    if purge_install_dir:
+        from hermes_cli.mcp_catalog_sandbox import installation_environment, purge_install
+        environment = installation_environment()
+        if environment is not None:
+            purged = purge_install(environment, name)
+            return remove_server(name) or purged
     removed = remove_server(name)
     if purge_install_dir:
         clone = _install_root() / name
