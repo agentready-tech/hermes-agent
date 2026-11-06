@@ -158,11 +158,12 @@ def _recover_projects(parent, store):
         return []
     from concurrent.futures import wait
     from tools.daemon_pool import DaemonThreadPoolExecutor
+    from tools.thread_context import propagate_context_to_thread
     projects = store.projects()
     if not projects:
         return []
     executor = DaemonThreadPoolExecutor(max_workers=_get_max_concurrent_children())
-    futures = [executor.submit(_recover_project_scoped, parent, project) for project in projects]
+    futures = [executor.submit(propagate_context_to_thread(_recover_project_scoped), parent, project) for project in projects]
     pending = set(futures)
     interrupted = False
     mail_ready = False
