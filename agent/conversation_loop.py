@@ -1374,7 +1374,7 @@ def _preflight_timeout_result(agent, exc, conversation_history) -> dict[str, Any
     )
     # Clear the tripwire slot note_turn_start registered (the early return skips the persist
     # funnel). The user row is deliberately NOT persisted (#7100).
-    from agent.agent_runtime_helpers import note_turn_persisted
+    from agent.turn_overlap import note_turn_persisted
     note_turn_persisted(agent)
     # Not _COMPRESSION_TIMEOUT_FINAL_RESPONSE — that describes a different state
     # (compression ran, could not reduce); the exception text carries the guidance.

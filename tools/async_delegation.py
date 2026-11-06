@@ -733,8 +733,17 @@ def _session_records(statuses, session_key: str, origin_ui_session_id: str, pare
     if not selectors:
         return []
     with _records_lock:
-        return [r for r in _records.values() if r.get("status") in statuses
+        return [r for r in _records.values() if _record_in_current_profile(r) and r.get("status") in statuses
                 and any(str(r.get(field) or "") == wanted for field, wanted in selectors)]
+
+
+def _record_in_current_profile(record):
+    """Every live dispatch has an owner home; unowned legacy fixtures cannot cross a mux boundary."""
+    owner = record.get('_profile_home')
+    if owner is None:
+        from agent.secret_scope import is_multiplex_active
+        return not is_multiplex_active()
+    return owner == hermes_home_key()
 
 
 def has_live_for_session(session_key: str = "", origin_ui_session_id: str = "", parent_session_id: str = "") -> bool:
@@ -818,6 +827,7 @@ def _dispatch_admitted(
     crash_result = _batch_crash if is_batch else _single_crash
     dispatched_at = time.time()
     record: dict[str, Any] = {
+        "_profile_home": hermes_home_key(),
         "delegation_id": delegation_id, "goal": goal, **({"goals": list(goals)} if is_batch else {}),
         "context": context, "toolsets": list(toolsets) if toolsets else None, "role": role, "model": model,
         "session_key": session_key, "origin_ui_session_id": origin_ui_session_id,
@@ -835,7 +845,8 @@ def _dispatch_admitted(
         # Stale-monitor bookkeeping (see _stale_monitor_loop).
         "_progress_token": None, "_progress_ts": dispatched_at, "_interrupted_at": None}
     with _records_lock:
-        active_slots = {r.get("slot_key") or r["delegation_id"] for r in _records.values() if r.get("status") in _ACTIVE_STATES}
+        active_slots = {r.get("slot_key") or r["delegation_id"] for r in _records.values()
+                        if _record_in_current_profile(r) and r.get("status") in _ACTIVE_STATES}
         if record["slot_key"] not in active_slots and len(active_slots) >= max_async_children:
             return {"status": "rejected", "error": capacity_error}
         _records[delegation_id] = record
@@ -1214,6 +1225,8 @@ def list_async_delegations() -> list[dict[str, Any]]:
     with _records_lock:
         items = []
         for r in _records.values():
+            if not _record_in_current_profile(r):
+                continue
             item = {k: v for k, v in r.items() if k not in {"interrupt_fn", "progress_fn"} and not k.startswith("_")}
             status = r.get("status")
             if status in _ACTIVE_STATES:

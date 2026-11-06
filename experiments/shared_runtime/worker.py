@@ -12,6 +12,8 @@ def main():
     parser.add_argument('--profiles', nargs='*', default=[])
     args = parser.parse_args()
     os.environ['HERMES_HOME'] = str(args.home.resolve())
+    from experiments.shared_runtime.transport import install
+    install()
     from gateway.run import _profile_runtime_scope
     from hermes_runtime.adapters.hermes import activate, activate_profiles
     from hermes_runtime.adapters.state import ensure_home_session

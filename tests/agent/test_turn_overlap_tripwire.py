@@ -7,11 +7,12 @@ dispatch route that bypassed the busy guard can be identified from logs.
 """
 
 import logging
+from types import SimpleNamespace
 
 import pytest
 
-from agent import agent_runtime_helpers as _helpers
-from agent.agent_runtime_helpers import note_turn_start, note_turn_persisted
+from agent import turn_overlap as _helpers
+from agent.turn_overlap import note_turn_start, note_turn_persisted
 
 
 class _FakeAgent:
@@ -92,5 +93,19 @@ def test_persist_disabled_fork_neither_registers_nor_warns(caplog):
         note_turn_start(fork, "s1:tr:gggg")
         assert note_turn_start(parent, "s1:t2:bbbb") is None
     assert not caplog.records
+
+
+def test_equal_ids_in_distinct_profile_databases_do_not_overlap(tmp_path, caplog):
+    alpha, bravo = _FakeAgent(), _FakeAgent()
+    alpha._session_db = SimpleNamespace(db_path=tmp_path / 'alpha' / 'state.db')
+    bravo._session_db = SimpleNamespace(db_path=tmp_path / 'bravo' / 'state.db')
+    with caplog.at_level(logging.WARNING, logger='agent.agent_runtime_helpers'):
+        assert note_turn_start(alpha, 'alpha-turn') is None
+        assert note_turn_start(bravo, 'bravo-turn') is None
+        note_turn_persisted(alpha)
+        peer = _FakeAgent()
+        peer._session_db = bravo._session_db
+        assert note_turn_start(peer, 'same-bravo-database') == 'bravo-turn'
+    assert len(caplog.records) == 1
 
 
