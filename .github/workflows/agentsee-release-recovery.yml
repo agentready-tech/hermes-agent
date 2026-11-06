@@ -1,32 +1,55 @@
-name: Recover AgentSee release metadata
+name: Recover verified AgentSee release without rebuilding
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
-  packages: read
+  packages: write
+
+concurrency:
+  group: agentsee-hermes-release
+  cancel-in-progress: false
 
 jobs:
-  metadata:
+  recover:
     if: github.repository == 'agentready-tech/hermes-agent'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 45
     steps:
-      - name: Read only package and immutable release metadata
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install registry tools and reserve image transfer space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends skopeo
+      - name: Copy the exact image, verify privately and recover the release receipt
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          mkdir -m 700 "$RUNNER_TEMP/release-metadata"
-          gh api orgs/agentready-tech/packages/container/hermes-agent --jq '{name,visibility,package_type,repositoryFullName:.repository.full_name,repositoryId:.repository.id}' > "$RUNNER_TEMP/release-metadata/package.json"
-          gh api repos/agentready-tech/hermes-agent --jq '{id,full_name,private}' > "$RUNNER_TEMP/release-metadata/repository.json"
-          gh api --paginate orgs/agentready-tech/packages/container/hermes-agent/versions --jq '.[] | select(.metadata.container.tags | index("2026.11.6.1")) | {id,name,tags:.metadata.container.tags}' > "$RUNNER_TEMP/release-metadata/version.json"
-      - name: Save safe package metadata
-        if: always()
+        run: python3 deploy/kubernetes/recover_release.py
+      - name: Save exact private image and recovered release receipt
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: release-metadata-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/release-metadata/*.json
+          name: hermes-release-agentsee-v2026.11.6.1-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/agentsee-hermes-release/hermes-release.oci.tar
+            ${{ runner.temp }}/agentsee-hermes-release/release-proof.json
+            ${{ runner.temp }}/agentsee-hermes-release/source-proof.json
+          compression-level: 0
           retention-days: 7
           if-no-files-found: error
+      - name: Save recovery diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-recovery-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/agentsee-hermes-release/status.json
+            ${{ runner.temp }}/agentsee-hermes-release/failure.private.log
+            ${{ runner.temp }}/agentsee-hermes-release/registry-copy.log
+            ${{ runner.temp }}/agentsee-hermes-release/registry-pull.log
+          retention-days: 3
+          if-no-files-found: ignore

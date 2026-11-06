@@ -11,7 +11,7 @@ The application source is agentready-tech/hermes-agent. ONE common immutable rel
 
 Inspect all tracked and untracked changes. Identify their ownership and whether they have already been delivered. Never label a completed deployed fix as unrelated WIP and exclude it from future releases. Preserve genuinely unrelated work without claiming it is included. Resolve required source changes before building.
 
-Commit and push completed release code, merge it into the fork's main, then create an immutable agentsee-vVERSION Git tag at that exact revision. The revision must be reachable from remote main. A temporary overlay or source checksum list does not replace the source commit.
+Commit and push completed release code, keep it on the fork's canonical `codex/agentready-runtime` branch, then create an immutable agentsee-vVERSION Git tag at that exact revision. The revision must be reachable from remote `codex/agentready-runtime`. This is the project's effective main branch. `main` is reserved for the upstream baseline and future upstream updates/rebases. Never merge our working branch into `main` or change the default branch to `main` when the user says merge to main; resolve that wording against this established fork convention. A temporary overlay or source checksum list does not replace the source commit.
 
 ## Canonical build
 
@@ -23,7 +23,7 @@ Reject dirty or untracked source inputs. Verify the complete first-party Python 
 
 ## Publication and rollout
 
-Publish ONE image to ghcr.io/agentready-tech/hermes-agent:VERSION. Record its registry manifest digest, source revision, CI run and source receipt. Retain the previous image for rollback. Never overwrite a version tag or build employee-specific images.
+Publish ONE image to ghcr.io/agentready-tech/agentsee-hermes:VERSION. Record its registry manifest digest, source revision, CI run and source receipt. Retain the previous image for rollback. Never overwrite a version tag or build employee-specific images.
 
 Respect the user's validation scope. When production tests are excluded, do not run model, mail, Telegram, STT, Decision, browser or GUI probes, or repeat production audits. Ordinary rollout readiness is separate from exercising user functionality. Do required packaging checks before publication.
 

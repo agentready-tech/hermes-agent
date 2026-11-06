@@ -1,0 +1,9 @@
+{
+  "sourceRevision": "ad6a6a220af08c6da0b511f69b4a15a26489ec3d",
+  "version": "2026.11.6.1",
+  "source": "ghcr.io/agentready-tech/hermes-agent",
+  "destination": "ghcr.io/agentready-tech/agentsee-hermes",
+  "digest": "sha256:f00e8a3dd2d8964747494b344be7a1cba390c43896d4e1824129d8924993cf30",
+  "publicVersionId": 1516132949,
+  "buildWorkflowRunId": 42247259705
+}

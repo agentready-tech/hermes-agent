@@ -10,10 +10,13 @@ import subprocess
 import tarfile
 from pathlib import Path
 
-from release_source import export
+if __package__:
+    from .release_source import export
+else:
+    from release_source import export
 
 ROOT = Path(__file__).resolve().parents[2]
-IMAGE = "ghcr.io/agentready-tech/hermes-agent"
+IMAGE = "ghcr.io/agentready-tech/agentsee-hermes"
 
 
 def output_root() -> Path:
@@ -53,7 +56,7 @@ def prepare(revision: str, version: str) -> Path:
     source = output_root() / "source"
     export(ROOT, source, revision)
     run(["python3", str(ROOT / "scripts/write_install_stamp.py"), "--output", str(source / "install-stamp.json"),
-         "--commit", revision, "--branch", "main", "--display-version", version, "--source", "ci",
+         "--commit", revision, "--branch", "codex/agentready-runtime", "--display-version", version, "--source", "ci",
          "--distribution", "docker", "--update-mechanism", "external"])
     return source
 
@@ -98,8 +101,8 @@ def publish(candidate: str) -> str:
             raise ValueError("Cannot establish whether the release package exists")
     else:
         package = json.loads(package_check.stdout)
-        if package.get("repository", {}).get("full_name") != "agentready-tech/hermes-agent":
-            raise ValueError("Existing package belongs to another repository")
+        if package.get("visibility") != "private" or (package.get("repository") or {}).get("full_name") != "agentready-tech/hermes-agent":
+            raise ValueError("Existing package must be private and owned by the fork")
         absent = subprocess.run(["skopeo", "inspect", "docker://" + candidate], capture_output=True, check=False, timeout=120)
         if not absent.returncode or not any(x in absent.stderr.decode(errors="replace").lower()
                                            for x in ("manifest unknown", "name unknown", "404", "not found")):
@@ -142,7 +145,7 @@ def main() -> None:
     output_root().mkdir(exist_ok=False)
     revision = os.environ["GITHUB_SHA"]
     version = os.environ["GITHUB_REF_NAME"].removeprefix("agentsee-v")
-    phase("exporting_committed_main")
+    phase("exporting_committed_fork")
     source = prepare(revision, version)
     candidate, proof = build(source, revision, version)
     image = publish(candidate)

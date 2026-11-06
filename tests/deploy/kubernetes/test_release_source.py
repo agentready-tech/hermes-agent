@@ -78,7 +78,7 @@ class SourceInventoryTests(unittest.TestCase):
         subprocess.run(["git", "-C", str(repo), "-c", "user.name=Packaging test", "-c",
                         "user.email=packaging@example.invalid", "commit", "-qm", "Source"], check=True, timeout=10)
         revision = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True, timeout=10).strip()
-        subprocess.run(["git", "-C", str(repo), "update-ref", "refs/remotes/origin/main", revision], check=True, timeout=10)
+        subprocess.run(["git", "-C", str(repo), "update-ref", "refs/remotes/origin/codex/agentready-runtime", revision], check=True, timeout=10)
         (repo / "unexpected.py").write_text("pass\n")
         with self.assertRaisesRegex(ValueError, "dirty build checkout"):
             export(repo, self.root / "rejected", revision)

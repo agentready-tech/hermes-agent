@@ -37,7 +37,7 @@ def export(root: Path, output: Path, revision: str) -> dict:
         raise ValueError("Build checkout must be the exact committed revision")
     if git(root, "status", "--porcelain", "--untracked-files=all"):
         raise ValueError("Refusing a dirty build checkout, including untracked files")
-    git(root, "merge-base", "--is-ancestor", revision, "origin/main")
+    git(root, "merge-base", "--is-ancestor", revision, "origin/codex/agentready-runtime")
     output.mkdir(parents=True, exist_ok=False)
     archive = subprocess.Popen(["git", "-C", str(root), "archive", revision], stdout=subprocess.PIPE)
     try:
