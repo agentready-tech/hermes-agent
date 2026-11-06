@@ -144,7 +144,9 @@ def _tail_server_stderr(server_name: str, *, max_bytes: int = 8192, max_lines: i
 
 
 # Env vars safe to pass to stdio subprocesses (no secrets).
-_SAFE_ENV_KEYS = frozenset({"PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "SHELL", "TMPDIR"})
+_SAFE_ENV_KEYS = frozenset({"PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "SHELL", "TMPDIR",
+    # In-cluster clients need the same API endpoint as their owning Hermes Pod.
+    "KUBERNETES_SERVICE_HOST", "KUBERNETES_SERVICE_PORT", "KUBERNETES_SERVICE_PORT_HTTPS"})
 
 # Windows process/location vars needed by launcher-style tools (e.g. Docker Desktop's MCP plugin discovery).
 _SAFE_ENV_KEYS_CASE_INSENSITIVE = frozenset({
@@ -183,13 +185,16 @@ _CONTEXT_VAR_RESOLVERS = {
 
 def _build_safe_env(user_env: Optional[dict]) -> dict:
     """Filtered env for stdio subprocesses so API keys/tokens don't leak: the safe baseline
-    keys, ``XDG_*``, vars injected by an external secret source (users configured that backend
-    precisely so subprocesses can consume them), plus the server config's own ``env``."""
+    keys, ``XDG_*``, the active profile home, vars injected by an external secret source (users
+    configured that backend precisely so subprocesses can consume them), plus the server's ``env``."""
     from agent.secret_scope import get_secret
     from hermes_cli.env_loader import secret_source_names
+    from hermes_constants import get_hermes_home
     env = {
         key: value for key, value in os.environ.items()
         if key in _SAFE_ENV_KEYS or key.upper() in _SAFE_ENV_KEYS_CASE_INSENSITIVE or key.startswith("XDG_")}
+    # A routed profile may differ from the launch process's HERMES_HOME.
+    env["HERMES_HOME"] = str(get_hermes_home())
     # Source-tagged names are process-wide (any profile's hydration tags them) while os.environ
     # holds only the LAUNCH profile's values, so the value must come from the active profile's
     # secret scope; a profile that lacks the name gets nothing, never another profile's token.
