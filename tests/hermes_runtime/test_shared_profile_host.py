@@ -96,3 +96,34 @@ def test_legacy_single_runtime_keeps_its_existing_home_key(tmp_path, monkeypatch
     assert home_session_key() == HOME_SESSION_KEY
     with pytest.raises(RuntimeError, match='exactly one'):
         hermes.activate(tmp_path / 'different')
+
+
+@pytest.mark.parametrize('name', ['alpha', 'bravo'])
+def test_adapter_completion_route_matches_botmode_store(shared_homes, name):
+    from types import SimpleNamespace
+    from gateway.config import GatewayConfig, Platform, PlatformConfig
+    from gateway.platforms.base import BasePlatformAdapter
+    from gateway.run import _profile_runtime_scope
+    from gateway.session import SessionSource, SessionStore
+    from gateway.session_identity import RoutingIdentity
+
+    root, homes = shared_homes
+    source = SessionSource(platform=Platform.TELEGRAM, chat_id='fixture-' + name,
+                           user_id='9001', profile=name)
+    adapter = SimpleNamespace(config=PlatformConfig(), _canonicalize=lambda src: None,
+                              _session_key_profile=lambda src: src.profile)
+    store = SessionStore(root / 'sessions', GatewayConfig(multiplex_profiles=True))
+    try:
+        with _profile_runtime_scope(homes[name]):
+            route = store._generate_session_key(source)
+            assert route == 'agent:' + name + ':agentready:home'
+            assert BasePlatformAdapter._source_session_key(adapter, source) == route
+        # Real background ingress starts outside a turn's profile scope.
+        source._identity = RoutingIdentity(transport_profile=name, runtime_profile=name,
+            authorization_home=homes[name], runtime_home=homes[name])
+        assert BasePlatformAdapter._source_session_key(adapter, source) == route
+        source._identity = RoutingIdentity(transport_profile='foreign', runtime_profile='foreign',
+            authorization_home=root / 'foreign', runtime_home=root / 'foreign')
+        assert ':agentready:home' not in BasePlatformAdapter._source_session_key(adapter, source)
+    finally:
+        store.close_all_db_handles()

@@ -38,7 +38,12 @@ def shared_host() -> bool:
 def enabled() -> bool:
     from hermes_constants import get_hermes_home
 
-    active = Path(get_hermes_home()).resolve()
+    return owns_home(get_hermes_home())
+
+
+def owns_home(home) -> bool:
+    """Whether an explicit runtime home belongs to this managed process."""
+    active = Path(home).resolve()
     return active in _hosted_homes if _hosted_homes else active == _home
 
 

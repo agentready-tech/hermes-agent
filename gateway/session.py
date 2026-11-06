@@ -694,14 +694,14 @@ def build_session_key(
     source: SessionSource, group_sessions_per_user: bool = True,
     thread_sessions_per_user: bool = False, profile: Optional[str] = None,
 ) -> str:
-    """Build a deterministic session key from a message source (single source of truth).
-
-    Layout: ``<ns>:<platform>:<chat_type>[:<slack scope_id>][:<chat_id>][:<thread_id>][:<user>]``.
-    Slack ``scope_id`` precedes chat ids (Discord guild scope is deliberately NOT added, for key
-    compatibility). DMs are isolated per chat_id, falling back to the sender id, then to one
-    session per platform. Groups add the participant id only when ``group_sessions_per_user`` and
-    not in a thread (threads are shared unless ``thread_sessions_per_user``).
+    """One routing-key authority for storage, adapters and owned BotMode ingress.
+    Native layout: ``<ns>:<platform>:<chat_type>[:<slack scope>][:<chat>][:<thread>][:<user>]``.
+    DMs isolate by chat/sender; groups isolate users except shared threads unless opted in.
+    Slack scope precedes chat; Discord guild is omitted for historical compatibility.
     """
+    from hermes_runtime.sessions import managed_route_key
+    if (managed := managed_route_key(source, profile)) is not None:
+        return managed
     is_dm = source.chat_type == "dm"
     chat_id = source.chat_id
     if is_dm and source.platform == Platform.WHATSAPP:
