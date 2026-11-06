@@ -20,7 +20,7 @@ def prepare_native_tabs(code: str, task: str, cmd: list, env: dict) -> str:
     browser = hashlib.sha256(endpoint.encode()).hexdigest()
     # The harness daemon name is global to the unix user. Scope it to both
     # profile and task so a sibling cannot switch its attachment mid-operation.
-    name = "hermes-" + hashlib.sha256((home + "\0" + task + "\0" + env.get("BU_NAME", "default")).encode()).hexdigest()[:32]
+    name = "hermes-" + hashlib.sha256((home + "\0" + task + "\0" + env.get("BU_NAME", "default") + "\0" + browser).encode()).hexdigest()[:32]
     env["BU_NAME"] = name
     with _lock:
         _contexts.setdefault((home, task), {})[name] = (list(cmd), dict(env), browser)

@@ -2,6 +2,7 @@
 import inspect
 import json
 import logging
+import subprocess
 from pathlib import Path
 
 POLICY = {"HighEfficiencyModeEnabled": True, "MemorySaverModeSavings": 1}
@@ -31,7 +32,7 @@ def configure(env):
         result = streams.run_in(env, ["python3", "-c", code], timeout=15)
         if result.returncode == 0:
             return True
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, subprocess.SubprocessError):
         pass
     logging.getLogger(__name__).warning("Native browser Memory Saver needs a writable managed-policy directory")
     return False
