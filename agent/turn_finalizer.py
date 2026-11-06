@@ -636,6 +636,16 @@ def finalize_turn(
 
     _guarded_cleanup("persist_session", _persist_step, _cleanup_errors, logger)
 
+    # Shared desktop tabs are task-owned resources, not the persistent browser.
+    # Interrupted/failed turns and live managed operations keep their work intact.
+    from tools.browser_tab_runtime import finish_native_tabs
+    _guarded_cleanup(
+        "finish_native_tabs",
+        lambda: finish_native_tabs(agent, effective_task_id, completed=completed,
+                                   interrupted=interrupted, failed=failed or bool(_cleanup_errors)),
+        _cleanup_errors, logger,
+    )
+
     # Keep the gateway's separate in-memory history snapshot current even on
     # cleanup error, so a later prompt isn't sent with a pre-turn snapshot.
     with suppress(Exception):

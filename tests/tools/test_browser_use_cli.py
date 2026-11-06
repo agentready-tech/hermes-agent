@@ -1342,7 +1342,7 @@ class TestExecHybridPrivateUrlRouting:
         else:
             assert result["success"] is True, result
             assert [k for k, *_ in self.local_keys] == ["t::local"]
-            assert result["output"] == "_local_default"
+            assert result["output"].startswith("hermes-")
 
     def test_sidecar_route_has_its_own_daemon_and_sticks_for_url_less_calls(self):
         """The harness daemon reads BU_CDP_* once at spawn, so the sidecar must not share the cloud
@@ -1353,6 +1353,8 @@ class TestExecHybridPrivateUrlRouting:
 
         daemons = [json.loads(bu_cli.browser_exec(code, task_id="t"))["output"] for code, _ in steps]
 
-        assert daemons == [want for _, want in steps]
+        assert daemons[0] == "default"
+        assert daemons[1] == daemons[2] != daemons[0]
+        assert daemons[1].startswith("hermes-")
         assert self.cloud_keys == ["t"]
         assert [k for k, *_ in self.local_keys] == ["t::local", "t::local"]

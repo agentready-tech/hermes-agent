@@ -781,7 +781,7 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
     # SHARED browser (/browser connect CDP override): pin each named session to its own tab (see
     # _OWN_TAB_PREAMBLE). Private per-name browsers skip this — nothing to collide with.
     private_browser = env.pop(_PRIVATE_BROWSER_SENTINEL, None)  # always pop: never exported to the CLI
-    if session and not private_browser:
+    if session and not private_browser and not bot_desktop_browser:
         code = _OWN_TAB_PREAMBLE + code
 
     workspace = _workspace_dir(task_id)
@@ -797,6 +797,10 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
     started = time.time()
 
     def dispatch() -> dict[str, Any]:
+        nonlocal code
+        if bot_desktop_browser:
+            from tools.browser_tab_runtime import prepare_native_tabs
+            code = prepare_native_tabs(code, str(task_id or ""), cmd, env)
         _attach_vault_supervisor(env, task_id)
         with _driven_daemons_lock:
             _driven_daemons.add(env.get("BU_NAME", "default"))
@@ -890,7 +894,9 @@ _HEADER_LIGHTPANDA = (
 # drift, supply-chain exposure, byte-unstable prompt). A/B benchmarked ~equal.
 _HELPERS_DIGEST = (
     "\n\nHELPERS (pre-imported): new_tab(url) opens/navigates (use for the FIRST navigation), goto_url(url) "
-    "navigates the current tab, wait_for_load() after navigation, page_info() summarizes the current page "
+    "navigates the current tab. Reuse it while working; native temporary tabs are cleaned up after a successful task. "
+    "keep_tab(target=None) retains a native result tab or a page waiting for human input across turns. "
+    "wait_for_load() after navigation, page_info() summarizes the current page "
     "state, js(expr) evaluates a JS expression and returns its value (js('document.title'); wrap function "
     "bodies as js('(() => {...})()') — a bare '() => {...}' returns the function itself, uncalled), "
     "fill_input(selector, text) types into inputs, click_at_xy(x, y) clicks viewport coordinates, "

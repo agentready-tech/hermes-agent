@@ -130,6 +130,18 @@ def test_final_response_closes_tool_tail_before_persistence(monkeypatch):
     assert agent.persisted_messages[-1] == result["messages"][-1]
 
 
+def test_successful_finalization_releases_only_completed_browser_work(monkeypatch):
+    calls = []
+    monkeypatch.setattr("tools.browser_tab_runtime.finish_native_tabs", lambda *a, **kw: calls.append((a, kw)))
+    monkeypatch.setattr("hermes_cli.plugins.invoke_hook", lambda *a, **kw: [])
+    agent = FakeAgent()
+    finalize_turn(agent, final_response="Done.", api_call_count=1, interrupted=False, failed=False,
+                  messages=[{"role": "user", "content": "do it"}], conversation_history=[],
+                  effective_task_id="task", turn_id="turn", user_message="do it", original_user_message="do it",
+                  _should_review_memory=False, _turn_exit_reason="text_response(stop)")
+    assert calls == [((agent, "task"), {"completed": True, "interrupted": False, "failed": False})]
+
+
 def test_fallback_timestamp_survives_delayed_sqlite_persistence(
     monkeypatch, tmp_path
 ):

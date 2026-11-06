@@ -271,6 +271,8 @@ def start(env: Any, profile: str, *, geometry: str, wait_seconds: float = 20.0,
           browser_exec: Optional[str] = None, browser_exec_line: Optional[str] = None) -> dict[str, str]:
     """Bring the screen up inside ``env`` (idempotent); returns the published env. Raises RuntimeError naming
     the blocker."""
+    from tools.bot_desktop.browser_memory import configure
+    configure(env)
     rdir = _remote_dir(env, profile)
     live = _published(env, rdir)
     if live.get("DISPLAY"):
