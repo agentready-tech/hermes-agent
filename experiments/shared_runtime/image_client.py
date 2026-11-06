@@ -117,11 +117,14 @@ class Clients:
 
     async def completion(self, name, *, after=0):
         """A published child receipt alone does not prove the parent's admitted result turn."""
-        async with asyncio.timeout(60):
-            while True:
-                view = await self.view(name)
-                replied = any(m.get('role') == 'assistant' and 'COMPLETION_' + name in str(m.get('content', ''))
-                              for m in view['messages'][after:])
-                if replied and not view['running'] and all(r['status'] == 'terminal' for r in view['pending']):
-                    return view
-                await asyncio.sleep(.1)
+        try:
+            async with asyncio.timeout(60):
+                while True:
+                    view = await self.view(name)
+                    replied = any(m.get('role') == 'assistant' and 'COMPLETION_' + name in str(m.get('content', ''))
+                                  for m in view['messages'][after:])
+                    if replied and not view['running'] and all(r['status'] == 'terminal' for r in view['pending']):
+                        return view
+                    await asyncio.sleep(.1)
+        except TimeoutError as exc:
+            raise TimeoutError('NATIVE_PARENT_COMPLETION:' + name) from exc
