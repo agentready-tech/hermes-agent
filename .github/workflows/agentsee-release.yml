@@ -23,7 +23,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Verify release packaging guards
-        run: python3 -m unittest discover -s tests/deploy/kubernetes -p test_release_source.py -v
+        run: python3 -m unittest discover -s tests/deploy/kubernetes -p 'test_release_*.py' -v
       - name: Reserve disk space for a fresh source build
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup

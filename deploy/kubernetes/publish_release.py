@@ -17,6 +17,7 @@ else:
 
 ROOT = Path(__file__).resolve().parents[2]
 IMAGE = "ghcr.io/agentready-tech/agentsee-hermes"
+PACKAGE = "orgs/agentready-tech/packages/container/" + IMAGE.rsplit("/", 1)[1]
 
 
 def output_root() -> Path:
@@ -86,7 +87,14 @@ def build(source: Path, revision: str, version: str) -> tuple[str, dict]:
     return candidate, proof
 
 
-def publish(candidate: str) -> str:
+def registration(package: dict) -> dict:
+    if ((package.get("repository") or {}).get("full_name") != "agentready-tech/hermes-agent"
+            or package.get("visibility") not in {"private", "public", "internal"}):
+        raise ValueError("Release package must be linked to the fork with known visibility")
+    return {"packageVisibility": package["visibility"], "sourceRepository": "agentready-tech/hermes-agent"}
+
+
+def publish(candidate: str) -> tuple[str, dict]:
     token = os.environ["GH_TOKEN"].encode()
     username = os.environ["GITHUB_ACTOR"]
     auth = output_root() / "auth"
@@ -95,14 +103,13 @@ def publish(candidate: str) -> str:
     os.environ["REGISTRY_AUTH_FILE"] = str(auth / "registry-auth.json")
     run(["docker", "login", "ghcr.io", "--username", username, "--password-stdin"], data=token)
     run(["skopeo", "login", "--username", username, "--password-stdin", "ghcr.io"], data=token)
-    package_check = subprocess.run(["gh", "api", "orgs/agentready-tech/packages/container/hermes-agent"], capture_output=True, check=False, timeout=120)
+    package_check = subprocess.run(["gh", "api", PACKAGE], capture_output=True, check=False, timeout=120)
     if package_check.returncode:
         if b"HTTP 404" not in package_check.stderr:
             raise ValueError("Cannot establish whether the release package exists")
     else:
         package = json.loads(package_check.stdout)
-        if package.get("visibility") != "private" or (package.get("repository") or {}).get("full_name") != "agentready-tech/hermes-agent":
-            raise ValueError("Existing package must be private and owned by the fork")
+        registration(package)
         absent = subprocess.run(["skopeo", "inspect", "docker://" + candidate], capture_output=True, check=False, timeout=120)
         if not absent.returncode or not any(x in absent.stderr.decode(errors="replace").lower()
                                            for x in ("manifest unknown", "name unknown", "404", "not found")):
@@ -112,10 +119,8 @@ def publish(candidate: str) -> str:
     digest = run(["skopeo", "inspect", "--format", "{{.Digest}}", "docker://" + candidate]).decode().strip()
     if not re.fullmatch(r"sha256:[a-f0-9]{64}", digest):
         raise ValueError("Registry did not return an immutable manifest digest")
-    package = json.loads(run(["gh", "api", "orgs/agentready-tech/packages/container/hermes-agent"]))
-    if package.get("visibility") != "private" or package.get("repository", {}).get("full_name") != "agentready-tech/hermes-agent":
-        raise ValueError("Release package must be private and linked to the fork")
-    return IMAGE + "@" + digest
+    package = json.loads(run(["gh", "api", PACKAGE]))
+    return IMAGE + "@" + digest, registration(package)
 
 
 def archive(image: str) -> tuple[Path, str]:
@@ -148,12 +153,13 @@ def main() -> None:
     phase("exporting_committed_fork")
     source = prepare(revision, version)
     candidate, proof = build(source, revision, version)
-    image = publish(candidate)
+    image, package = publish(candidate)
     bundle, checksum = archive(image)
     receipt = {"phase": "complete", "version": version, "gitTag": "agentsee-v" + version,
                "sourceRevision": revision, "image": image, "tag": candidate, "platform": "linux/amd64",
                "workflowRunId": int(os.environ["GITHUB_RUN_ID"]), "workflowAttempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
-               "commonRuntimeForAllAgents": True, "fullSourceBuild": True, "private": True,
+               "commonRuntimeForAllAgents": True, "fullSourceBuild": True,
+               "private": package["packageVisibility"] == "private", **package,
                "registryFullPullVerified": True, "sourceProof": proof, "archive": bundle.name,
                "archiveSha256": checksum, "archiveBytes": bundle.stat().st_size,
                "productionTestsPerformed": False, "agentConfigurationIncluded": False}

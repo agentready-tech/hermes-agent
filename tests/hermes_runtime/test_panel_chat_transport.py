@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import pytest
 
 from hermes_runtime.standalone.panel import bridge
 from hermes_runtime.standalone.panel_auth import NativeScreenAuth
@@ -46,3 +47,28 @@ def test_chat_reverse_channel_preserves_native_rpc_and_observer_feed():
         assert any(frame.get("params", {}).get("type") == "status.update" for frame in observed)
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("dashboard", [True, False])
+def test_panel_worker_binds_its_home_before_choosing_chat_transport(monkeypatch, tmp_path, dashboard):
+    from hermes_runtime.adapters import hermes, state
+    from hermes_runtime.standalone import panel, config
+    import agent.secret_scope
+    monkeypatch.setattr(hermes, "_home", None)
+    monkeypatch.setattr(config, "settings", lambda home: {
+        "dashboard": {"enabled": dashboard}, "port": 1,
+        "panel": {"url": "https://panel.invalid", "environment_id": "env_fixture"}})
+    monkeypatch.setattr(agent.secret_scope, "get_secret", lambda name: "fixture-credential")
+    monkeypatch.setattr(state, "main_gateway_origin", lambda: {"session_key": "agent:main:agentready:home"})
+
+    async def connected(settings, port, credential, auth, subscriptions):
+        from hermes_runtime.standalone.panel_chat import gateway_chat_available
+        assert hermes.enabled(), "Panel's own worker must activate the managed home"
+        assert hermes.managed_home() == tmp_path.resolve()
+        assert gateway_chat_available(), "Panel must choose the existing gateway, not the legacy writer"
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(panel, "connection", connected)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(panel.worker(tmp_path))

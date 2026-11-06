@@ -209,6 +209,8 @@ async def connection(config, port, credential, auth, subscriptions=None):
 
 
 async def worker(home):
+    from hermes_runtime.adapters.hermes import activate
+    activate(home)
     from websockets.exceptions import WebSocketException
     from agent.secret_scope import get_secret
     from hermes_runtime.standalone.config import dashboard_enabled, settings
