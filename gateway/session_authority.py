@@ -395,7 +395,8 @@ class SessionAuthority:
                 if counts[sid] != 1:
                     raise RuntimeStoreError('admission_conflict')
                 rows = list_session_admissions(self.db, session_id=sid, pending_only=False)
-                native = [row for row in rows if 'native_text_v1' in row['payload']]
+                from gateway.session_operator import native_origin
+                native = [proof for row in rows if (proof := native_origin(row['payload'])) is not None]
                 if not native:
                     from hermes_runtime.adapters.main_transport import recover_panel_inputs
                     if recover_panel_inputs(self, sid, available_source, rows):
@@ -406,10 +407,10 @@ class SessionAuthority:
                 from hermes_runtime.adapters.main_transport import native_head_source
                 bound_source = available_source
                 available_source = native_head_source(self, LiveSession(available_source,
-                    native[-1]['payload']['native_text_v1']['route']), native[-1]['payload'])
+                    native[-1]['native_text_v1']['route']), native[-1])
                 if available_source is not bound_source:
                     adapter = self.runner._adapter_for_source(available_source)
-                source, route = await check_native_route(self.runner, native[-1]['payload'], target,
+                source, route = await check_native_route(self.runner, native[-1], target,
                                                     available_source, adapter)
                 for row in rows:
                     if row['status'] != 'queued':
@@ -465,15 +466,8 @@ class SessionAuthority:
         payload = {'text': request.payload['text'], **finite, **admit_surface(request.payload),
                    **admit_display(request.payload), **admit_cli_turn(request.payload),
                    **admit_attachments(request.payload.get('attachments'), admitted=admitted)}
-        source = self.sessions[request.ref.session_id].source
-        if source is not None and source.user_id != actor.subject:
-            # Durable server authorization, not a client payload field. The original
-            # principal remains the admission/retry identity across owner restarts.
-            # Operator provenance is about who was authorized at this boundary, not
-            # whether the bound session happens to use the LOCAL transport.
-            payload['local_operator_v1'] = {
-                'profile_id': self.profile_id, 'session_id': request.ref.session_id,
-                'principal_id': actor.subject}
+        from gateway.session_operator import stamp_operator
+        payload.update(stamp_operator(self, actor, request.ref, prior=admitted()))
         def admit():
             try:
                 return admit_session_input(self.db, epoch=self.epoch, principal_id=actor.subject,

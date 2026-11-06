@@ -25,7 +25,8 @@ def main_chat(main_home, monkeypatch):
     entry = SessionEntry(HOME_SESSION_KEY, HOME_SESSION_ID, datetime.now(), datetime.now(), origin=source)
     store = SimpleNamespace(_lock=threading.RLock(), _ensure_loaded_locked=lambda: None,
                             _entries={HOME_SESSION_KEY: entry})
-    runner = SimpleNamespace(_draining=False, session_store=store, config=SimpleNamespace(multiplex_profiles=False))
+    runner = SimpleNamespace(_draining=False, session_store=store, config=SimpleNamespace(multiplex_profiles=False),
+                             _adapter_for_source=lambda source: None)
     authority = SessionAuthority(runner, profile_id=str(home), instance_id='fixture', db=db,
                                  epoch=begin_runtime_epoch(db, instance_id='fixture'))
     monkeypatch.setattr(authority, '_schedule', lambda ref: None)
