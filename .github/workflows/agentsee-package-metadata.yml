@@ -1,0 +1,31 @@
+name: Read AgentSee package registration metadata
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  metadata:
+    if: github.repository == 'agentready-tech/hermes-agent'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Read current destination package registration
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -m 700 "$RUNNER_TEMP/package-metadata"
+          gh api orgs/agentready-tech/packages/container/agentsee-hermes --jq '{name,visibility,repositoryFullName:.repository.full_name,repositoryId:.repository.id}' > "$RUNNER_TEMP/package-metadata/destination.json"
+          gh api --paginate orgs/agentready-tech/packages/container/agentsee-hermes/versions --jq '.[] | select(.metadata.container.tags | index("2026.11.6.1")) | {id,name,tags:.metadata.container.tags}' > "$RUNNER_TEMP/package-metadata/version.json"
+      - name: Save safe registration fields
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: package-registration-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/package-metadata/*.json
+          retention-days: 7
+          if-no-files-found: error

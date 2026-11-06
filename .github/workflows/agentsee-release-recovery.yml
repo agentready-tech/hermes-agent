@@ -49,6 +49,7 @@ jobs:
           path: |
             ${{ runner.temp }}/agentsee-hermes-release/status.json
             ${{ runner.temp }}/agentsee-hermes-release/failure.private.log
+            ${{ runner.temp }}/agentsee-hermes-release/package-metadata.json
             ${{ runner.temp }}/agentsee-hermes-release/registry-copy.log
             ${{ runner.temp }}/agentsee-hermes-release/registry-pull.log
           retention-days: 3

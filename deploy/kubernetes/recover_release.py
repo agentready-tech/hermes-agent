@@ -74,7 +74,11 @@ def copy_existing(request):
     phase('copying_same_manifest_to_private_package')
     run(['skopeo', 'copy', '--all', '--preserve-digests', 'docker://' + source,
          'docker://' + destination], log='registry-copy.log')
-    if not private_package(package(IMAGE.rsplit('/', 1)[1])):
+    observed = package(IMAGE.rsplit('/', 1)[1])
+    facts = {'name': (observed or {}).get('name'), 'visibility': (observed or {}).get('visibility'),
+             'repository': ((observed or {}).get('repository') or {}).get('full_name')}
+    (output_root() / 'package-metadata.json').write_text(json.dumps(facts, indent=2))
+    if not private_package(observed):
         raise ValueError('DESTINATION_PRIVACY_OR_REPOSITORY_BINDING_FAILED')
     digest = run(['skopeo', 'inspect', '--format', '{{.Digest}}', 'docker://' + destination]).decode().strip()
     if digest != request['digest']:
