@@ -38,9 +38,11 @@ class Browser:
 
 @pytest.fixture
 def browser(monkeypatch):
+    monkeypatch.setattr("tools.browser_tab_harness._driver_created_after", lambda *args: True)
     b = Browser()
     helpers = ModuleType("browser_harness.helpers")
     helpers.cdp = b.cdp
+    helpers._send = lambda request: {"ok": True}
     helpers.current_tab = lambda: {"targetId": b.current}
     helpers.switch_tab = lambda target: setattr(b, "current", target)
     package = ModuleType("browser_harness")
@@ -182,3 +184,75 @@ def test_native_exec_creates_owned_tab_and_success_cleanup_reaches_harness(monke
     assert b.current != "human", "must not adopt the existing user tab"
     runtime.finish_native_tabs(object(), "boundary", completed=True, interrupted=False, failed=False)
     assert set(b.tabs) == {"human"}
+
+
+@pytest.mark.parametrize("protection", [None, "draft", "human-takeover", "human-during-cleanup"])
+def test_finished_native_task_retires_its_driver_tab_without_closing_protected_work(
+    monkeypatch, tmp_path, browser, protection,
+):
+    """The named harness creates its own tab before managed_tabs sees any CDP calls."""
+    import subprocess
+    import tools.browser_use_cli as cli
+    import tools.browser_tool_session as session
+    import agent.tool_operation_lifecycle as lifecycle
+    b, helpers = browser
+    b.tabs["driver-startup"] = {"targetId": "driver-startup", "type": "page"}
+    b.tabs["sibling"] = {"targetId": "sibling", "type": "page"}
+    b.current = "driver-startup"
+    shutdowns = []
+
+    def driver_request(request):
+        assert request == {"meta": "shutdown"}
+        shutdowns.append(request)
+        b.tabs.pop("driver-startup")
+        return {"ok": True}
+
+    helpers._send = driver_request
+    monkeypatch.setattr(cli, "_find_cli", lambda: ["harness"])
+    monkeypatch.setattr(cli, "_base_subprocess_env", dict)
+    monkeypatch.setattr(cli, "_attach_vault_supervisor", lambda *args: None)
+    monkeypatch.setattr(cli, "_workspace_dir", lambda *args: None)
+    monkeypatch.setattr(cli, "_find_screenshot", lambda *args: None)
+    monkeypatch.setattr(runtime, "get_hermes_home", lambda: tmp_path)
+    monkeypatch.setattr(session, "run_fenced", lambda _info, fn: fn())
+    monkeypatch.setattr(lifecycle, "preserve_resources", lambda *args: False)
+
+    def route(env, *args):
+        env.update(BU_CDP_URL="ws://driver-fixture", _HERMES_BU_BOT_DESKTOP_BROWSER="1")
+        return None, False
+
+    def execute(cmd, code, env, timeout):
+        exec(code, {"cdp": helpers.cdp})
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(cli, "_route_exec", route)
+    monkeypatch.setattr(cli, "_run_cli_killing_process_group", execute)
+    cli.browser_exec("pass", task_id="driver-retirement")
+    owned = b.current
+    if protection == "draft":
+        b.safe[owned] = False
+    elif protection == "human-takeover":
+        path = tmp_path / "bot-desktop" / "lease.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"holder": "agent", "epoch": 2}))
+        # A later call must not erase the driver's original human-control epoch.
+        cli.browser_exec("pass", task_id="driver-retirement")
+    elif protection == "human-during-cleanup":
+        def takeover_after_close(method, **params):
+            result = b.cdp(method, **params)
+            if method == "Target.closeTarget":
+                path = tmp_path / "bot-desktop" / "lease.json"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps({"holder": "agent", "epoch": 2}))
+            return result
+        helpers.cdp = takeover_after_close
+    runtime.finish_native_tabs(object(), "driver-retirement", completed=True, interrupted=False, failed=False)
+    if protection:
+        expected = {"human", "sibling", "driver-startup"}
+        if protection != "human-during-cleanup":
+            expected.add(owned)
+        assert expected <= set(b.tabs)
+        assert not shutdowns
+    else:
+        assert set(b.tabs) == {"human", "sibling"}
+        assert len(shutdowns) == 1

@@ -21,13 +21,37 @@ def _record_popups(resources, cdp):
             break
 
 
+def _driver_created_after(helpers, started_after):
+    import psutil
+    return (started_after is not None
+            and psutil.Process(helpers._send({"meta": "ping"})["pid"]).create_time() >= started_after)
+
+
+def _retire_driver(resources, helpers, epoch, started_after):
+    from tools.bot_desktop import lease
+    if any(row.get("task") == resources.task for row in resources.tabs.values()):
+        return False
+    # A daemon left by an earlier gateway has no current admission proof.
+    if not _driver_created_after(helpers, started_after):
+        return False
+    current = lease.get(resources.home)
+    if current.holder != lease.AGENT or epoch != current.epoch:
+        return False
+    # Native shutdown closes the daemon's exact startup tab and stops recovery.
+    if helpers._send({"meta": "shutdown"}).get("ok") is not True:
+        raise RuntimeError("Browser task driver did not acknowledge shutdown")
+    return True
+
+
 @contextlib.contextmanager
-def managed_tabs(namespace: dict, home: str, endpoint: str, task: str, *, cleanup=False):
+def managed_tabs(namespace: dict, home: str, endpoint: str, task: str, *, cleanup=False,
+                 driver_epoch=None, driver_started_after=None):
     from browser_harness import helpers
     resources = TabResources(home, endpoint, task)
     original = helpers.cdp
     old_globals = {key: namespace.get(key) for key in ("cdp", "keep_tab", "new_tab")}
     admitted = None
+    retired = False
 
     def tracked(method, *args, **kwargs):
         result = original(method, *args, **kwargs)
@@ -63,12 +87,14 @@ def managed_tabs(namespace: dict, home: str, endpoint: str, task: str, *, cleanu
                     target = tracked("Target.createTarget", url="about:blank", background=True)["targetId"]
                     helpers.switch_tab(target)
             yield
+            if cleanup:
+                retired = _retire_driver(resources, helpers, driver_epoch, driver_started_after)
         finally:
             # Popups created by an owned page share its owner; a concurrently
             # opened human tab has no owned opener and is never adopted.
             try:
                 from tools.bot_desktop.lease import get
-                if admitted is not None and get(home).epoch == admitted.epoch:
+                if not retired and admitted is not None and get(home).epoch == admitted.epoch:
                     _record_popups(resources, original)
             except (RuntimeError, OSError, KeyError, ValueError) as error:
                 logging.getLogger(__name__).debug("Popup ownership reconciliation deferred (%s)", type(error).__name__)
@@ -80,12 +106,14 @@ def managed_tabs(namespace: dict, home: str, endpoint: str, task: str, *, cleanu
                     namespace[key] = value
 
 
-def wrap_code(code: str, *, home: str, endpoint: str, task: str, cleanup=False) -> str:
+def wrap_code(code: str, *, home: str, endpoint: str, task: str, cleanup=False,
+              driver_epoch=None, driver_started_after=None) -> str:
     """Use the installed runtime, not the harness package's unrelated site path."""
     from pathlib import Path
     source = str(Path(__file__).resolve().parent.parent)
     prefix = (f"import sys as _hermes_sys\n_hermes_sys.path.insert(0, {source!r})\n"
               "from tools.browser_tab_harness import managed_tabs as _hermes_managed_tabs\n"
-              f"with _hermes_managed_tabs(globals(), {home!r}, {endpoint!r}, {task!r}, cleanup={cleanup!r}):\n")
+              f"with _hermes_managed_tabs(globals(), {home!r}, {endpoint!r}, {task!r}, "
+              f"cleanup={cleanup!r}, driver_epoch={driver_epoch!r}, driver_started_after={driver_started_after!r}):\n")
     import textwrap
     return prefix + textwrap.indent(code or "pass", "    ") + "\n"
