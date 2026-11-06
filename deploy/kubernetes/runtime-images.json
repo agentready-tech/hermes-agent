@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "0aa9932fe2ba-telegram-controls-managed",
+  "defaultRuntimeVersion": "30c6a6bbd50b-browser-resources-managed",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -620,6 +620,146 @@
         "targetedTestsPassed": 44
       },
       "description": "Controlled managed Telegram: hidden technical menus, guarded commands and callbacks, native secret transport preserved.",
+      "ownerLegacyConnectorBoundaryPreserved": true,
+      "preservedPanelSha256": "56a9db1b205d8ead70cba43a484bff7cd3e22b4bbba95bc2d58b646922192460"
+    },
+    "30c6a6bbd50b-browser-resources-managed": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:bfd0213942989f13f80a6c6a4be3ab61d73ee57df1bc9e5173b691ff907bcab0",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes:30c6a6bbd50b-managed-browser-resources",
+      "configDigest": "sha256:4f4d1454a780a97069c37a1fb2356cb4b01e47c0ce057146d5ebb20869dfc4cc",
+      "platform": "linux/amd64",
+      "sourceRevision": "30c6a6bbd50bb3002f7d73718f89adab29f259f7",
+      "base": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:3a46566e27448f5514aa4455f9956438529ba6dafd23040fab74d3e4e1d56d4f"
+      },
+      "publisherRecipe": {
+        "repository": "agentready-tech/AgentReady",
+        "revision": "18a7eb63a46347392197067f0002b97f5dffef7e",
+        "path": "deploy/kubernetes/runtime_patch.py"
+      },
+      "sourceFiles": {
+        "agent/turn_finalizer.py": {
+          "sha256": "155cd5e43109d120767b05775192825c535393919754764f224b04f7576c9285"
+        },
+        "tools/browser_use_cli.py": {
+          "sha256": "a9ea2c97b6c130be34c10754b66127703fca774a3dfdc950cf5580bf3c3e3b29"
+        },
+        "tools/browser_tab_resources.py": {
+          "sha256": "974a3a725e98db77eec726ee67c603e1138a15ea62c62dcbdcdd97989d1fd688"
+        },
+        "tools/browser_tab_harness.py": {
+          "sha256": "e4f3efc9ad6dc70aad0f0f4d5a58647a170908537bed045123e30c797e5fae4c"
+        },
+        "tools/browser_tab_runtime.py": {
+          "sha256": "eb169398b13425894e1e3d920afeb00ce6e914dc8103be8de51f229b76cc91c4"
+        },
+        "tools/bot_desktop/browser_memory.py": {
+          "sha256": "28e1bcf4acc15d6be6950f8b39755b0af58415b58919923e7c83fbd1c7b6f266"
+        },
+        "tools/bot_desktop/sandbox_host.py": {
+          "sha256": "eea2de3f9ed0f89a35ea4a3cb7004c0015040f6cf4a054a603bcf9d5255f3a7f"
+        }
+      },
+      "deployedFiles": {
+        "agent/turn_finalizer.py": "155cd5e43109d120767b05775192825c535393919754764f224b04f7576c9285",
+        "tools/browser_use_cli.py": "a9ea2c97b6c130be34c10754b66127703fca774a3dfdc950cf5580bf3c3e3b29",
+        "tools/browser_tab_resources.py": "974a3a725e98db77eec726ee67c603e1138a15ea62c62dcbdcdd97989d1fd688",
+        "tools/browser_tab_harness.py": "e4f3efc9ad6dc70aad0f0f4d5a58647a170908537bed045123e30c797e5fae4c",
+        "tools/browser_tab_runtime.py": "eb169398b13425894e1e3d920afeb00ce6e914dc8103be8de51f229b76cc91c4",
+        "tools/bot_desktop/browser_memory.py": "28e1bcf4acc15d6be6950f8b39755b0af58415b58919923e7c83fbd1c7b6f266",
+        "tools/bot_desktop/sandbox_host.py": "eea2de3f9ed0f89a35ea4a3cb7004c0015040f6cf4a054a603bcf9d5255f3a7f"
+      },
+      "distribution": {
+        "mode": "registry",
+        "registryPublished": true,
+        "visibility": "private",
+        "publishedManifestDigest": "sha256:bfd0213942989f13f80a6c6a4be3ab61d73ee57df1bc9e5173b691ff907bcab0",
+        "pullVerified": true,
+        "preloadedOnCurrentWorker": true,
+        "workerImagePullPolicy": "Never",
+        "publisherRevision": "18a7eb63a46347392197067f0002b97f5dffef7e",
+        "workflowRunId": 42188078590,
+        "workflowAttempt": 1,
+        "thinArchiveSha256": "1570806bc91151c0a0f4ebc6782e7e168dc88b028f5b95a9a4b7581225de7504"
+      },
+      "validation": {
+        "isolatedRuntimeSmoke": true,
+        "network": "none",
+        "realCredentialsUsed": false,
+        "sourceChecksPassed": 12,
+        "browserResourceLifecycleVerified": true,
+        "targetedTestsPassed": 197
+      },
+      "description": "Owned temporary tab cleanup and native Memory Saver; human takeover and persistent profiles preserved."
+    },
+    "30c6a6bbd50b-browser-resources-owner": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:cfa4f886ae942d7c1f44e85d09d328301bb3169aebd0d5901e020d55166ab70a",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes:30c6a6bbd50b-owner-browser-resources",
+      "configDigest": "sha256:840723c4ffffe143ca0c86e99cd5847e17fa150963af18b37cc55710825065fb",
+      "platform": "linux/amd64",
+      "sourceRevision": "30c6a6bbd50bb3002f7d73718f89adab29f259f7",
+      "base": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:9a657f0f781273041fa8cbf7d771b0ead1045bdb12748aa2c59aabcb6d0a3856"
+      },
+      "publisherRecipe": {
+        "repository": "agentready-tech/AgentReady",
+        "revision": "18a7eb63a46347392197067f0002b97f5dffef7e",
+        "path": "deploy/kubernetes/runtime_patch.py"
+      },
+      "sourceFiles": {
+        "agent/turn_finalizer.py": {
+          "sha256": "155cd5e43109d120767b05775192825c535393919754764f224b04f7576c9285"
+        },
+        "tools/browser_use_cli.py": {
+          "sha256": "a9ea2c97b6c130be34c10754b66127703fca774a3dfdc950cf5580bf3c3e3b29"
+        },
+        "tools/browser_tab_resources.py": {
+          "sha256": "974a3a725e98db77eec726ee67c603e1138a15ea62c62dcbdcdd97989d1fd688"
+        },
+        "tools/browser_tab_harness.py": {
+          "sha256": "e4f3efc9ad6dc70aad0f0f4d5a58647a170908537bed045123e30c797e5fae4c"
+        },
+        "tools/browser_tab_runtime.py": {
+          "sha256": "eb169398b13425894e1e3d920afeb00ce6e914dc8103be8de51f229b76cc91c4"
+        },
+        "tools/bot_desktop/browser_memory.py": {
+          "sha256": "28e1bcf4acc15d6be6950f8b39755b0af58415b58919923e7c83fbd1c7b6f266"
+        },
+        "tools/bot_desktop/sandbox_host.py": {
+          "sha256": "eea2de3f9ed0f89a35ea4a3cb7004c0015040f6cf4a054a603bcf9d5255f3a7f"
+        }
+      },
+      "deployedFiles": {
+        "agent/turn_finalizer.py": "155cd5e43109d120767b05775192825c535393919754764f224b04f7576c9285",
+        "tools/browser_use_cli.py": "a9ea2c97b6c130be34c10754b66127703fca774a3dfdc950cf5580bf3c3e3b29",
+        "tools/browser_tab_resources.py": "974a3a725e98db77eec726ee67c603e1138a15ea62c62dcbdcdd97989d1fd688",
+        "tools/browser_tab_harness.py": "e4f3efc9ad6dc70aad0f0f4d5a58647a170908537bed045123e30c797e5fae4c",
+        "tools/browser_tab_runtime.py": "eb169398b13425894e1e3d920afeb00ce6e914dc8103be8de51f229b76cc91c4",
+        "tools/bot_desktop/browser_memory.py": "28e1bcf4acc15d6be6950f8b39755b0af58415b58919923e7c83fbd1c7b6f266",
+        "tools/bot_desktop/sandbox_host.py": "eea2de3f9ed0f89a35ea4a3cb7004c0015040f6cf4a054a603bcf9d5255f3a7f"
+      },
+      "distribution": {
+        "mode": "registry",
+        "registryPublished": true,
+        "visibility": "private",
+        "publishedManifestDigest": "sha256:cfa4f886ae942d7c1f44e85d09d328301bb3169aebd0d5901e020d55166ab70a",
+        "pullVerified": true,
+        "preloadedOnCurrentWorker": true,
+        "workerImagePullPolicy": "Never",
+        "publisherRevision": "18a7eb63a46347392197067f0002b97f5dffef7e",
+        "workflowRunId": 42188078590,
+        "workflowAttempt": 1,
+        "thinArchiveSha256": "fcf78591caaf5b21df4ea377c2cc0803d6f5bd95efd2e8f1028140a83f1f5080"
+      },
+      "validation": {
+        "isolatedRuntimeSmoke": true,
+        "network": "none",
+        "realCredentialsUsed": false,
+        "sourceChecksPassed": 12,
+        "browserResourceLifecycleVerified": true,
+        "targetedTestsPassed": 197
+      },
+      "description": "Owned temporary tab cleanup and native Memory Saver; human takeover and persistent profiles preserved.",
       "ownerLegacyConnectorBoundaryPreserved": true,
       "preservedPanelSha256": "56a9db1b205d8ead70cba43a484bff7cd3e22b4bbba95bc2d58b646922192460"
     }
