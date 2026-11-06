@@ -1,0 +1,294 @@
+{
+  "schemaVersion": 1,
+  "prototypeVersion": "2026.11.6.prototype.16",
+  "sourceRevision": "e23411f7213e36186e6416693a56fdf8eda12922",
+  "localImage": "agentsee/shared-runtime:2026.11.6.prototype.16",
+  "imageId": "sha256:6d56a024a9d3b50cdb9692d88d9839c5057228b0fc02a56b96e9fa3e3f4622a5",
+  "sourceArchiveSha256": "53edbf8e8f0bf7f6a6d5a7c5f8f02cfd97286fb603657cb1c1212271a266cb2f",
+  "architecture": "aarch64",
+  "python": "3.14.7",
+  "logicalRuntimes": 2,
+  "sandboxContainers": 2,
+  "trialOrder": [
+    "shared",
+    "separate",
+    "separate",
+    "shared"
+  ],
+  "samplesPerPhasePerTrial": 7,
+  "memory": {
+    "idle": {
+      "pssBytes": {
+        "shared": 273796608.0,
+        "separate": 448458752.0
+      },
+      "savedBytes": 174662144.0,
+      "savedPercent": 38.94720377761743
+    },
+    "warm": {
+      "pssBytes": {
+        "shared": 346661888.0,
+        "separate": 551986176.0
+      },
+      "savedBytes": 205324288.0,
+      "savedPercent": 37.197360536797206
+    },
+    "heldChildren": {
+      "pssBytes": {
+        "shared": 365027328.0,
+        "separate": 579951616.0
+      },
+      "savedBytes": 214924288.0,
+      "savedPercent": 37.05900321174379
+    },
+    "completed": {
+      "pssBytes": {
+        "shared": 363597824.0,
+        "separate": 578262016.0
+      },
+      "savedBytes": 214664192.0,
+      "savedPercent": 37.12230547060521
+    }
+  },
+  "trials": [
+    {
+      "mode": "shared",
+      "gatewayProcesses": 1,
+      "medianBytes": {
+        "idle": {
+          "Rss": 294621184,
+          "Pss": 287653888,
+          "Pss_Anon": 268582912,
+          "Private_Clean": 12562432,
+          "Private_Dirty": 268681216,
+          "cgroupCurrentIncludingController": 374468608,
+          "cgroupAnonIncludingController": 289435648,
+          "runtimeProcessCount": 1
+        },
+        "warm": {
+          "Rss": 373215232,
+          "Pss": 366324736,
+          "Pss_Anon": 338272256,
+          "Private_Clean": 21598208,
+          "Private_Dirty": 338370560,
+          "cgroupCurrentIncludingController": 495149056,
+          "cgroupAnonIncludingController": 359981056,
+          "runtimeProcessCount": 1
+        },
+        "heldChildren": {
+          "Rss": 390729728,
+          "Pss": 383837184,
+          "Pss_Anon": 355786752,
+          "Private_Clean": 21594112,
+          "Private_Dirty": 355885056,
+          "cgroupCurrentIncludingController": 515637248,
+          "cgroupAnonIncludingController": 377868288,
+          "runtimeProcessCount": 1
+        },
+        "completed": {
+          "Rss": 385327104,
+          "Pss": 377836544,
+          "Pss_Anon": 350322688,
+          "Private_Clean": 20459520,
+          "Private_Dirty": 350420992,
+          "cgroupCurrentIncludingController": 510828544,
+          "cgroupAnonIncludingController": 373211136,
+          "runtimeProcessCount": 1
+        }
+      },
+      "fullProcessRestart": true,
+      "persistentChildIdsUnchanged": true,
+      "existingChildrenAcceptedNewWork": true
+    },
+    {
+      "mode": "separate",
+      "gatewayProcesses": 2,
+      "medianBytes": {
+        "idle": {
+          "Rss": 479358976,
+          "Pss": 448227328,
+          "Pss_Anon": 427225088,
+          "Private_Clean": 0,
+          "Private_Dirty": 427290624,
+          "cgroupCurrentIncludingController": 604688384,
+          "cgroupAnonIncludingController": 450220032,
+          "runtimeProcessCount": 2
+        },
+        "warm": {
+          "Rss": 592351232,
+          "Pss": 551858176,
+          "Pss_Anon": 521515008,
+          "Private_Clean": 0,
+          "Private_Dirty": 521580544,
+          "cgroupCurrentIncludingController": 687751168,
+          "cgroupAnonIncludingController": 544555008,
+          "runtimeProcessCount": 2
+        },
+        "heldChildren": {
+          "Rss": 620630016,
+          "Pss": 580136960,
+          "Pss_Anon": 549793792,
+          "Private_Clean": 0,
+          "Private_Dirty": 549859328,
+          "cgroupCurrentIncludingController": 707239936,
+          "cgroupAnonIncludingController": 572944384,
+          "runtimeProcessCount": 2
+        },
+        "completed": {
+          "Rss": 618012672,
+          "Pss": 577468416,
+          "Pss_Anon": 547053568,
+          "Private_Clean": 0,
+          "Private_Dirty": 547119104,
+          "cgroupCurrentIncludingController": 705421312,
+          "cgroupAnonIncludingController": 570990592,
+          "runtimeProcessCount": 2
+        }
+      },
+      "fullProcessRestart": true,
+      "persistentChildIdsUnchanged": true,
+      "existingChildrenAcceptedNewWork": true
+    },
+    {
+      "mode": "separate",
+      "gatewayProcesses": 2,
+      "medianBytes": {
+        "idle": {
+          "Rss": 479821824,
+          "Pss": 448690176,
+          "Pss_Anon": 427687936,
+          "Private_Clean": 0,
+          "Private_Dirty": 427753472,
+          "cgroupCurrentIncludingController": 606720000,
+          "cgroupAnonIncludingController": 451624960,
+          "runtimeProcessCount": 2
+        },
+        "warm": {
+          "Rss": 592596992,
+          "Pss": 552114176,
+          "Pss_Anon": 521760768,
+          "Private_Clean": 0,
+          "Private_Dirty": 521826304,
+          "cgroupCurrentIncludingController": 703209472,
+          "cgroupAnonIncludingController": 546197504,
+          "runtimeProcessCount": 2
+        },
+        "heldChildren": {
+          "Rss": 620249088,
+          "Pss": 579766272,
+          "Pss_Anon": 549412864,
+          "Private_Clean": 0,
+          "Private_Dirty": 549478400,
+          "cgroupCurrentIncludingController": 731676672,
+          "cgroupAnonIncludingController": 573939712,
+          "runtimeProcessCount": 2
+        },
+        "completed": {
+          "Rss": 619610112,
+          "Pss": 579055616,
+          "Pss_Anon": 548651008,
+          "Private_Clean": 0,
+          "Private_Dirty": 548716544,
+          "cgroupCurrentIncludingController": 729001984,
+          "cgroupAnonIncludingController": 573480960,
+          "runtimeProcessCount": 2
+        }
+      },
+      "fullProcessRestart": true,
+      "persistentChildIdsUnchanged": true,
+      "existingChildrenAcceptedNewWork": true
+    },
+    {
+      "mode": "shared",
+      "gatewayProcesses": 1,
+      "medianBytes": {
+        "idle": {
+          "Rss": 267423744,
+          "Pss": 259939328,
+          "Pss_Anon": 241291264,
+          "Private_Clean": 11599872,
+          "Private_Dirty": 241389568,
+          "cgroupCurrentIncludingController": 415784960,
+          "cgroupAnonIncludingController": 266522624,
+          "runtimeProcessCount": 1
+        },
+        "warm": {
+          "Rss": 334483456,
+          "Pss": 326999040,
+          "Pss_Anon": 298999808,
+          "Private_Clean": 20951040,
+          "Private_Dirty": 299098112,
+          "cgroupCurrentIncludingController": 475918336,
+          "cgroupAnonIncludingController": 324325376,
+          "runtimeProcessCount": 1
+        },
+        "heldChildren": {
+          "Rss": 353701888,
+          "Pss": 346217472,
+          "Pss_Anon": 318218240,
+          "Private_Clean": 20951040,
+          "Private_Dirty": 318316544,
+          "cgroupCurrentIncludingController": 496861184,
+          "cgroupAnonIncludingController": 343588864,
+          "runtimeProcessCount": 1
+        },
+        "completed": {
+          "Rss": 356843520,
+          "Pss": 349359104,
+          "Pss_Anon": 321298432,
+          "Private_Clean": 21012480,
+          "Private_Dirty": 321396736,
+          "cgroupCurrentIncludingController": 500473856,
+          "cgroupAnonIncludingController": 346783744,
+          "runtimeProcessCount": 1
+        }
+      },
+      "fullProcessRestart": true,
+      "persistentChildIdsUnchanged": true,
+      "existingChildrenAcceptedNewWork": true
+    }
+  ],
+  "nativeChecks": {
+    "separateSyntheticCredentialsAndHistories": true,
+    "ownTerminalMountsAndMemory": true,
+    "nonblockingParentsWithBothPersistentChildrenRunning": true,
+    "foreignChildReadStopSteerRejected": true,
+    "independentNativeMainCompletion": true,
+    "restartFromSameAgentDirectories": true
+  },
+  "realProviderProbe": {
+    "provider": "openrouter",
+    "model": "deepseek/deepseek-v4.1-flash",
+    "runtimeProcessCount": 1,
+    "profiles": {
+      "alpha": {
+        "ownReply": true,
+        "foreignHistoryAbsent": true,
+        "apiCalls": 1,
+        "inputTokens": 1974,
+        "outputTokens": 5
+      },
+      "bravo": {
+        "ownReply": true,
+        "foreignHistoryAbsent": true,
+        "apiCalls": 1,
+        "inputTokens": 1979,
+        "outputTokens": 6
+      }
+    },
+    "actualNativeGateway": true
+  },
+  "scope": {
+    "guiBrowserIncluded": false,
+    "productionTouched": false,
+    "productionAmd64SizingVerified": false,
+    "controllerExcludedFromRuntimePss": true,
+    "scriptedModelForDelegationBenchmark": true,
+    "paidDelegationTested": false,
+    "sameProcessSharesCrashBoundary": true
+  },
+  "proofSha256": {
+    "scripted": "01751962baa1d4deda8e8ff886112800a7ce33a028d3777fc1b61476187fca0b",
+    "paid": "f41d33a68be41f0fe8ed88f0158c120697a5b07ecd7f01a33b20ddfeb2bf3b79"
+  }
+}
