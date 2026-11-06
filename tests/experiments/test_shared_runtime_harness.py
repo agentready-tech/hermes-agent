@@ -68,3 +68,22 @@ def test_paid_profiles_native_resolver_keeps_real_route_and_bounded_output(tmp_p
             config = load_config_readonly()
             assert config['agent']['api_max_retries'] == 1
             assert config['platform_toolsets']['telegram'] == []
+
+
+def test_local_wire_reports_native_adapter_connection_state(monkeypatch):
+    import asyncio
+    from experiments.shared_runtime.transport import install
+    from gateway.config import Platform, PlatformConfig
+    from gateway.run import GatewayRunner
+    monkeypatch.setattr(GatewayRunner, '_instantiate_adapter', GatewayRunner._instantiate_adapter)
+    install()
+    wire = GatewayRunner._instantiate_adapter(None, Platform.TELEGRAM, PlatformConfig())
+
+    async def exercise():
+        assert not wire.is_connected
+        assert await wire.connect()
+        assert wire.is_connected
+        await wire.disconnect()
+        assert not wire.is_connected
+
+    asyncio.run(exercise())

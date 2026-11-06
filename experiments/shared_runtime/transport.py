@@ -12,10 +12,11 @@ def install():
             super().__init__(config, Platform.TELEGRAM)
 
         async def connect(self, *, is_reconnect=False):
+            self._mark_connected()
             return True
 
         async def disconnect(self):
-            return None
+            self._mark_disconnected()
 
         async def send(self, chat_id, content, reply_to=None, metadata=None):
             return SendResult(success=True, message_id=uuid.uuid4().hex)
