@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "9a11f9b7e082-computer-use-sandbox-managed",
+  "defaultRuntimeVersion": "f3792d8ed381-agent-sandbox-common",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -815,6 +815,177 @@
         "targetedTestsPassed": 138
       },
       "description": "Private computer-use daemons and recovery stay in the selected sandbox; deployed to Mikhail and future default only."
+    },
+    "f3792d8ed381-agent-sandbox-common": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:55c77f93b8a0febcc8fdce40e861780580a2497ba5c031a3843535a3aaef0e09",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes:f3792d8ed381-managed-agent-sandbox",
+      "configDigest": "sha256:a9b34c051d0ee8702cc1b3ef442c4ecd26af4b8803dc96d8a6db7a1f56d4f19a",
+      "platform": "linux/amd64",
+      "sourceRevision": "f3792d8ed381d8ec1932a40e8e41022990bbf624",
+      "runtimePolicy": "common",
+      "base": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:6ee3917fa634f4a871669ae1b35923157fe7f4691e7d4d9e29f9bcd08e6a51f4"
+      },
+      "publisherRecipe": {
+        "repository": "agentready-tech/AgentReady",
+        "revision": "86dd13a0749ec846a14ceb516a75b704976daf33",
+        "path": "deploy/kubernetes/runtime_patch.py"
+      },
+      "sourceFiles": {
+        "hermes_cli/mcp_catalog.py": {
+          "sha256": "88741a4d283579719463f090b5cd75fa27b8856cdead6896f577a391f6fb948e"
+        },
+        "hermes_cli/mcp_catalog_sandbox.py": {
+          "sha256": "54c5426d90f6a5196b389a0bc9c6059a7874161cdf00466b39b921f85f4fe2fa"
+        },
+        "hermes_runtime/standalone/supervisor.py": {
+          "sha256": "77de6a8fa1e1493533962b19cee693e6c53e2ec6fd0fb5ae4fe5ff43bf5dd16c"
+        },
+        "hermes_runtime/standalone/workspace.py": {
+          "sha256": "10e8988c78b8e36b1792fa338bdd09894ba677ccf7fbdd6aeea735f22ccbef00"
+        },
+        "hermes_runtime/workspace/__init__.py": {
+          "sha256": "f1fee529abaa5f5320850519113ef6f8ffd463bf70591c71fe6f6c2513f8c108"
+        },
+        "hermes_runtime/workspace/control.py": {
+          "sha256": "30de290235c82f6bdfc217ae639e88870e24af46d20ee73ac3f81cf79a90f986"
+        },
+        "hermes_runtime/workspace/events.py": {
+          "sha256": "c3814d4e4204ead0091b9ab1bf0ab93b366c9eecbc93b9e628770919d46258a2"
+        },
+        "hermes_runtime/workspace/mail.py": {
+          "sha256": "2fcaba325f185a4331eb9088672022bf005dea8732d0151fef62381121611331"
+        },
+        "hermes_runtime/workspace/mcp.py": {
+          "sha256": "9c62a768ad8f03ca6fd6057f2d9c04288929a27544ab289f55a9de326320a9a9"
+        },
+        "hermes_runtime/workspace/sandbox_discovery.py": {
+          "sha256": "8654c42a3f89cdd59ea6d1aa33b7f79ceef6421449c5333a00cf0cd4b3ed6225"
+        },
+        "hermes_runtime/workspace/sandbox_google.py": {
+          "sha256": "8c50dce76a143f130007c410321d927a41711680eee1940dd749edad3c6265b4"
+        },
+        "hermes_runtime/workspace/sandbox_mail.py": {
+          "sha256": "9e0e6fc365e0ded248a105b9b7c43344c6865ba246203cbb86beeb36025aab62"
+        },
+        "hermes_runtime/workspace/service.py": {
+          "sha256": "a41ff1455a5780fec2b048107178b26aa0d87325c9d163f64aa14196685e4760"
+        },
+        "hermes_runtime/workspace/store.py": {
+          "sha256": "52d70a47a89396aa343f6d3ccd826149a36a129b743cd014b7e865c401351592"
+        },
+        "hermes_runtime/workspace/transport.py": {
+          "sha256": "a4accba19f50d82bdd9eac93024dfa64f02643a35c0345023266ac87bb2b08a8"
+        },
+        "tools/connectors/http_api.py": {
+          "sha256": "6d2296158b532caa081b16932430b9aa14b278e311cd946e0dfdc06d37dd884b"
+        },
+        "tools/delegate_projects.py": {
+          "sha256": "63f8f37550d9138fc2f8358eab095e858180cc97251ad01fea1f9519da086fb8"
+        },
+        "tools/environments/network_transport.py": {
+          "sha256": "26c8b41681b560e703829ffd0a5f84bdcaf90dcea461e74c1cb2ee447256d567"
+        },
+        "tools/environments/streams.py": {
+          "sha256": "20d1b7c839fde0bf6bd979460c193e699fd8a38c0fa9b829467e6a51cd829177"
+        },
+        "tools/mcp_oauth_device.py": {
+          "sha256": "47f545175375702c8a7eddcb29a7fb880db0d095529818443a7f99a51ec2b740"
+        },
+        "tools/mcp_oauth_manager.py": {
+          "sha256": "761fbd8b1581be914612df82d06fbddb89e26c46c312e21a3fa61f1555623e2a"
+        },
+        "tools/mcp_sandbox_stdio.py": {
+          "sha256": "6f69348e85d51a0d55781ea5869629eba74183a59de79747a9465d5477c1def6"
+        },
+        "tools/mcp_tool.py": {
+          "sha256": "35c470ee6f413fb5fd38423b8c397494d9eb4cdfb0890543c197332e109cb201"
+        },
+        "tools/mcp_tool_config.py": {
+          "sha256": "54445562ed60fbe9571d6941c159b259fbf110dc5972ce2e04e4b29dc873f23a"
+        },
+        "tools/mcp_tool_transport.py": {
+          "sha256": "e19cefa50a52524c337596da1b1e8b313519bb57a0d4bc9e83c379a7f25d14e2"
+        },
+        "tools/osv_check.py": {
+          "sha256": "41255c1b5d160e7d82e9d5bcbc3a53735b3e5f1681613ae8eacceff7778efc84"
+        }
+      },
+      "deployedFiles": {
+        "hermes_cli/mcp_catalog.py": "88741a4d283579719463f090b5cd75fa27b8856cdead6896f577a391f6fb948e",
+        "hermes_cli/mcp_catalog_sandbox.py": "54c5426d90f6a5196b389a0bc9c6059a7874161cdf00466b39b921f85f4fe2fa",
+        "hermes_runtime/standalone/supervisor.py": "77de6a8fa1e1493533962b19cee693e6c53e2ec6fd0fb5ae4fe5ff43bf5dd16c",
+        "hermes_runtime/standalone/workspace.py": "10e8988c78b8e36b1792fa338bdd09894ba677ccf7fbdd6aeea735f22ccbef00",
+        "hermes_runtime/workspace/__init__.py": "f1fee529abaa5f5320850519113ef6f8ffd463bf70591c71fe6f6c2513f8c108",
+        "hermes_runtime/workspace/control.py": "30de290235c82f6bdfc217ae639e88870e24af46d20ee73ac3f81cf79a90f986",
+        "hermes_runtime/workspace/events.py": "c3814d4e4204ead0091b9ab1bf0ab93b366c9eecbc93b9e628770919d46258a2",
+        "hermes_runtime/workspace/mail.py": "2fcaba325f185a4331eb9088672022bf005dea8732d0151fef62381121611331",
+        "hermes_runtime/workspace/mcp.py": "9c62a768ad8f03ca6fd6057f2d9c04288929a27544ab289f55a9de326320a9a9",
+        "hermes_runtime/workspace/sandbox_discovery.py": "8654c42a3f89cdd59ea6d1aa33b7f79ceef6421449c5333a00cf0cd4b3ed6225",
+        "hermes_runtime/workspace/sandbox_google.py": "8c50dce76a143f130007c410321d927a41711680eee1940dd749edad3c6265b4",
+        "hermes_runtime/workspace/sandbox_mail.py": "9e0e6fc365e0ded248a105b9b7c43344c6865ba246203cbb86beeb36025aab62",
+        "hermes_runtime/workspace/service.py": "a41ff1455a5780fec2b048107178b26aa0d87325c9d163f64aa14196685e4760",
+        "hermes_runtime/workspace/store.py": "52d70a47a89396aa343f6d3ccd826149a36a129b743cd014b7e865c401351592",
+        "hermes_runtime/workspace/transport.py": "a4accba19f50d82bdd9eac93024dfa64f02643a35c0345023266ac87bb2b08a8",
+        "tools/connectors/http_api.py": "6d2296158b532caa081b16932430b9aa14b278e311cd946e0dfdc06d37dd884b",
+        "tools/delegate_projects.py": "63f8f37550d9138fc2f8358eab095e858180cc97251ad01fea1f9519da086fb8",
+        "tools/environments/network_transport.py": "26c8b41681b560e703829ffd0a5f84bdcaf90dcea461e74c1cb2ee447256d567",
+        "tools/environments/streams.py": "20d1b7c839fde0bf6bd979460c193e699fd8a38c0fa9b829467e6a51cd829177",
+        "tools/mcp_oauth_device.py": "47f545175375702c8a7eddcb29a7fb880db0d095529818443a7f99a51ec2b740",
+        "tools/mcp_oauth_manager.py": "761fbd8b1581be914612df82d06fbddb89e26c46c312e21a3fa61f1555623e2a",
+        "tools/mcp_sandbox_stdio.py": "6f69348e85d51a0d55781ea5869629eba74183a59de79747a9465d5477c1def6",
+        "tools/mcp_tool.py": "35c470ee6f413fb5fd38423b8c397494d9eb4cdfb0890543c197332e109cb201",
+        "tools/mcp_tool_config.py": "54445562ed60fbe9571d6941c159b259fbf110dc5972ce2e04e4b29dc873f23a",
+        "tools/mcp_tool_transport.py": "e19cefa50a52524c337596da1b1e8b313519bb57a0d4bc9e83c379a7f25d14e2",
+        "tools/osv_check.py": "41255c1b5d160e7d82e9d5bcbc3a53735b3e5f1681613ae8eacceff7778efc84"
+      },
+      "distribution": {
+        "mode": "registry",
+        "registryPublished": true,
+        "visibility": "private",
+        "publishedManifestDigest": "sha256:55c77f93b8a0febcc8fdce40e861780580a2497ba5c031a3843535a3aaef0e09",
+        "pullVerified": true,
+        "preloadedOnCurrentWorker": true,
+        "publisherRevision": "86dd13a0749ec846a14ceb516a75b704976daf33",
+        "workflowRunId": 42217653339,
+        "workflowAttempt": 1,
+        "thinArchiveSha256": "2320b635280e0a9eff543028057e30707f9ba917fd6d0caaaa5eda791ecaa75f",
+        "allFourRuntimeImagesVerified": true
+      },
+      "validation": {
+        "isolatedRuntimeSmoke": true,
+        "network": "none",
+        "realCredentialsUsed": false,
+        "workspaceNativeExecutionVerified": true,
+        "genericMcpSandboxExecutionVerified": true,
+        "preservationScope": "runtime-context-fix-full-backups",
+        "authComparisonUsesNewFullPrivateSnapshots": true,
+        "originalVasyaAuthBodyUnavailable": true,
+        "browserPreservationScope": "persistent-browser-roots-and-profile-directories",
+        "allPersistentBrowserRootPidAndStartIdentitiesPreserved": true,
+        "historicalLegacyBrowserCandidateTypesUnavailable": true,
+        "allHistoricalBrowserCandidateProcessesPreserved": false,
+        "providerAcceptance": "pending-user",
+        "computerUseUserAcceptance": "pending-user"
+      },
+      "description": "One common Hermes image for all agents. Agent-owned MCP/API execution and network use the existing sandbox; protected first-party brokers retain native credential custody. Historical versions remain immutable."
+    }
+  },
+  "supersededRuntimeAttempts": {
+    "b078d6c2a147-workspace-native-unfinalized": {
+      "sourceRevision": "b078d6c2a1473c9e4dc40612ab7257eeafc12ff0",
+      "publisherRevision": "6d523652f6cc88e5dafb29b7c2505709c9f4f5d1",
+      "workflowRunId": 42203840476,
+      "workflowAttempt": 1,
+      "images": {
+        "managed": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:f976e4c4af7e27214c051956ed9b30823126e2bb9d7c06f3758999f6d16a74d4",
+        "owner": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:2baf3d24228a0690997a57f28581dceee131777a14dbc86b3875bf07e4a4df32"
+      },
+      "state": "superseded-unfinalized",
+      "acceptedRelease": false,
+      "finalNativeAuditCompleted": false,
+      "issue": "native-mcp-sandbox-context-unavailable",
+      "supersededByCommonVersion": "f3792d8ed381-agent-sandbox-common"
     }
   }
 }
