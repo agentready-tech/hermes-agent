@@ -123,3 +123,16 @@ def test_actual_control_cli_accepts_trusted_worker_envelope_and_rejects_cross_em
         value = json.loads(result.stdout)
         assert value["ok"] is expected
         assert result.stderr == ""
+
+
+def test_import_preserves_legacy_sender_allowlist_order_and_duplicates_exactly(workspace):
+    metadata = connection(proactive=True, allowedSenders=["lead@example.invalid", "other@example.invalid", "lead@example.invalid"])
+    first = seed(workspace, metadata)
+    public = dict(first["connections"][0])
+    public.pop("credentialConfigured")
+    assert public == metadata
+    assert workspace.store.get(ID)["connection"] == metadata
+    assert workspace.store.get(ID)["credential"] == SECRET
+    before = workspace.store.vault._vault_path.read_bytes()
+    assert seed(workspace, metadata)["imported"] == 0
+    assert workspace.store.vault._vault_path.read_bytes() == before

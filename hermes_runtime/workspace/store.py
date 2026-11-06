@@ -34,7 +34,7 @@ def rules(value):
     senders = value.get("allowedSenders", [])
     if policy not in {"allowlist", "all"} or not isinstance(senders, list) or len(senders) > 100:
         raise WorkspaceError("INVALID_MAIL_SENDERS")
-    senders = list(dict.fromkeys(address(item) for item in senders))
+    senders = [address(item) for item in senders]
     proactive = value.get("proactive") is True
     if proactive and policy == "allowlist" and not senders:
         raise WorkspaceError("INVALID_MAIL_SENDERS")
