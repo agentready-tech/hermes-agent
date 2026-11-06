@@ -1,5 +1,6 @@
 """Two bounded real-provider turns through the actual shared native gateway."""
 import asyncio
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -27,7 +28,7 @@ def configure(root, key, model):
 
 
 def usage(home):
-    with sqlite3.connect('file:' + str(home / 'state.db') + '?mode=ro', uri=True) as db:
+    with closing(sqlite3.connect('file:' + str(home / 'state.db') + '?mode=ro', uri=True)) as db:
         row = db.execute('SELECT SUM(api_call_count),SUM(input_tokens),SUM(output_tokens) '
                          'FROM session_model_usage').fetchone()
     result = dict(zip(('apiCalls', 'inputTokens', 'outputTokens'), (int(v or 0) for v in row)))

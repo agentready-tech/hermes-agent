@@ -1,4 +1,5 @@
 """Disposable identical per-agent state for the native one-vs-two process comparison."""
+from contextlib import closing
 import json
 from pathlib import Path
 
@@ -30,7 +31,7 @@ def initialize(root, url, sandboxes, image):
 
 def project_snapshot(home):
     import sqlite3
-    with sqlite3.connect('file:' + str(home / 'state.db') + '?mode=ro', uri=True) as db:
+    with closing(sqlite3.connect('file:' + str(home / 'state.db') + '?mode=ro', uri=True)) as db:
         db.row_factory = sqlite3.Row
         projects = [dict(row) for row in db.execute('SELECT subagent_id,session_id,project_key FROM delegated_projects')]
         messages = [dict(row) for row in db.execute('SELECT subagent_id,state,published FROM delegated_project_messages')]
