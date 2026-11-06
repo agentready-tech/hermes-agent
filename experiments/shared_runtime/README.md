@@ -38,6 +38,15 @@ controller receives the local Docker socket. Each sandbox has no network and can
 see only its own agent directory and workspace. The controller is excluded from
 runtime PSS; its cgroup total is reported separately. No GUI/browser is included.
 
+Fixture databases and agent directories live in one owned Docker Linux volume;
+each sandbox mounts only its own home/workspace subdirectories. macOS shared folders
+carry exported evidence after the processes stop, never live SQLite WAL/SHM state.
+After the controller exits, `python -m experiments.shared_runtime.local_volume
+export OUTPUT` preserves the state and verifies exported JSON hashes. The volume
+is retained until its evidence is reviewed and its exact ownership is checked for cleanup.
+The paid probe keeps native state in the disposable container's Linux filesystem;
+removing that stopped container also removes its temporary credential-bearing homes.
+
 The scripted inference run exercises actual native terminal, memory and persistent
 delegation tools, blocked children with responsive parents, own-only list/read/stop,
 completion delivery, then a full gateway process restart using the same folders.

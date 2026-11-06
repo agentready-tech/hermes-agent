@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import tempfile
 
 from experiments.shared_runtime.image_client import Clients, Workers
 from experiments.shared_runtime.image_config import initialize
@@ -57,14 +58,17 @@ def main():
     output = Path('/probe')
     plan = json.loads((output / 'launch.json').read_text())
     key = (output / 'provider-key.private').read_text().strip()
-    configure(output / 'home', key, plan['model'])
-    workers = Workers(output / 'home', 'shared', output)
+    # no-tmp: ok — this fixture must use the disposable Linux layer, not the macOS evidence mount.
+    native_home = Path(tempfile.mkdtemp(prefix='prototype-paid-native-', dir='/tmp')) / 'home'
+    configure(native_home, key, plan['model'])
+    workers = Workers(native_home, 'shared', output)
     try:
         workers.start()
         proof = asyncio.run(exercise(workers))
         result = {'phase': 'complete', 'sourceRevision': plan['sourceRevision'], 'image': plan['image'],
                   'model': plan['model'], 'runtimeProcessCount': len(workers.pids), 'profiles': proof,
                   'actualNativeGateway': True, 'realProvider': 'openrouter', 'productionTouched': False}
+        result['nativeStateStorage'] = 'removed-container-linux-filesystem'
         (output / 'paid-proof.json').write_text(json.dumps(result, indent=2))
     except Exception as exc:
         # Provider errors may contain response bodies. Keep details only in the private log.

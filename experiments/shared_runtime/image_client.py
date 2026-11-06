@@ -66,6 +66,13 @@ class Workers:
                 process.wait(timeout=10)
         self.processes.clear()
 
+    def check_alive(self):
+        for process in self.processes:
+            code = process.poll()
+            if code is not None:
+                raise RuntimeError('NATIVE_GATEWAY_EXIT:' + str(code))
+        return True
+
     @property
     def pids(self):
         return [d['pid'] for d in self.descriptors.values()]

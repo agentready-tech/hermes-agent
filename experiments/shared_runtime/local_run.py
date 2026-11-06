@@ -6,9 +6,7 @@ from pathlib import Path
 import subprocess
 import uuid
 
-
-def command(args):
-    return subprocess.check_output(args, text=True, timeout=45).strip()
+from experiments.shared_runtime.local_docker import command
 
 
 def main():
@@ -35,21 +33,21 @@ def main():
     launch = dict(image=args.image, sourceRevision=revision, sandboxes=sandboxes,
                   harnessContainer=identity, productionTouched=False, phase='preparing')
     (output / 'launch.json').write_text(json.dumps(launch, indent=2))
+    from experiments.shared_runtime.local_volume import prepare, volume_mount
+    volume = prepare(args.image, identity, output, launch)
     created = []
     try:
         for name, container in sandboxes.items():
-            home, workspace = output / 'home' / 'profiles' / name, output / 'workspaces' / name
-            home.mkdir(parents=True)
-            workspace.mkdir(parents=True)
             command(['docker', 'run', '-d', '--pull=never', '--name', container,
                 '--label', 'io.agentsee.prototype=' + identity, '--network=none', '--cap-drop=ALL',
-                '--security-opt=no-new-privileges', '--mount', f'type=bind,src={home},dst=/agent,readonly',
-                '--mount', f'type=bind,src={workspace},dst=/workspace', '--entrypoint', '/bin/sleep',
+                '--security-opt=no-new-privileges', '--mount',
+                volume_mount(volume, '/agent', subpath='home/profiles/' + name, readonly=True), '--mount',
+                volume_mount(volume, '/workspace', subpath='workspaces/' + name), '--entrypoint', '/bin/sleep',
                 args.image, 'infinity'])
             created.append(container)
         cid = command(['docker', 'run', '-d', '--pull=never', '--name', identity,
-            '--label', 'io.agentsee.prototype=' + identity, '--cap-drop=ALL',
-            '--security-opt=no-new-privileges', '--mount', f'type=bind,src={output},dst=/probe',
+            '--label', 'io.agentsee.prototype=' + identity, '--cap-drop=ALL', '--ulimit', 'core=0',
+            '--security-opt=no-new-privileges', '--mount', volume_mount(volume, '/probe'),
             '--mount', f'type=bind,src={endpoint.removeprefix("unix://")},dst=/var/run/docker.sock',
             '--entrypoint', '/opt/hermes/.venv/bin/python', args.image,
             '/opt/hermes/experiments/shared_runtime/image_probe.py'])
