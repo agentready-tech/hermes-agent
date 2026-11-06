@@ -29,3 +29,37 @@ def test_git_export_preserves_modes_and_excludes_untracked_files_under_private_u
     assert stat.S_IMODE((source / executable.name).stat().st_mode) == 0o755
     assert (source / ordinary.name).read_bytes() == ordinary.read_bytes()
     assert not (source / 'untracked-secret.env').exists()
+
+
+def test_stamp_subprocess_does_not_add_host_bytecode_to_export(tmp_path):
+    from experiments.shared_runtime.build import stamp_source
+    (tmp_path / 'pm').mkdir()
+    (tmp_path / 'pm/__init__.py').write_text('VALUE = 1\n')
+    (tmp_path / 'scripts').mkdir()
+    (tmp_path / 'scripts/write_install_stamp.py').write_text(
+        'import sys\nfrom pathlib import Path\nsys.path.insert(0,str(Path(__file__).resolve().parents[1]))\n'
+        'import pm\nPath(sys.argv[sys.argv.index("--output")+1]).write_text("{}")\n')
+    stamp_source(tmp_path, 'fixture-revision', '2026.11.6.prototype.10')
+    assert (tmp_path / 'install-stamp.json').is_file()
+    assert not list(tmp_path.rglob('*.pyc'))
+
+
+def test_dependency_fingerprint_changes_only_for_native_build_inputs(tmp_path):
+    import io
+    import tarfile
+    from experiments.shared_runtime.dependency_cache import INPUTS, dependency_inputs
+
+    def archive(name, *, dependency='pinned', application='different application'):
+        path = tmp_path / name
+        files = {key: b'unchanged input' for key in INPUTS}
+        files.update({'pm/lock.json': dependency.encode(), 'agent/runtime.py': application.encode()})
+        with tarfile.open(path, 'w') as output:
+            for key, content in files.items():
+                entry = tarfile.TarInfo(key)
+                entry.mode, entry.size = 0o644, len(content)
+                output.addfile(entry, io.BytesIO(content))
+        return path
+
+    first = dependency_inputs(archive('first.tar'))
+    assert first == dependency_inputs(archive('application-only.tar', application='new application'))
+    assert first != dependency_inputs(archive('new-lock.tar', dependency='changed dependency'))
