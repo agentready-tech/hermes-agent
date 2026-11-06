@@ -58,12 +58,16 @@ def scripted_reply(server, request, name):
     if 'ROSTER_' + name in text:
         payload = json.loads(tools[-1]['content'])
         projects = payload.get('projects', [])
+        other = 'bravo' if name == 'alpha' else 'alpha'
+        live = payload.get('subagents', [])
         server.roster[name] = {'onlyOwnChild': len(projects) == 1 and
-            projects[0]['subagent_id'] == server.expected_ids[name]}
+            projects[0]['subagent_id'] == server.expected_ids[name] and len(live) == 1 and
+            live[0]['subagent_id'] == server.expected_ids[name] and
+            'CHILD_' + other not in tools[-1]['content']}
     if 'FOREIGN_' + name in text and not tools:
         operation, identity = text.split('FOREIGN_' + name + ':', 1)[1].split()[:2]
         return {'role': 'assistant', 'tool_calls': [call('delegate_task', {
-            'action': operation, 'subagent_id': identity})]}
+            'action': operation, 'subagent_id': identity, 'message': 'synthetic foreign steering'})]}
     if 'FOREIGN_' + name in text:
         server.foreign_refused.append({'owner': name, 'rejected': 'error' in tools[-1]['content'].lower()})
     if 'SEND_' + name in text and not tools:

@@ -60,6 +60,7 @@ async def exercise(workers, server, output):
         sandbox_proof(output, 'parent')
         proof['sandbox'] = {'actualNativeTerminalBoth': True, 'ownMountsAndSyntheticSecrets': True}
         measures['warm'] = measure(workers.pids)
+        write(workers.output / 'partial-proof.json', {'phase': 'warm', 'measurements': measures, 'proof': proof})
         await clients.both('SPAWN')
         await asyncio.to_thread(wait_for, lambda: all(e.is_set() for e in server.child_entered.values()),
                                 timeout=60, what='NATIVE_CHILDREN_RUNNING')
@@ -67,6 +68,7 @@ async def exercise(workers, server, output):
         await clients.both('FOLLOWUP')
         measures['heldChildren'] = measure(workers.pids)
         proof['parentsNonblockingWhileBothChildrenRunning'] = True
+        write(workers.output / 'partial-proof.json', {'phase': 'held_children', 'measurements': measures, 'proof': proof})
         snapshots = {n: project_snapshot(workers.root / 'profiles' / n) for n in NAMES}
         ids = {n: s['projects'][0]['subagent_id'] for n, s in snapshots.items()}
         if ids['alpha'] == ids['bravo']:
@@ -75,10 +77,10 @@ async def exercise(workers, server, output):
         await clients.both('ROSTER')
         if not all(r['onlyOwnChild'] for r in server.roster.values()) or len(server.roster) != 2:
             raise RuntimeError('FOREIGN_CHILD_ROSTER')
-        for operation in ('read', 'stop'):
+        for operation in ('read', 'stop', 'steer'):
             await asyncio.gather(*(clients.turn(n, 'FOREIGN_' + n + ':' + operation + ' ' +
                 ids['bravo' if n == 'alpha' else 'alpha']) for n in NAMES))
-        if len(server.foreign_refused) != 4 or not all(r['rejected'] for r in server.foreign_refused):
+        if len(server.foreign_refused) != 6 or not all(r['rejected'] for r in server.foreign_refused):
             raise RuntimeError('FOREIGN_CHILD_CONTROL_ACCEPTED')
         proof['ownOnlyListReadStop'] = True
         server.release['alpha'].set()
@@ -88,8 +90,10 @@ async def exercise(workers, server, output):
             b = project_snapshot(workers.root / 'profiles' / 'bravo')['messages']
             return a[0]['state'] == 'completed' and a[0]['published'] and b[0]['state'] == 'running'
         await asyncio.to_thread(wait_for, alpha_only, timeout=60, what='OWN_ONLY_ALPHA_COMPLETION')
+        await clients.completion('alpha')
         server.release['bravo'].set()
         await asyncio.to_thread(wait_for, lambda: children_complete(workers.root), timeout=60, what='CHILD_DELIVERY')
+        await clients.completion('bravo')
         proof['independentPersistentChildrenAndDelivery'] = True
         proof['childIds'] = ids
         for name in NAMES:
@@ -100,6 +104,7 @@ async def exercise(workers, server, output):
                 raise RuntimeError('FOREIGN_HISTORY:' + name)
         measures['completed'] = measure(workers.pids)
         proof['preRestart'] = {n: project_snapshot(workers.root / 'profiles' / n) for n in NAMES}
+        write(workers.output / 'partial-proof.json', {'phase': 'completed_before_restart', 'measurements': measures, 'proof': proof})
     return {'measurements': measures, 'proof': proof}
 
 
@@ -112,8 +117,10 @@ async def restart_proof(workers, before):
             if snapshot['historyCount'] < before['preRestart'][name]['historyCount']:
                 raise RuntimeError('RESTART_HISTORY_LOSS:' + name)
         await clients.both('RESTORED')
+        counts = {n: (await clients.view(n))['message_count'] for n in NAMES}
         await asyncio.gather(*(clients.turn(n, 'SEND_' + n + ':' + before['childIds'][n]) for n in NAMES))
         await asyncio.to_thread(wait_for, lambda: children_complete(workers.root), timeout=60, what='REUSED_CHILD_DELIVERY')
+        await asyncio.gather(*(clients.completion(n, after=counts[n]) for n in NAMES))
     return {'fullProcessRestart': True, 'sameHomeSessionId': True, 'persistentChildIdsUnchanged': True,
             'existingChildrenAcceptedNewWork': True, 'memory': memory_proof(workers.root)}
 
