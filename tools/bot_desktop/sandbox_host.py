@@ -28,6 +28,24 @@ from tools.environments import streams
 
 logger = logging.getLogger(__name__)
 
+_NATIVE_LAUNCH_SEED = '''import json, os, pathlib, sys, tempfile
+root = pathlib.Path(sys.argv[1])
+root.mkdir(mode=0o700, parents=True, exist_ok=True)
+for name, source in json.load(sys.stdin).items():
+    target = root / name
+    if target.is_file() and target.read_text(encoding='utf-8-sig') == source:
+        continue
+    descriptor, temporary = tempfile.mkstemp(prefix='.' + name, dir=root)
+    try:
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as output:
+            output.write(source)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, target)
+    finally:
+        pathlib.Path(temporary).unlink(missing_ok=True)
+'''
+
 # The user desktop processes run as inside the sandbox image. nikolaik (and hermes-sandbox:desktop on top of
 # it) ships uid 1000 `pn`; a root Xvnc/Chromium/cua-driver is the wrong shape (Chromium refuses the sandbox,
 # AT-SPI wants a user session). Falls back to the exec default when the image has no such user.
@@ -156,6 +174,43 @@ def browser_instance_cdp_port(env: Any, *, exclude_session: Optional[str] = None
     return browser_instance.admitted_port(result if isinstance(result, dict) else {})
 
 
+def browser_launch_path(env: Any) -> str:
+    """Seed the versioned native launch helper beside the existing desktop helpers."""
+    import hashlib
+    from tools.bot_desktop import browser_instance, browser_launch
+    sources = {Path(module.__file__).name: Path(module.__file__).read_text(encoding='utf-8-sig')
+               for module in (browser_instance, browser_launch)}
+    digest = hashlib.sha256(json.dumps(sources, sort_keys=True).encode()).hexdigest()
+    target = f"{desktop_home(env).rstrip('/')}/.hermes/bot-desktop/browser-launch/{digest}"
+    if getattr(env, '_bd_native_launch', None) == target:
+        return target + '/browser_launch.py'
+    result = streams.run_in(env, ['python3', '-c', _NATIVE_LAUNCH_SEED, target], stdin=json.dumps(sources).encode(),
+                            user=_user_for(env), timeout=15)
+    if result.returncode:
+        raise RuntimeError('Could not seed the native desktop browser launcher')
+    env._bd_native_launch = target
+    return target + '/browser_launch.py'
+
+
+def ensure_browser_cdp_port(env: Any, *, exclude_session: Optional[str] = None) -> Optional[int]:
+    """Allocate and launch as the browser owner inside its actual sandbox namespace."""
+    from tools.bot_desktop import browser, browser_instance, runtime
+    from tools.bot_desktop.browser_memory_guard import executable as guarded_executable
+    exe = chromium_executable(env)
+    if not exe:
+        raise browser_instance.ProfileUnavailable('unknown')
+    exe = guarded_executable(env, exe)
+    argv = browser.dock_argv(exe, browser_profile_dir(env), sandbox_bypass=chromium_sandbox_bypass(env))
+    request = json.dumps({'argv': argv, 'exclude_session': exclude_session}).encode()
+    result = streams.run_in(env, ['python3', browser_launch_path(env)], stdin=request,
+                            child_env=runtime.published_env(), user=_user_for(env), timeout=20)
+    try:
+        value = json.loads(result.stdout) if result.returncode == 0 else {}
+    except (ValueError, TypeError):
+        value = {}
+    return browser_instance.admitted_port(value if isinstance(value, dict) else {})
+
+
 def chromium_sandbox_bypass(env: Any) -> bool:
     """Desktop Docker supports Chromium's own sandbox; retain other backends' existing policy."""
     return not getattr(env, "chromium_sandbox_enabled", False)
@@ -255,6 +310,13 @@ def start(env: Any, profile: str, *, geometry: str, wait_seconds: float = 20.0,
     rdir = _remote_dir(env, profile)
     live = _published(env, rdir)
     if live.get("DISPLAY"):
+        if browser_exec_line:
+            request = json.dumps({'config_home': desktop_config_dir(env, profile),
+                                  'exec_line': browser_exec_line}).encode()
+            refreshed = streams.run_in(env, ['python3', browser_launch_path(env), '--refresh-dock'],
+                                       stdin=request, user=_user_for(env), timeout=15)
+            if refreshed.returncode:
+                raise RuntimeError('Could not refresh the existing native Browser launcher')
         # Adopting a screen the sandbox kept while this host's state was lost (fresh HERMES_HOME, a stop()
         # whose kill missed): without the marker, status/thumbnail/stop would not know it is ours.
         return _record(env, rdir, profile, live)

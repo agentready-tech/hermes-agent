@@ -22,6 +22,7 @@ def _fresh(monkeypatch):
 def _wire(monkeypatch, commands):
     from tools import browser_tool as browser
     from tools import browser_tool_session as session
+    from tools.bot_desktop import browser as desktop_browser
 
     monkeypatch.delenv("AGENT_BROWSER_PROFILE", raising=False)
     monkeypatch.setattr(browser, "_is_camofox_mode", lambda: False)
@@ -30,6 +31,9 @@ def _wire(monkeypatch, commands):
     monkeypatch.setattr(session, "_get_session_info", lambda *a: {"session_name": "review", "cdp_url": None, "features": {"local": True}})
     monkeypatch.setattr(session._cloud, "_get_browser_engine", lambda: "chrome")
     monkeypatch.setattr(session._cloud, "_is_headed_mode", lambda: True)
+    monkeypatch.setattr(runtime, 'ensure_started_for_tool', lambda: None)
+    monkeypatch.setattr(session, '_browser_in_sandbox', lambda: False)
+    monkeypatch.setattr(desktop_browser, 'ensure_instance_cdp_port', lambda *a, **kw: None)
 
     def spawn(*args):
         commands.append(args[2])
@@ -111,6 +115,7 @@ def test_browser_result_crossing_a_takeover_is_discarded(monkeypatch):
     monkeypatch.setattr(session, "_spawn_and_collect", spawn_then_takeover)
     result = browser.browser_click("e1", task_id="review")
     assert "WHAT-THE-HUMAN-TYPED" not in result
+    assert json.loads(result).get('code') == 'human_has_control'
 
 
 def test_real_profile_local_browser_is_fenced_by_provenance_even_without_a_live_display(monkeypatch):

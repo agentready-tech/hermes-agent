@@ -14,6 +14,7 @@ pytestmark = pytest.mark.platforms('posix')
 def _dispatch_setup(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime, 'state_dir', lambda: tmp_path / 'desktop')
     monkeypatch.setattr(runtime, 'published_env', lambda: {'DISPLAY': ':20'})
+    monkeypatch.setattr(runtime, 'ensure_started_for_tool', lambda: None)
     monkeypatch.setattr(session, '_browser_in_sandbox', lambda: False)
     monkeypatch.setattr(session._cloud, '_get_browser_engine', lambda: 'auto')
     monkeypatch.setattr(session._cloud, '_is_headed_mode', lambda: False)
@@ -100,7 +101,7 @@ def test_pid_generation_change_during_admission_is_unknown(monkeypatch, tmp_path
 def test_launch_fence_ends_before_page_work_and_does_not_lock_other_profiles(monkeypatch, tmp_path):
     import fcntl
     info = _dispatch_setup(monkeypatch, tmp_path)
-    monkeypatch.setattr(browser, 'running_instance_cdp_port', lambda *args, **kw: None)
+    monkeypatch.setattr(browser, 'ensure_instance_cdp_port', lambda *args, **kw: None)
     events = []
     other = tmp_path / 'other-profile'
     other.mkdir()
@@ -123,7 +124,7 @@ def test_launch_fence_ends_before_page_work_and_does_not_lock_other_profiles(mon
 
 def test_close_never_starts_or_adopts_a_siblings_browser(monkeypatch, tmp_path):
     info = _dispatch_setup(monkeypatch, tmp_path)
-    monkeypatch.setattr(browser, 'running_instance_cdp_port', lambda *args, **kw: pytest.fail('close must not adopt'))
+    monkeypatch.setattr(browser, 'ensure_instance_cdp_port', lambda *args, **kw: pytest.fail('close must not adopt'))
     commands = []
     monkeypatch.setattr(session, '_spawn_and_collect', lambda *args: commands.append(args[3]) or {'success': True})
     assert session._dispatch_browser_command('task', info, 'agent-browser', 'close', [], 5, None)[1]['success']

@@ -155,11 +155,12 @@ def _lock(profile):
     return {'pid': int(pid), 'identity': (value.st_dev, value.st_ino, value.st_ctime_ns)}
 
 
-def _owns_listener(owner, port):
+def _owns_listener(owner, port, *, address=None):
     if not Path('/proc/self/stat').exists():
         import psutil
         try:
             return any(row.status == 'LISTEN' and row.laddr.port == port
+                       and (address is None or row.laddr.ip == address)
                        for row in psutil.Process(owner['pid']).net_connections(kind='tcp'))
         except psutil.Error:
             return False
@@ -167,6 +168,10 @@ def _owns_listener(owner, port):
     for table in ('tcp', 'tcp6'):
         for line in Path('/proc/net', table).read_text(encoding='utf-8-sig').splitlines()[1:]:
             values = line.split()
+            if address is not None:
+                raw = values[1].rpartition(':')[0]
+                if table != 'tcp' or socket.inet_ntoa(int(raw, 16).to_bytes(4, sys.byteorder)) != address:
+                    continue
             if values[3] == '0A' and int(values[1].rpartition(':')[2], 16) == port:
                 inodes.add('socket:[' + values[9] + ']')
     for path in Path('/proc', str(owner['pid']), 'fd').iterdir():

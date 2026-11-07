@@ -54,8 +54,9 @@ def test_pinned_profile_honours_tilde_and_resolves_relative_paths_against_hermes
 
 
 def test_dock_browser_advertises_a_devtools_port():
-    """A human-started instance must be attachable, or the agent can never drive it afterwards."""
-    assert "--remote-debugging-port=" in browser.dock_argv("/opt/chrome", "/p/dir")[2]
+    """The namespace-local helper makes a human-started instance attachable."""
+    assert 'browser_launch.py' in browser.dock_exec_line('/opt/chrome', '/p/dir')
+    assert '--remote-debugging-port=0' not in browser.dock_argv('/opt/chrome', '/p/dir')
 
 
 def test_dock_browser_caps_its_disk_cache():
@@ -87,6 +88,7 @@ def test_agent_attaches_to_human_started_browser(monkeypatch):
     from tools import browser_tool_session as session
 
     monkeypatch.setattr(runtime, "published_env", lambda: {"DISPLAY": ":37"})
+    monkeypatch.setattr(runtime, 'ensure_started_for_tool', lambda: None)
     monkeypatch.setattr(session._cloud, "_get_browser_engine", lambda: "auto")
     monkeypatch.setattr(session._cloud, "_is_headed_mode", lambda: False)
     monkeypatch.setattr(session, "_agent_browser_argv", lambda cmd: [cmd])
@@ -100,11 +102,11 @@ def test_agent_attaches_to_human_started_browser(monkeypatch):
     monkeypatch.setattr(session._lp, "_lightpanda_fallback_reason", lambda *a: None)
     info = {"session_name": "h_abc", "cdp_url": None, "features": {"local": True}}
 
-    monkeypatch.setattr(browser, "running_instance_cdp_port", lambda d, **kw: 41234)
+    monkeypatch.setattr(browser, "ensure_instance_cdp_port", lambda d, **kw: 41234)
     session._dispatch_browser_command("t", info, "agent-browser", "open", ["https://x"], 10, None)
     assert argvs[-1][:5] == ["agent-browser", "--session", "h_abc", "--cdp", "41234"]
 
-    monkeypatch.setattr(browser, "running_instance_cdp_port", lambda d, **kw: None)
+    monkeypatch.setattr(browser, "ensure_instance_cdp_port", lambda d, **kw: None)
     session._dispatch_browser_command("t", info, "agent-browser", "open", ["https://x"], 10, None)
     assert "--cdp" not in argvs[-1] and argvs[-1][:3] == ["agent-browser", "--session", "h_abc"]
 
@@ -210,9 +212,10 @@ def test_dock_exec_line_survives_spaces_in_the_executable_and_profile_paths():
     exe = "/opt/Google Chrome/chrome"
     profile = '/home/a b/.hermes/browser "x"/profile'
     line = browser.dock_exec_line(exe, profile)
-    assert line.startswith('Exec="/opt/Google Chrome/chrome" ')
+    assert line.startswith('Exec="python3" ')
+    assert '"/opt/Google Chrome/chrome"' in line
     assert r'"--user-data-dir=/home/a b/.hermes/browser \\"x\\"/profile"' in line  # spec: \" quoted, then \ string-escaped
-    assert "--remote-debugging-port=0" in line
+    assert '--remote-debugging-port=0' not in line
 
 
 def test_headless_shell_override_is_not_a_headed_browser(tmp_path, monkeypatch):

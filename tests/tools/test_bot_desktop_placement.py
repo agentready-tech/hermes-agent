@@ -228,6 +228,7 @@ def test_desktop_browser_launcher_uses_the_environment_sandbox_policy(monkeypatc
     monkeypatch.setattr(runtime, "_sandbox_env", lambda **kw: env)
     monkeypatch.setattr(sandbox_host, "chromium_executable", lambda e: "/opt/chrome")
     monkeypatch.setattr(sandbox_host, "browser_profile_dir", lambda e: "/home/pn/browser-profile")
+    monkeypatch.setattr(sandbox_host, "browser_launch_path", lambda e: "/home/pn/native/browser_launch.py")
     seen = {}
     monkeypatch.setattr(sandbox_host, "start", lambda *a, **kw: seen.update(kw) or {"DISPLAY": ":20"})
     monkeypatch.setattr(runtime, "touch_activity", lambda: None)

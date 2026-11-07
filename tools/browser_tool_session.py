@@ -862,9 +862,9 @@ def _bot_desktop_attach_port(session_info: dict[str, Any]) -> Optional[int]:
     if _browser_in_sandbox():
         from tools.bot_desktop import runtime, sandbox_host
         env = runtime._sandbox_env(create=True)
-        return sandbox_host.browser_instance_cdp_port(env, exclude_session=session_info["session_name"]) if env else None
+        return sandbox_host.ensure_browser_cdp_port(env, exclude_session=session_info["session_name"]) if env else None
     from tools.bot_desktop import browser as _bd_browser
-    return _bd_browser.running_instance_cdp_port(str(_bd_browser.profile_dir()),
+    return _bd_browser.ensure_instance_cdp_port(str(_bd_browser.profile_dir()),
                                                  exclude_session=session_info["session_name"])
 
 
@@ -897,6 +897,9 @@ def _shared_browser_handshake(task_id, session_info, browser_cmd, command, args,
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     with runtime._flocked(directory / 'browser-launch.lock') as lock:
         os.chmod(lock.name, 0o600)
+        # This explicit browser request must grant the existing headroom-gated
+        # watchdog permit BEFORE native Chrome launch, including after a stop.
+        runtime.ensure_started_for_tool()
         backend_args = _browser_backend_args(session_info, engine)
         parts = _agent_browser_argv(browser_cmd) + backend_args + ['--json', 'get', 'cdp-url']
         limit = min(timeout, _bt._get_open_command_timeout(first_open=True))
@@ -919,6 +922,10 @@ def _dispatch_browser_command(
     except ProfileUnavailable as error:
         return engine, {'success': False, 'code': 'browser_profile_unavailable',
                         'profileState': error.state, 'error': str(error)}
+    except RuntimeError as error:
+        if not str(error).startswith('BROWSER_MEMORY_'):
+            raise
+        return engine, {'success': False, 'code': 'browser_memory_pressure', 'error': str(error)}
     if handshake is not None and (not handshake.get('success') or (command == 'get' and args == ['cdp-url'])):
         return engine, handshake
 

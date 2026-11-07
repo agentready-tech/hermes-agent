@@ -373,6 +373,10 @@ def ensure_started_for_tool() -> None:
             raise RuntimeError('Browser watchdog requires the configured sandbox')
         before_tool(guard_environment)
     if published_env().get("DISPLAY"):
+        # A sandbox screen outlives a gateway image rollout. Refresh our dock's
+        # owned Exec line on the tool boundary; start() adopts the live screen
+        # without restarting its desktop, browser, profile or human session.
+        start()
         touch_activity()
         return
     where = placement.resolve()
@@ -696,6 +700,9 @@ def start(*, wait_seconds: float = 15.0) -> DesktopStatus:
     os.chmod(sd, 0o700)
     with _flocked(sd / "start.lock"):
         if _launcher_pid() is not None and published_env().get("DISPLAY"):
+            from tools.bot_desktop import browser, browser_launch
+            if (command := browser.dock_launch()) is not None:
+                browser_launch.refresh_dock(state_dir() / 'xdg', browser.dock_exec_line(*command))
             return status()
         from tools.bot_desktop import resources
         floor = resources.min_free_mb()
@@ -798,10 +805,13 @@ def _start_in_sandbox(wait_seconds: float) -> DesktopStatus:
         # uses there: the human's browser is the bot's browser, as on the host.
         from tools.bot_desktop.browser import dock_exec_line
         exe = sandbox_host.chromium_executable(env)
-        from tools.bot_desktop.browser_memory_guard import executable as guarded_executable
-        exe = guarded_executable(env, exe) if exe else None
+        from tools.bot_desktop.browser_memory_guard import install as install_guard
+        memory_guard = install_guard(env) if exe else None
+        exe = memory_guard['executable'] if memory_guard else exe
         browser = (exe, dock_exec_line(exe, sandbox_host.browser_profile_dir(env),
-                                     sandbox_bypass=sandbox_host.chromium_sandbox_bypass(env))) if exe else (None, None)
+                                     sandbox_bypass=sandbox_host.chromium_sandbox_bypass(env),
+                                     launch_helper=sandbox_host.browser_launch_path(env),
+                                     memory_guard=memory_guard)) if exe else (None, None)
         published = sandbox_host.start(env, _profile_name(), geometry=geometry(), wait_seconds=max(wait_seconds, 20.0),
                                        browser_exec=browser[0], browser_exec_line=browser[1])
     (sd / "env").write_text("".join(f"{k}={v}\n" for k, v in published.items()), encoding="utf-8")

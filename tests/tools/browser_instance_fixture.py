@@ -31,15 +31,18 @@ int main(int argc, char **argv) {
     if (unlink(path) || symlink(target, path)) return 2;
   }
   if (argc == 2 || strcmp(argv[2], "--remote-debugging-pipe")) {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    int ipv6 = argc > 2 && !strcmp(argv[2], "--listen-ipv6");
+    int fd = socket(ipv6 ? AF_INET6 : AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in address = {.sin_family=AF_INET, .sin_port=0};
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (bind(fd, (struct sockaddr *)&address, sizeof(address)) || listen(fd, 16)) return 3;
-    socklen_t length = sizeof(address);
-    getsockname(fd, (struct sockaddr *)&address, &length);
+    struct sockaddr_in6 address6 = {.sin6_family=AF_INET6, .sin6_port=0, .sin6_addr=IN6ADDR_LOOPBACK_INIT};
+    struct sockaddr *selected = ipv6 ? (struct sockaddr *)&address6 : (struct sockaddr *)&address;
+    socklen_t length = ipv6 ? sizeof(address6) : sizeof(address);
+    if (bind(fd, selected, length) || listen(fd, 16)) return 3;
+    getsockname(fd, selected, &length);
     snprintf(path, sizeof(path), "%s/DevToolsActivePort", profile);
     FILE *out = fopen(path, "w");
-    fprintf(out, "%d\n/devtools/browser/fixture\n", ntohs(address.sin_port)); fclose(out);
+    fprintf(out, "%d\n/devtools/browser/fixture\n", ntohs(ipv6 ? address6.sin6_port : address.sin_port)); fclose(out);
   }
   snprintf(path, sizeof(path), "%s/fixture-ready", profile);
   FILE *ready = fopen(path, "w"); fprintf(ready, "%d", getpid()); fclose(ready);
@@ -66,12 +69,14 @@ def native_chrome(native_chrome_binary, monkeypatch):
     active = set()
     monkeypatch.setattr(browser_instance, '_candidates', lambda: iter(active))
     @contextlib.contextmanager
-    def running(profile, *, pipe=False, session=None):
+    def running(profile, *, pipe=False, session=None, ipv6=False):
         profile.mkdir(parents=True, exist_ok=True)
         (profile / 'fixture-ready').unlink(missing_ok=True)
         command = [str(native_chrome_binary), '--user-data-dir=' + str(profile)]
         if pipe:
             command.append('--remote-debugging-pipe')
+        elif ipv6:
+            command.append('--listen-ipv6')
         options = {}
         if session:
             import os

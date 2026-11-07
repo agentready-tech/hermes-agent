@@ -106,9 +106,7 @@ def proxy_args(proxy: Optional[str] = None) -> list[str]:
 
 
 def dock_argv(exe: str, user_data_dir: str, *, sandbox_bypass: Optional[bool] = None) -> list[str]:
-    """Command the dock's Browser icon runs. ``--remote-debugging-port=0`` makes a human-started
-    instance attachable (Chromium writes the chosen port to ``<user-data-dir>/DevToolsActivePort``);
-    first-run / default-browser dialogs would sit between the human and the bot's tabs."""
+    """Common native headed Chrome arguments; browser_launch adds CDP inside its namespace."""
     # --test-type hides the "Chrome for Testing is only for automated testing" and unsupported-flag
     # (--no-sandbox as root) infobars, which otherwise sit at the top of the human's takeover view.
     # The same sandbox policy agent-browser starts this binary with (root, Docker, AppArmor userns): the
@@ -117,13 +115,14 @@ def dock_argv(exe: str, user_data_dir: str, *, sandbox_bypass: Optional[bool] = 
     from tools.browser_tool_session import CHROMIUM_SANDBOX_BYPASS_ARGS, _needs_chromium_sandbox_bypass
     # The profile is persistent by design (logins survive handoffs); its HTTP cache is not worth a
     # gateway's disk: uncapped it grows for months toward a hosted instance's 6 GB.
-    return [exe, f"--user-data-dir={user_data_dir}", "--remote-debugging-port=0", "--no-first-run",
+    return [exe, f"--user-data-dir={user_data_dir}", "--no-first-run",
             "--no-default-browser-check", "--test-type", f"--disk-cache-size={DISK_CACHE_BYTES}", *proxy_args(),
             *(CHROMIUM_SANDBOX_BYPASS_ARGS if (_needs_chromium_sandbox_bypass() if sandbox_bypass is None
                                               else sandbox_bypass) else ())]
 
 
-def dock_exec_line(exe: str, user_data_dir: str, *, sandbox_bypass: Optional[bool] = None) -> str:
+def dock_exec_line(exe: str, user_data_dir: str, *, sandbox_bypass: Optional[bool] = None,
+                   launch_helper: Optional[str] = None, memory_guard: Optional[dict] = None) -> str:
     """The ``Exec=`` line of the dock's ``.desktop`` entry. Every argument is double-quoted per the
     Desktop Entry spec (a browser under ``/opt/Google Chrome/`` or a profile under a spaced HERMES_HOME
     otherwise splits into garbage): inside the quotes ``" ` $ \\`` are backslash-escaped, and because the
@@ -131,7 +130,36 @@ def dock_exec_line(exe: str, user_data_dir: str, *, sandbox_bypass: Optional[boo
     def quote(arg: str) -> str:
         quoted = "".join("\\" + ch if ch in '"`$\\' else ch for ch in arg)
         return '"' + quoted.replace("\\", "\\\\") + '"'
-    return "Exec=" + " ".join(quote(arg) for arg in dock_argv(exe, user_data_dir, sandbox_bypass=sandbox_bypass))
+    helper = launch_helper or str(Path(__file__).with_name('browser_launch.py'))
+    import json
+    guard_args = ['--guard', json.dumps(memory_guard)] if memory_guard else []
+    command = ['python3', helper, '--dock', *guard_args,
+               *dock_argv(exe, user_data_dir, sandbox_bypass=sandbox_bypass)]
+    return "Exec=" + " ".join(quote(arg) for arg in command)
+
+
+def ensure_instance_cdp_port(user_data_dir: str, *, exclude_session: Optional[str] = None) -> Optional[int]:
+    """Agent-first and human-first use the same native headed browser, then attach."""
+    import json
+    import subprocess
+    import sys
+    from tools.bot_desktop.browser_instance import admitted_port
+    from tools.environments.local import served_profile_child_env
+    exe = executable()
+    if not exe:
+        from tools.bot_desktop.browser_instance import ProfileUnavailable
+        raise ProfileUnavailable('unknown')
+    child = env_for_agent(served_profile_child_env(inherit_credentials=False))
+    child.update(runtime.published_env())
+    result = subprocess.run([sys.executable, str(Path(__file__).with_name('browser_launch.py'))],
+                            input=json.dumps({'argv': dock_argv(exe, user_data_dir),
+                                              'exclude_session': exclude_session}).encode(),
+                            env=child, capture_output=True, timeout=20, check=False)
+    try:
+        value = json.loads(result.stdout) if result.returncode == 0 else {}
+    except (ValueError, TypeError):
+        value = {}
+    return admitted_port(value if isinstance(value, dict) else {})
 
 
 def running_instance_cdp_port(user_data_dir: str, *, exclude_session: Optional[str] = None) -> Optional[int]:
