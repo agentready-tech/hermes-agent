@@ -128,7 +128,7 @@ def main():
     login()
     image = copy_existing(request)
     proof = verify_source(image, revision)
-    bundle, checksum = archive(image)
+    bundle, checksum = archive(image, IMAGE + ':' + version)
     retired = retire_public_attempt(request)
     receipt = {'phase': 'complete', 'version': version, 'gitTag': tag, 'sourceRevision': revision,
         'image': image, 'tag': IMAGE + ':' + version, 'platform': 'linux/amd64',

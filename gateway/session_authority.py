@@ -397,8 +397,18 @@ class SessionAuthority:
                 rows = list_session_admissions(self.db, session_id=sid, pending_only=False)
                 native = [row for row in rows if 'native_text_v1' in row['payload']]
                 if not native:
+                    from hermes_runtime.adapters.main_transport import recover_panel_inputs
+                    if recover_panel_inputs(self, sid, available_source, rows):
+                        results[sid] = 'ready'
+                        continue
                     raise RuntimeStoreError('not_found')
                 target = self.physical_target(SessionRef(self.profile_id, sid))
+                from hermes_runtime.adapters.main_transport import native_head_source
+                bound_source = available_source
+                available_source = native_head_source(self, LiveSession(available_source,
+                    native[-1]['payload']['native_text_v1']['route']), native[-1]['payload'])
+                if available_source is not bound_source:
+                    adapter = self.runner._adapter_for_source(available_source)
                 source, route = await check_native_route(self.runner, native[-1]['payload'], target,
                                                     available_source, adapter)
                 for row in rows:
@@ -808,8 +818,10 @@ class SessionAuthority:
                 await tracked_write(self, partial(reopen_local_session, self, ref))
             if first is not None and 'native_text_v1' in first['payload']:
                 from gateway.session_envelope import check_native_route
-                await check_native_route(self.runner, first['payload'], self.physical_target(ref), live.source,
-                                   self.runner._adapter_for_source(live.source))
+                from hermes_runtime.adapters.main_transport import native_head_source
+                head_source = native_head_source(self, live, first['payload'])
+                await check_native_route(self.runner, first['payload'], self.physical_target(ref), head_source,
+                                   self.runner._adapter_for_source(head_source))
                 # Cancellation may advance FIFO while the connector is awaited.
                 # Never let the successor inherit this row's fresh verdict.
                 current = get_session_admission(self.db, admission_id=first['admission_id'])
@@ -1097,4 +1109,6 @@ async def initialize_session_authority(runner, *, profile_id, instance_id, db=No
     epochs[db_key] = epoch
     from gateway.session_local_recovery import recover_local_sessions
     recover_local_sessions(authority)
+    from hermes_runtime.adapters.main_transport import restore_owner_main
+    restore_owner_main(authority)
     return authority

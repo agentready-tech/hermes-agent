@@ -123,13 +123,16 @@ def publish(candidate: str) -> tuple[str, dict]:
     return IMAGE + "@" + digest, registration(package)
 
 
-def archive(image: str) -> tuple[Path, str]:
+def archive(image: str, candidate: str) -> tuple[Path, str]:
+    if not candidate.startswith(IMAGE + ':') or image.split('@', 1)[0] != IMAGE:
+        raise ValueError('OCI archive must retain the canonical versioned registry reference')
     phase("verifying_registry_pull")
     layout = output_root() / "oci"
     run(["skopeo", "copy", "--all", "--preserve-digests", "--dest-oci-accept-uncompressed-layers",
-         "docker://" + image, "oci:" + str(layout) + ":release"], log="registry-pull.log")
+         "docker://" + image, "oci:" + str(layout) + ":" + candidate], log="registry-pull.log")
     index = json.loads((layout / "index.json").read_text())
-    if len(index["manifests"]) != 1 or index["manifests"][0]["digest"] != image.split("@", 1)[1]:
+    if (len(index["manifests"]) != 1 or index["manifests"][0]["digest"] != image.split("@", 1)[1]
+            or index['manifests'][0].get('annotations', {}).get('org.opencontainers.image.ref.name') != candidate):
         raise ValueError("Registry roundtrip changed the published manifest")
     for blob in (layout / "blobs/sha256").iterdir():
         with blob.open("rb") as stream:
@@ -154,7 +157,7 @@ def main() -> None:
     source = prepare(revision, version)
     candidate, proof = build(source, revision, version)
     image, package = publish(candidate)
-    bundle, checksum = archive(image)
+    bundle, checksum = archive(image, candidate)
     receipt = {"phase": "complete", "version": version, "gitTag": "agentsee-v" + version,
                "sourceRevision": revision, "image": image, "tag": candidate, "platform": "linux/amd64",
                "workflowRunId": int(os.environ["GITHUB_RUN_ID"]), "workflowAttempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),

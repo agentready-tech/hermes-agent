@@ -11,6 +11,8 @@ def activate(home: Path) -> None:
     if _home is not None and _home != resolved:
         raise RuntimeError("A managed process owns exactly one AgentReady home")
     _home = resolved
+    from hermes_runtime.adapters.main_transport import register_platform
+    register_platform()
 
 
 def enabled() -> bool:

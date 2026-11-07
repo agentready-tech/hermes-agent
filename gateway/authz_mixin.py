@@ -632,6 +632,10 @@ class GatewayAuthorizationMixin:
         local_verdict = authorize_local_source(self, source)
         if local_verdict is not None:
             return local_verdict
+        from hermes_runtime.adapters.main_transport import authorize_source
+        managed_verdict = authorize_source(self, source)
+        if managed_verdict is not None:
+            return managed_verdict
 
         # Webhook events are HMAC-verified; a ``trusted_inbound`` platform's events come from the
         # service its adapter authenticated to (no human sender to allowlist).

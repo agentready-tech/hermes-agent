@@ -51,3 +51,27 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(image, publish.IMAGE + "@" + digest)
         self.assertEqual(facts["packageVisibility"], "public")
         self.assertIn(["gh", "api", path], calls)
+
+
+class OCIReferenceTests(unittest.TestCase):
+    def test_export_roundtrip_preserves_canonical_import_name_and_digest(self):
+        import hashlib
+        candidate = publish.IMAGE + ':2026.11.7.3'
+        digest = 'sha256:' + 'a' * 64
+        image = publish.IMAGE + '@' + digest
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            def pull(args, **_kwargs):
+                destination = args[-1]
+                self.assertEqual(destination, 'oci:' + str(root / 'oci') + ':' + candidate)
+                layout = root / 'oci'; (layout / 'blobs/sha256').mkdir(parents=True)
+                blob = b'fixture OCI content'
+                (layout / 'blobs/sha256' / hashlib.sha256(blob).hexdigest()).write_bytes(blob)
+                (layout / 'index.json').write_text(json.dumps({'manifests': [{'digest': digest,
+                    'annotations': {'org.opencontainers.image.ref.name': candidate}}]}))
+            with patch.object(publish, 'output_root', return_value=root), patch.object(publish, 'phase'), \
+                    patch.object(publish, 'run', side_effect=pull):
+                bundle, checksum = publish.archive(image, candidate)
+            self.assertEqual(hashlib.sha256(bundle.read_bytes()).hexdigest(), checksum)
+        with self.assertRaises(ValueError):
+            publish.archive(image, 'release')

@@ -78,6 +78,8 @@ async def test_legacy_collision_preserves_local_history_and_recovers_unstarted_m
     # Reproduce the shipped collision through real native local creation.
     with monkeypatch.context() as legacy:
         legacy.setattr(SessionStore, "_generate_session_key", lambda *a, **kw: HOME_SESSION_KEY)
+        # Reproduce the old startup as well: it had no private Panel-only main binding.
+        legacy.setattr('hermes_runtime.adapters.main_transport.restore_owner_main', lambda _authority: None)
         authority, ref, actor, params = await local_chat(host, home, monkeypatch)
     db = authority.db
     db.append_message(HOME_SESSION_ID, "assistant", "MAIN_HISTORY")
