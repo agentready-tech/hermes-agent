@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.7.2",
+  "defaultRuntimeVersion": "2026.11.7.3",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -1012,6 +1012,56 @@
         "productionTestsPerformed": false
       },
       "description": "One common source release: Panel gateway binding, optional Dashboard and browser tab cleanup."
+    },
+    "2026.11.7.3": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes@sha256:c74890a277179a546d3329bd00c86514397b06d38beeb6fad4b438d8c1abe559",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes:2026.11.7.3",
+      "configDigest": "sha256:1483eb6d7577839206c384b2ff723977b9098a6dfac86a08e28fe2d14888cdc0",
+      "platform": "linux/amd64",
+      "sourceRevision": "ce32cc0c4b7b20c2daadfbc5907d0d6aca4aaa4c",
+      "runtimePolicy": "common",
+      "publisherRecipe": ".github/workflows/agentsee-release.yml",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes@sha256:c74890a277179a546d3329bd00c86514397b06d38beeb6fad4b438d8c1abe559",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes:2026.11.7.3",
+        "digest": "sha256:c74890a277179a546d3329bd00c86514397b06d38beeb6fad4b438d8c1abe559",
+        "configDigest": "sha256:1483eb6d7577839206c384b2ff723977b9098a6dfac86a08e28fe2d14888cdc0",
+        "sourceRevision": "ce32cc0c4b7b20c2daadfbc5907d0d6aca4aaa4c",
+        "publisherRevision": "ce32cc0c4b7b20c2daadfbc5907d0d6aca4aaa4c",
+        "workflowRunId": 42365162491,
+        "workflowAttempt": 1,
+        "private": false,
+        "packageVisibility": "public",
+        "pullVerified": true,
+        "runtimePolicy": "common",
+        "fullSourceBuild": true,
+        "sourceProof": {
+          "sourceRevision": "ce32cc0c4b7b20c2daadfbc5907d0d6aca4aaa4c",
+          "cleanSourceVerified": true,
+          "unexpectedPythonFiles": 0,
+          "evidence": "successful canonical CI run 42365162491 attempt 1"
+        },
+        "productionTestsPerformed": false,
+        "ordinaryRolloutReadiness": true,
+        "dashboardDisabledForManagedAgents": true,
+        "oneWorkingTabPerExecutorInstruction": true,
+        "closeIdleUserTabs": true,
+        "browserMemoryWatchdogIncluded": false,
+        "registrySourceLabelsVerified": true,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "imagePullPolicy": "IfNotPresent",
+        "noMacImageDownload": true,
+        "noNewBackupCopies": true,
+        "buildRecipe": "Dockerfile + Dockerfile.agentready"
+      },
+      "validation": {
+        "canonicalCiSucceeded": true,
+        "registrySourceLabelsVerified": true,
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "userAcceptancePerformed": false
+      },
+      "description": "Native Panel-only main bootstrap and durable recovery; one common image pulled directly by Kubernetes."
     }
   },
   "supersededRuntimeAttempts": {
