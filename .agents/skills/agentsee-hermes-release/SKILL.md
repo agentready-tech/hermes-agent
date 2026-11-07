@@ -25,6 +25,8 @@ Reject dirty or untracked source inputs. Verify the complete first-party Python 
 
 Publish ONE image to ghcr.io/agentready-tech/agentsee-hermes:VERSION. Record its registry manifest digest, source revision, CI run and source receipt. Retain the previous image for rollback. Never overwrite a version tag or build employee-specific images.
 
+Delivery is GitHub Actions → GHCR → Kubernetes. Set the common immutable digest on the existing Hermes StatefulSets with `imagePullPolicy: IfNotPresent`; kubelet/containerd downloads the image directly from GHCR. Use the centralized registry rollout operator in AgentReady, `deploy/kubernetes/rollout_hermes_registry.py`. Never download release images/OCI archives to the operator’s Mac, relay them through a workstation, manually preload/import them, or create extra release backup copies. Retain published versions and Kubernetes ControllerRevisions for rollback. Agent data backups belong to the existing backup system, not to each image rollout.
+
 Respect the user's validation scope. When production tests are excluded, do not run model, mail, Telegram, STT, Decision, browser or GUI probes, or repeat production audits. Ordinary rollout readiness is separate from exercising user functionality. Do required packaging checks before publication.
 
 Update ONLY the authorized agents' Hermes image fields, sequentially at idle. Preserve all per-agent folders, configs, keys, providers, history, queues, sandbox/browser Pods, profiles and PVCs. Do not recreate sandboxes or restore databases. An uncertain update is inspected before retrying; resume from durable checkpoints.
