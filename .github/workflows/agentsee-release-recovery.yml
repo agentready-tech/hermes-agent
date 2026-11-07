@@ -35,7 +35,6 @@ jobs:
         with:
           name: hermes-release-agentsee-v2026.11.6.1-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/agentsee-hermes-release/hermes-release.oci.tar
             ${{ runner.temp }}/agentsee-hermes-release/release-proof.json
             ${{ runner.temp }}/agentsee-hermes-release/source-proof.json
           compression-level: 0

@@ -1,6 +1,7 @@
 """Sandbox incidents are acknowledged only after durable, profile-local native admission."""
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -23,6 +24,13 @@ def home(monkeypatch):
 def incident():
     return {'id': 'a' * 32, 'kind': 'browser_memory_guard', 'phase': 'stopped',
             'created_at': 1, 'sample': {'usage_bytes': 2200000000}, 'forced': False}
+
+
+def test_identical_home_paths_in_different_pods_keep_distinct_stable_owners():
+    target = {'namespace': 'agent-a', 'pod': 'sandbox-0', 'container': 'sandbox', 'uid': 'old'}
+    first = bridge.owner_identity(SimpleNamespace(kubernetes_identity=target))
+    assert first != bridge.owner_identity(SimpleNamespace(kubernetes_identity={**target, 'namespace': 'agent-b'}))
+    assert first == bridge.owner_identity(SimpleNamespace(kubernetes_identity={**target, 'uid': 'replacement'}))
 
 
 def test_retry_after_bridge_restart_deduplicates_real_native_inbox(home, monkeypatch):

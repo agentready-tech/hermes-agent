@@ -7,9 +7,9 @@ import re
 import subprocess
 
 if __package__:
-    from .publish_release import IMAGE, ROOT, archive, output_root, phase, run
+    from .publish_release import IMAGE, ROOT, output_root, phase, run, verify_registry_pull
 else:
-    from publish_release import IMAGE, ROOT, archive, output_root, phase, run
+    from publish_release import IMAGE, ROOT, output_root, phase, run, verify_registry_pull
 
 
 def package(name):
@@ -128,15 +128,14 @@ def main():
     login()
     image = copy_existing(request)
     proof = verify_source(image, revision)
-    bundle, checksum = archive(image, IMAGE + ':' + version)
+    pull_proof = verify_registry_pull(image, IMAGE + ':' + version)
     retired = retire_public_attempt(request)
     receipt = {'phase': 'complete', 'version': version, 'gitTag': tag, 'sourceRevision': revision,
         'image': image, 'tag': IMAGE + ':' + version, 'platform': 'linux/amd64',
         'workflowRunId': int(os.environ['GITHUB_RUN_ID']), 'workflowAttempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
         'buildWorkflowRunId': request['buildWorkflowRunId'], 'recoveryPublisherRevision': os.environ['GITHUB_SHA'],
         'commonRuntimeForAllAgents': True, 'fullSourceBuild': True, 'private': True,
-        'registryFullPullVerified': True, 'sourceProof': proof, 'archive': bundle.name,
-        'archiveSha256': checksum, 'archiveBytes': bundle.stat().st_size,
+        **pull_proof, 'sourceProof': proof,
         'productionTestsPerformed': False, 'agentConfigurationIncluded': False,
         'recoveredWithoutRebuild': True, 'publicAttemptRetirement': retired}
     (output_root() / 'release-proof.json').write_text(json.dumps(receipt, indent=2))

@@ -28,6 +28,14 @@ def marker():
     return get_hermes_home() / 'cache' / 'browser-watchdog.json'
 
 
+def owner_identity(env):
+    # Pod filesystems use the same /root/.hermes path. Include the stable sandbox
+    # binding, but not replaceable Pod/container IDs, so ordinary upgrades retain ownership.
+    target = getattr(env, 'kubernetes_identity', {})
+    stable = {key: target.get(key) for key in ('namespace', 'pod', 'container')}
+    return hashlib.sha256(json.dumps([str(get_hermes_home().resolve()), stable], sort_keys=True).encode()).hexdigest()
+
+
 def install(env):
     from tools.bot_desktop import sandbox_host
     from tools.environments import streams
@@ -40,7 +48,7 @@ def install(env):
     if not chrome:
         raise RuntimeError('Sandbox browser watchdog requires its own Chrome executable')
     state = sandbox_host.desktop_home(env).rstrip('/') + '/.hermes/browser-watchdog'
-    config.update(owner=hashlib.sha256(str(get_hermes_home().resolve()).encode()).hexdigest(),
+    config.update(owner=owner_identity(env),
                   chrome_executable=chrome, chromium_sandbox_enabled=not sandbox_host.chromium_sandbox_bypass(env))
     data = json.dumps({'state': state, 'config': config}).encode()
     result = streams.run_in(env, ['python3', INSTALLER], stdin=data, user=sandbox_host._user_for(env), timeout=20)
