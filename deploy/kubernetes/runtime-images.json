@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.7.6",
+  "defaultRuntimeVersion": "2026.11.7.7",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -1197,6 +1197,82 @@
         "userAcceptancePerformed": false
       },
       "description": "Common browser profile launch admission and idle user-tab cleanup fixes; existing sandbox watchdog/settings preserved."
+    },
+    "2026.11.7.7": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:a1585ea76ea19e9860ba8f1e22a9bd3e82b76e0dac1708f31fb46d0fbec68aa1",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.7.7",
+      "configDigest": "sha256:3f259370f5c6be137b0700cf18e5b9e22590282de1ea310183b9e749bf25072e",
+      "platform": "linux/amd64",
+      "sourceRevision": "f50fb3a2935915d4698757ea3936e08be8d8b596",
+      "runtimePolicy": "common",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:a1585ea76ea19e9860ba8f1e22a9bd3e82b76e0dac1708f31fb46d0fbec68aa1",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.7.7",
+        "digest": "sha256:a1585ea76ea19e9860ba8f1e22a9bd3e82b76e0dac1708f31fb46d0fbec68aa1",
+        "configDigest": "sha256:3f259370f5c6be137b0700cf18e5b9e22590282de1ea310183b9e749bf25072e",
+        "sourceRevision": "f50fb3a2935915d4698757ea3936e08be8d8b596",
+        "publisherRevision": "c89ef4189097ddc29ac2f4d0317e9ca3c476ace3",
+        "workflowRunId": 42385676162,
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "originalBuildRunId": 42385676162,
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "packagePublisherRevision": "c89ef4189097ddc29ac2f4d0317e9ca3c476ace3",
+        "workflowAttempt": 1,
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "common",
+        "fullSourceBuild": true,
+        "sourceProof": {
+          "cleanSourceVerified": true,
+          "sourceRevision": "f50fb3a2935915d4698757ea3936e08be8d8b596",
+          "trackedPythonFiles": 2564,
+          "unexpectedPythonFiles": 0,
+          "verifiedPythonFiles": 2601
+        },
+        "productionTestsPerformed": false,
+        "userAcceptancePerformed": false,
+        "ordinaryRolloutReadiness": true,
+        "registrySourceLabelsVerified": true,
+        "dashboardDisabledForManagedAgents": true,
+        "oneWorkingTabPerExecutorInstruction": true,
+        "closeIdleUserTabs": true,
+        "browserMemoryWatchdogIncluded": true,
+        "watchdogLocation": "sandbox-image",
+        "watchdogThresholdMiB": 2048,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "imagePullPolicy": "IfNotPresent",
+        "noMacImageDownload": true,
+        "noNewBackupCopies": true,
+        "buildRecipe": "Dockerfile + Dockerfile.agentready",
+        "oldPublicRetirementPending": false,
+        "oldPublicPackageRetired": true,
+        "publicPackageRetirement": {
+          "packageId": 16640069,
+          "workflowRunId": 42381326562,
+          "proofSha256": "432827c0bfba23d89e6d463ee68c44d9238d0a59058c6176f0db376ee89a2eb3",
+          "api404": true
+        },
+        "browserProfileLaunchAdmissionFixed": true,
+        "idleUserTabCleanupFixed": true,
+        "loginCompatibleSharedBrowserDefault": true,
+        "commonDockAndAgentLauncher": true,
+        "googleLoginUserAcceptancePerformed": false,
+        "isolatedRealChromiumWebdriverVerified": true
+      },
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:17efac32894a51f43b778e6bf7620f4ee235956bf851c10f9f651144a434f154",
+      "validation": {
+        "canonicalCiSucceeded": true,
+        "privateRegistryFullPullVerified": true,
+        "registrySourceLabelsVerified": true,
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "userAcceptancePerformed": false,
+        "googleLoginUserAcceptancePerformed": false,
+        "isolatedRealChromiumWebdriverVerified": true
+      },
+      "description": "Common native positive-port launch for the agent and human dock; same persistent profile, native ownership admission and explicit-request watchdog recovery. Google login user acceptance pending."
     }
   },
   "supersededRuntimeAttempts": {
