@@ -87,3 +87,21 @@ def test_source_revision_version_repository_and_digest_are_verified_before_copy(
         with patch.object(promote, 'run', return_value=json.dumps(changed).encode()), \
                 pytest.raises(ValueError, match='LABELS_MISMATCH'):
             promote.source_identity(value)
+
+
+def test_private_publisher_binding_is_explicit_and_does_not_replace_fork_source_identity():
+    meta = {'visibility': 'private', 'repository': {'full_name': 'agentready-tech/AgentReady'}}
+    result = subprocess.CompletedProcess([], 0, json.dumps(meta).encode(), b'')
+    with patch.object(promote.subprocess, 'run', return_value=result):
+        assert promote.package_metadata('agentready-tech/AgentReady') == meta
+        with pytest.raises(ValueError, match='PRIVATE_FORK_PACKAGE_REQUIRED'):
+            promote.package_metadata()
+        with pytest.raises(ValueError, match='PRIVATE_FORK_PACKAGE_REQUIRED'):
+            promote.package_metadata('foreign/private-publisher')
+    value = row()
+    labels = {'org.opencontainers.image.revision': value['sourceRevision'],
+              'org.opencontainers.image.version': value['version'],
+              'org.opencontainers.image.source': 'https://github.com/agentready-tech/AgentReady'}
+    with patch.object(promote, 'run', return_value=json.dumps({'Digest': value['digest'], 'Labels': labels}).encode()), \
+            pytest.raises(ValueError, match='LABELS_MISMATCH'):
+        promote.source_identity(value)

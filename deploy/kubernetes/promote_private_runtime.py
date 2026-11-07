@@ -33,14 +33,16 @@ def validate(request):
         raise ValueError('ACTIVE_RELEASE_REQUIRED')
 
 
-def package_metadata():
+def package_metadata(expected_repository=REPOSITORY):
     result = subprocess.run(['gh', 'api', PACKAGE], capture_output=True, check=False, timeout=120)
     if result.returncode:
         if b'HTTP 404' in result.stderr:
             return None
         raise RuntimeError('PACKAGE_METADATA_UNAVAILABLE')
     value = json.loads(result.stdout)
-    if value.get('visibility') != 'private' or (value.get('repository') or {}).get('full_name') != REPOSITORY:
+    if (expected_repository not in (REPOSITORY, 'agentready-tech/AgentReady')
+            or value.get('visibility') != 'private'
+            or (value.get('repository') or {}).get('full_name') != expected_repository):
         raise ValueError('PRIVATE_FORK_PACKAGE_REQUIRED')
     return value
 
@@ -57,10 +59,10 @@ def source_identity(row):
     return source
 
 
-def target_exists(row):
+def target_exists(row, package_repository=REPOSITORY):
     # GHCR may return 403 for an uncreated repository. API404 proves package
     # absence; a registry403 on an existing package remains an uncertain outcome.
-    if package_metadata() is None:
+    if package_metadata(package_repository) is None:
         return False
     target = DESTINATION + ':' + row['version']
     result = subprocess.run(['skopeo', 'inspect', 'docker://' + target], capture_output=True, check=False, timeout=120)
@@ -73,13 +75,13 @@ def target_exists(row):
     raise ValueError('DESTINATION_LOOKUP_UNCERTAIN')
 
 
-def copy_version(row):
+def copy_version(row, package_repository=REPOSITORY):
     source = source_identity(row)
     target = DESTINATION + ':' + row['version']
-    if not target_exists(row):
+    if not target_exists(row, package_repository):
         subprocess.run(['skopeo', 'copy', '--all', '--preserve-digests', 'docker://' + source,
                         'docker://' + target], check=True, timeout=900)
-    if package_metadata() is None:
+    if package_metadata(package_repository) is None:
         raise ValueError('PRIVATE_PACKAGE_REGISTRATION_MISSING')
     observed = json.loads(run(['skopeo', 'inspect', 'docker://' + target]))
     if observed['Digest'] != row['digest']:
