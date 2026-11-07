@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.7.7",
+  "defaultRuntimeVersion": "2026.11.8.1",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -1273,6 +1273,90 @@
         "isolatedRealChromiumWebdriverVerified": true
       },
       "description": "Common native positive-port launch for the agent and human dock; same persistent profile, native ownership admission and explicit-request watchdog recovery. Google login user acceptance pending."
+    },
+    "2026.11.8.1": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:2062d1eaf8e402b3d185af84d8f78edc6ba2583374ff1319bf5ac4b77b175c42",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.8.1",
+      "configDigest": "sha256:7fde83c51309b705648317d87b31bc9be652d3a8a71be7e50dc8ac7dfa3bcb05",
+      "platform": "linux/amd64",
+      "sourceRevision": "de0bf731381d18dd724c7647f84d9eff1a247de2",
+      "runtimePolicy": "common",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:2062d1eaf8e402b3d185af84d8f78edc6ba2583374ff1319bf5ac4b77b175c42",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.8.1",
+        "digest": "sha256:2062d1eaf8e402b3d185af84d8f78edc6ba2583374ff1319bf5ac4b77b175c42",
+        "configDigest": "sha256:7fde83c51309b705648317d87b31bc9be652d3a8a71be7e50dc8ac7dfa3bcb05",
+        "sourceRevision": "de0bf731381d18dd724c7647f84d9eff1a247de2",
+        "publisherRevision": "a1accefcff42b563bf0996c52b4432e59a6475ac",
+        "workflowRunId": 42421455249,
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "originalBuildRunId": 42421455249,
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "packagePublisherRevision": "a1accefcff42b563bf0996c52b4432e59a6475ac",
+        "workflowAttempt": 1,
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "common",
+        "fullSourceBuild": true,
+        "sourceProof": {
+          "cleanSourceVerified": true,
+          "sourceRevision": "de0bf731381d18dd724c7647f84d9eff1a247de2",
+          "trackedPythonFiles": 2564,
+          "unexpectedPythonFiles": 0,
+          "verifiedPythonFiles": 2601
+        },
+        "productionTestsPerformed": false,
+        "userAcceptancePerformed": false,
+        "ordinaryRolloutReadiness": true,
+        "registrySourceLabelsVerified": true,
+        "dashboardDisabledForManagedAgents": true,
+        "oneWorkingTabPerExecutorInstruction": true,
+        "closeIdleUserTabs": true,
+        "browserMemoryWatchdogIncluded": true,
+        "watchdogLocation": "sandbox-image",
+        "watchdogThresholdMiB": 2048,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "imagePullPolicy": "IfNotPresent",
+        "noMacImageDownload": true,
+        "noNewBackupCopies": true,
+        "buildRecipe": "Dockerfile + Dockerfile.agentready",
+        "oldPublicRetirementPending": false,
+        "oldPublicPackageRetired": true,
+        "publicPackageRetirement": {
+          "packageId": 16640069,
+          "workflowRunId": 42381326562,
+          "proofSha256": "432827c0bfba23d89e6d463ee68c44d9238d0a59058c6176f0db376ee89a2eb3",
+          "api404": true
+        },
+        "browserProfileLaunchAdmissionFixed": true,
+        "idleUserTabCleanupFixed": true,
+        "loginCompatibleSharedBrowserDefault": true,
+        "commonDockAndAgentLauncher": true,
+        "googleLoginUserAcceptancePerformed": false,
+        "nativeHumanLeaseAutoReturnInstalled": true,
+        "realHumanDesktopAcceptanceTested": false,
+        "productionFunctionalTests": false,
+        "nativeLeaseRegressionFixturesVerified": true,
+        "activeHumanLeaseSafetyVerified": true,
+        "leaseQualificationProofSha256": "b90294f00da2f2f02488747fc19c74bc3d3c7c6e7e3c1941e7944f80dabf1033"
+      },
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:17efac32894a51f43b778e6bf7620f4ee235956bf851c10f9f651144a434f154",
+      "validation": {
+        "canonicalCiSucceeded": true,
+        "privateRegistryFullPullVerified": true,
+        "registrySourceLabelsVerified": true,
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "userAcceptancePerformed": false,
+        "nativeHumanLeaseAutoReturnInstalled": true,
+        "realHumanDesktopAcceptanceTested": false,
+        "productionFunctionalTests": false,
+        "nativeLeaseRegressionFixturesVerified": true,
+        "activeHumanLeaseSafetyVerified": true
+      },
+      "description": "Native human-lease expiry and automatic return to the existing agent owner. Native lease expiry and active-human safety fixtures qualified; real human Desktop acceptance and production functional behavior are untested."
     }
   },
   "supersededRuntimeAttempts": {
