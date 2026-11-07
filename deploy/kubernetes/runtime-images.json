@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.7.3",
+  "defaultRuntimeVersion": "2026.11.7.5",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -1011,7 +1011,8 @@
         "ordinaryRolloutReadiness": true,
         "productionTestsPerformed": false
       },
-      "description": "One common source release: Panel gateway binding, optional Dashboard and browser tab cleanup."
+      "description": "One common source release: Panel gateway binding, optional Dashboard and browser tab cleanup.",
+      "privateRollbackImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:62764d4517f5033f9c8d0e8cda2c757ebc515548bbc17a4a3db360af8801956f"
     },
     "2026.11.7.3": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes@sha256:c74890a277179a546d3329bd00c86514397b06d38beeb6fad4b438d8c1abe559",
@@ -1061,7 +1062,71 @@
         "productionTestsPerformed": false,
         "userAcceptancePerformed": false
       },
-      "description": "Native Panel-only main bootstrap and durable recovery; one common image pulled directly by Kubernetes."
+      "description": "Native Panel-only main bootstrap and durable recovery; one common image pulled directly by Kubernetes.",
+      "privateRollbackImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:c74890a277179a546d3329bd00c86514397b06d38beeb6fad4b438d8c1abe559"
+    },
+    "2026.11.7.5": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:e26e25ce43f40c6ffa07a5003c4cb621eb1e978783d95a8e925f829fab13b752",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.7.5",
+      "configDigest": "sha256:d5a46052c5a113f97edbd117cc43a7d7862165a06624bb9496823679728162dc",
+      "platform": "linux/amd64",
+      "sourceRevision": "cface4841200aee5aa4103b95de0701239566a68",
+      "runtimePolicy": "common",
+      "publisherRecipe": ".github/workflows/agentsee-release.yml",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:e26e25ce43f40c6ffa07a5003c4cb621eb1e978783d95a8e925f829fab13b752",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.7.5",
+        "digest": "sha256:e26e25ce43f40c6ffa07a5003c4cb621eb1e978783d95a8e925f829fab13b752",
+        "configDigest": "sha256:d5a46052c5a113f97edbd117cc43a7d7862165a06624bb9496823679728162dc",
+        "sourceRevision": "cface4841200aee5aa4103b95de0701239566a68",
+        "publisherRevision": "cface4841200aee5aa4103b95de0701239566a68",
+        "workflowRunId": 42370558671,
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "originalBuildRunId": 42370558671,
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "packagePublisherRevision": "e75b2b591e20fcb40492c5f0b1376a0c1e004f94",
+        "workflowAttempt": 1,
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "common",
+        "fullSourceBuild": true,
+        "sourceProof": {
+          "cleanSourceVerified": true,
+          "sourceRevision": "cface4841200aee5aa4103b95de0701239566a68",
+          "trackedPythonFiles": 2559,
+          "unexpectedPythonFiles": 0,
+          "verifiedPythonFiles": 2596
+        },
+        "privateMirrorWorkflowRunId": 42377547649,
+        "privateMirrorWorkflowAttempt": 1,
+        "sameManifestCopiedWithoutRebuild": true,
+        "productionTestsPerformed": false,
+        "userAcceptancePerformed": false,
+        "ordinaryRolloutReadiness": true,
+        "registrySourceLabelsVerified": true,
+        "dashboardDisabledForManagedAgents": true,
+        "oneWorkingTabPerExecutorInstruction": true,
+        "closeIdleUserTabs": true,
+        "browserMemoryWatchdogIncluded": true,
+        "watchdogLocation": "sandbox-image",
+        "watchdogThresholdMiB": 2048,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "imagePullPolicy": "IfNotPresent",
+        "noMacImageDownload": true,
+        "noNewBackupCopies": true,
+        "buildRecipe": "Dockerfile + Dockerfile.agentready"
+      },
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:17efac32894a51f43b778e6bf7620f4ee235956bf851c10f9f651144a434f154",
+      "validation": {
+        "canonicalCiSucceeded": true,
+        "privateMirrorVerified": true,
+        "registrySourceLabelsVerified": true,
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "userAcceptancePerformed": false
+      },
+      "description": "Sandbox-owned browser memory watchdog, 2 GiB threshold; one private runtime for all agents."
     }
   },
   "supersededRuntimeAttempts": {
