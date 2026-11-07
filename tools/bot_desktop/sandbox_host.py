@@ -211,6 +211,23 @@ def ensure_browser_cdp_port(env: Any, *, exclude_session: Optional[str] = None) 
     return browser_instance.admitted_port(value if isinstance(value, dict) else {})
 
 
+def open_google(env: Any) -> bool:
+    """Use the existing owned sandbox launcher, executable, pressure gate and persistent profile."""
+    from tools.bot_desktop import browser, browser_instance, runtime
+    from tools.bot_desktop.browser_memory_guard import before_tool, executable as guarded_executable
+    exe = chromium_executable(env)
+    if not exe:
+        raise browser_instance.ProfileUnavailable('unknown')
+    before_tool(env)
+    argv = browser.dock_argv(guarded_executable(env, exe), browser_profile_dir(env),
+                            sandbox_bypass=chromium_sandbox_bypass(env))
+    result = streams.run_in(env, ['python3', browser_launch_path(env)],
+        stdin=json.dumps({'argv': argv, 'open_google': True}).encode(),
+        child_env=runtime.published_env(), user=_user_for(env), timeout=30)
+    value = json.loads(result.stdout) if result.returncode == 0 else {}
+    return value.get('opened') is True
+
+
 def chromium_sandbox_bypass(env: Any) -> bool:
     """Desktop Docker supports Chromium's own sandbox; retain other backends' existing policy."""
     return not getattr(env, "chromium_sandbox_enabled", False)

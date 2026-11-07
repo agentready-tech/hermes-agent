@@ -137,7 +137,7 @@ def refresh_dock(config_home, exec_line):
                 Path(temporary).unlink(missing_ok=True)
 
 
-def ensure(argv, *, exclude_session=None, timeout=15):
+def ensure(argv, *, exclude_session=None, timeout=15, open_google=False):
     """Adopt an owned endpoint or launch once. Never unlink/kill a profile owner."""
     profile_value = instance._flag(argv, '--user-data-dir')
     if not profile_value or not os.path.isabs(profile_value):
@@ -148,12 +148,37 @@ def ensure(argv, *, exclude_session=None, timeout=15):
         result = instance.inspect_profile(profile, exclude_session=exclude_session)
         instance.admitted_port(result)  # blocked/unknown stay refusals, including live pipe siblings.
         if result['state'] in ('attachable', 'owned'):
-            return result
+            return _forward_google(argv, profile) if open_google else result
         port = _positive_port()  # executed HERE, in the browser's user/network namespace.
-        command = [*argv, '--remote-debugging-address=127.0.0.1', f'--remote-debugging-port={port}']
+        command = [*argv, '--remote-debugging-address=127.0.0.1', f'--remote-debugging-port={port}',
+                   *(['https://accounts.google.com/'] if open_google else [])]
         process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                    stderr=subprocess.DEVNULL, close_fds=True)
-        return _wait_ready(profile, process, port, timeout)
+        result = _wait_ready(profile, process, port, timeout)
+        return {'opened': True} if open_google else result
+
+
+def _forward_google(argv, profile):
+    """Chrome singleton forwarding inside the existing launch fence; no extra persistent instance."""
+    lock = instance._lock(profile)
+    if lock is None:
+        raise ValueError('Native browser owner is unavailable')
+    owner, _ = _owner(profile, lock['pid'])
+    generation = instance._generation(owner)
+    try:
+        result = subprocess.run([*argv, '--new-tab', 'https://accounts.google.com/'],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, timeout=10, check=False)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError('Native browser address outcome is unknown') from None
+    if result.returncode:
+        raise RuntimeError('Native browser did not accept the address')
+    _owner(profile, lock['pid'], generation)
+    return {'opened': True}
+
+
+def open_google(argv):
+    return ensure(argv, open_google=True)
 
 
 def dock(argv):
@@ -188,7 +213,7 @@ def main():
             result = dock(sys.argv[2:])
         else:
             request = json.load(sys.stdin)
-            result = ensure(request['argv'], exclude_session=request.get('exclude_session'))
+            result = open_google(request['argv']) if request.get('open_google') is True else ensure(request['argv'], exclude_session=request.get('exclude_session'))
         print(json.dumps(result))
     except (OSError, ValueError, RuntimeError, KeyError) as error:
         # No argv, endpoint, profile contents or provider data in a tool-visible error.

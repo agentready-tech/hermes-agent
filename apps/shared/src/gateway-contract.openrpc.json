@@ -835,6 +835,24 @@
       }
     },
     {
+      "name": "display.browser.google_login",
+      "summary": "Explicit human Google sign-in: own live RFB, atomic lease comparison and fixed normal browser address.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/DisplayGoogleLoginParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DisplayGoogleLoginResult"
+        }
+      }
+    },
+    {
       "name": "display.install",
       "summary": "Run the distro package install on the gateway host; progress streams as display.install.log/.done.",
       "params": [
@@ -10438,6 +10456,22 @@
             "title": "Prompts",
             "type": "array"
           },
+          "open_requests": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Open Requests"
+          },
           "info": {
             "$ref": "#/components/schemas/CanonicalSnapshotInfo"
           }
@@ -16449,6 +16483,43 @@
         ],
         "title": "DispatchType",
         "type": "string"
+      },
+      "DisplayGoogleLoginParams": {
+        "additionalProperties": false,
+        "properties": {
+          "viewer_id": {
+            "title": "Viewer Id",
+            "type": "string"
+          },
+          "expected_epoch": {
+            "title": "Expected Epoch",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "viewer_id",
+          "expected_epoch"
+        ],
+        "title": "DisplayGoogleLoginParams",
+        "type": "object"
+      },
+      "DisplayGoogleLoginResult": {
+        "additionalProperties": false,
+        "properties": {
+          "opened": {
+            "title": "Opened",
+            "type": "boolean"
+          },
+          "lease": {
+            "$ref": "#/components/schemas/DisplayLease"
+          }
+        },
+        "required": [
+          "opened",
+          "lease"
+        ],
+        "title": "DisplayGoogleLoginResult",
+        "type": "object"
       },
       "DisplayImageSwitch": {
         "additionalProperties": false,

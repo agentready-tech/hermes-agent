@@ -70,14 +70,20 @@ def enroll(home, origin, environment_id, token):
     return {"environment_id": environment_id, "panel": origin}
 
 
-def screen_request(raw):
+def screen_request(raw, *, can_control=False, can_configure=False):
     """Keep the machine connection screen-only even if a client bypasses Panel's UI."""
     message = json.loads(raw)
-    if not isinstance(message, dict) or message.get("method") not in READ_METHODS | CONTROL_METHODS:
+    if not isinstance(message, dict) or message.get("method") not in READ_METHODS | CONTROL_METHODS | {"display.browser.google_login"}:
         raise ValueError("Only Bot Screen methods are permitted")
     params = message.get("params") or {}
     if not isinstance(params, dict):
         raise ValueError("Screen RPC params must be an object")
+    if message["method"] == "display.browser.google_login":
+        if (not can_control or not can_configure or set(params) != {"viewer_id", "expected_epoch"}
+                or not isinstance(params["viewer_id"], str) or not 1 <= len(params["viewer_id"]) <= 128
+                or type(params["expected_epoch"]) is not int or params["expected_epoch"] < 0):
+            raise ValueError("Google browser sign-in requires own control and configuration permission")
+        return json.dumps(message)
     allowed = {}
     if message["method"] in {"display.observe", "display.lease.acquire", "display.lease.release"}:
         viewer = params.get("viewer_id")
@@ -87,7 +93,7 @@ def screen_request(raw):
     return json.dumps(message)
 
 
-async def bridge(command, config, port, credential, auth, subscriptions=None):
+async def bridge(command, config, port, credential, auth, subscriptions=None, google_auth=None):
     from urllib.parse import urlencode
     from websockets.asyncio.client import connect
     from websockets.exceptions import ConnectionClosed, WebSocketException
@@ -95,6 +101,13 @@ async def bridge(command, config, port, credential, auth, subscriptions=None):
     kind, identity = command.get("kind"), command.get("id")
     if kind not in {"rpc", "rfb", "chat", "subscriptions"} or not isinstance(identity, str) or len(identity) > 100:
         raise ValueError("Invalid Panel channel")
+    if command.get("googleLogin") is True:
+        if (kind not in {"rpc", "rfb"} or command.get("canControl") is not True
+                or command.get("canConfigure") is not True or google_auth is None
+                or not getattr(google_auth, "gateway_owned", False)):
+            raise ValueError("Own Google browser authority is unavailable")
+        await asyncio.to_thread(google_auth.endpoint)
+        auth = google_auth
     if kind == "subscriptions":
         if subscriptions is None:
             raise ValueError("Subscriptions unavailable")
@@ -134,7 +147,8 @@ async def bridge(command, config, port, credential, auth, subscriptions=None):
                     if kind == "rpc" and inbound:
                         if not isinstance(frame, str) or len(frame) > 16384:
                             raise ValueError("Invalid screen RPC frame")
-                        frame = screen_request(frame)
+                        frame = screen_request(frame, can_control=command.get("canControl") is True,
+                                               can_configure=command.get("canConfigure") is True and command.get("googleLogin") is True)
                     if kind == "chat" and inbound and isinstance(frame, str):
                         # A Telegram binding can appear after a browser-only viewer attached.
                         # Reconnect onto its owner before accepting another legacy write.
@@ -177,7 +191,7 @@ async def bridge(command, config, port, credential, auth, subscriptions=None):
             await remote.close(code=1012)
 
 
-async def connection(config, port, credential, auth, subscriptions=None):
+async def connection(config, port, credential, auth, subscriptions=None, google_auth=None):
     from websockets.asyncio.client import connect
     from websockets.exceptions import WebSocketException
     tasks = set()
@@ -185,10 +199,18 @@ async def connection(config, port, credential, auth, subscriptions=None):
     async with connect(url, additional_headers={"Authorization": f"Bearer {credential}"},
                        max_size=4096, open_timeout=15, close_timeout=5, proxy=None) as control:
         logger.info("Computer connected to Panel")
-        await control.send(json.dumps({"type": "hello", "capabilities": ["screen", "chat", *(["subscriptions"] if subscriptions else [])]}))
+        google_ready = False
+        if google_auth is not None:
+            try:
+                await asyncio.to_thread(google_auth.endpoint)
+                google_ready = True
+            except (OSError, ValueError):
+                pass  # No intent capability until the existing own gateway is ready.
+        await control.send(json.dumps({"type": "hello", "capabilities": ["screen", "chat", *(["subscriptions"] if subscriptions else []),
+            *(["google-browser-login-v1"] if google_ready else [])]}))
         async def open_channel(command):
             try:
-                await bridge(command, config, port, credential, auth, subscriptions)
+                await bridge(command, config, port, credential, auth, subscriptions, google_auth)
             except (OSError, ValueError, WebSocketException, TimeoutError):
                 # Native tickets and credentials may occur in exception URLs; never log them.
                 logger.warning("Panel screen channel ended; reconnect from the Panel if needed")
@@ -234,10 +256,12 @@ async def _worker(home):
         auth = GatewayPanelAuth(home)
     from hermes_runtime.standalone.panel_subscriptions import Subscriptions
     subscriptions = Subscriptions(home, auth)
+    from hermes_runtime.standalone.panel_gateway_auth import GatewayPanelAuth
+    google_auth = GatewayPanelAuth(home)
     delay = 1
     while True:
         try:
-            await connection(panel, config["port"], credential, auth, subscriptions)
+            await connection(panel, config["port"], credential, auth, subscriptions, google_auth)
             delay = 1
         except (OSError, ValueError):
             logger.warning("Panel unavailable; the agent and its desktop continue locally")

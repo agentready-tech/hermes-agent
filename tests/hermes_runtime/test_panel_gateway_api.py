@@ -5,6 +5,14 @@ import json
 import pytest
 
 
+async def _rpc_reply(socket, request_id):
+    async with asyncio.timeout(20):
+        while True:
+            reply = json.loads(await socket.recv())
+            if reply.get('id') == request_id:
+                return reply
+
+
 @pytest.mark.asyncio
 async def test_gateway_api_serves_panel_auth_screen_and_subscription_metadata(tmp_path, monkeypatch):
     from contextlib import asynccontextmanager
@@ -31,10 +39,20 @@ async def test_gateway_api_serves_panel_auth_screen_and_subscription_metadata(tm
         pytest.fail('standalone dashboard lifespan was started')
         yield
 
+    from tools.bot_desktop import browser, lease
+    seen = []
+    monkeypatch.setattr(browser, 'open_google', lambda: seen.append(str(get_hermes_home())) or True)
     async def screen_fixture(ws, info):
         assert info['hermes_home'] == str(home)
-        await ws.send_bytes(b'RFB fixture')
-        await ws.close()
+        from hermes_constants import hermes_home_key
+        key = (hermes_home_key(home), info['viewer_id'])
+        display._viewer_streams[key] = display._ViewerStreams(active=1)
+        try:
+            await ws.send_bytes(b'RFB fixture')
+            await ws.receive()
+        finally:
+            display._viewer_streams.pop(key, None)
+            lease.release(info['viewer_id'], profile_key=str(home))
 
     monkeypatch.setattr('hermes_cli.web_server_app.standalone_lifespan', forbidden_dashboard)
     monkeypatch.setattr(oauth, '_build_oauth_catalog', list)
@@ -58,15 +76,21 @@ async def test_gateway_api_serves_panel_auth_screen_and_subscription_metadata(tm
         assert options['subprotocols'][0] == 'hermes-gateway-v1'
         async with connect(target, proxy=None, **options) as ws:
             await ws.send(json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'display.observe', 'params': {}}))
-            async with asyncio.timeout(20):
-                while True:
-                    result = json.loads(await ws.recv())
-                    if result.get('id') == 1:
-                        break
+            result = await _rpc_reply(ws, 1)
             assert 'error' not in result
             screen_url = await asyncio.to_thread(auth.display_url, result['result']['ticket'])
             async with connect(screen_url, proxy=None) as screen:
                 assert await screen.recv() == b'RFB fixture'
+                foreign = tmp_path / 'foreign-ambient'; foreign.mkdir()
+                with monkeypatch.context() as ambient:
+                    ambient.setenv('HERMES_HOME', str(foreign))
+                    await ws.send(json.dumps({'jsonrpc':'2.0','id':2,'method':'display.browser.google_login',
+                        'params':{'viewer_id':result['result']['viewer_id'],'expected_epoch':result['result']['lease']['epoch']}}))
+                    opened = await _rpc_reply(ws, 2)
+                assert 'error' not in opened, opened
+                assert opened['result']['opened'] and opened['result']['lease']['holder'] == 'human'
+                assert seen == [str(home)]
+                assert not (foreign / 'bot-desktop').exists()
         assert web_server.app.state.gateway_runner is runner
     finally:
         await runner.stop()

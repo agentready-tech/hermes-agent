@@ -241,10 +241,15 @@ def _transition(profile_key: Optional[str], mutate: Callable[[Lease], bool]) -> 
     return lease
 
 
-def acquire(viewer_id: str, *, profile_key: Optional[str] = None, reason: str = "") -> Lease:
+def acquire(viewer_id: str, *, profile_key: Optional[str] = None, reason: str = "",
+            expected_epoch: Optional[int] = None, unless_human: bool = False) -> Lease:
     """Human ``viewer_id`` takes control. Last writer wins: a second viewer evicts the first, and the
     RFB bridge closes the evicted socket so its UI drops to view-only."""
     def _m(lease: Lease) -> bool:
+        if expected_epoch is not None and lease.epoch != expected_epoch:
+            raise HumanHasControl("Screen control changed; observe it again before continuing")
+        if unless_human and lease.holder == HUMAN and lease.viewer_id != viewer_id:
+            raise HumanHasControl("Another person controls this screen")
         if (lease.holder == HUMAN and lease.viewer_id == viewer_id
                 and (deadline := _deadline(lease)) is not None and time.time() < deadline):
             return False  # already theirs: no epoch bump, `since` and the reason on screen stay put

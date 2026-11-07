@@ -261,5 +261,22 @@ def _(rid, params: dict) -> dict:
     return _ok(rid, {"lease": _bd_lease.public_view(lease)})
 
 
+@method("display.browser.google_login")
+@_profile_scoped
+def _(rid, params: dict) -> dict:
+    from tools.bot_desktop.browser_login import BrowserLoginError, open_google
+    viewer_id = params.get("viewer_id")
+    if not isinstance(viewer_id, str) or (refused := _foreign_viewer_id(rid, viewer_id)) is not None:
+        return refused if isinstance(viewer_id, str) else _err(rid, _DISPLAY_ERR, "viewer_id required")
+    try:
+        return _ok(rid, open_google(viewer_id, params.get("expected_epoch")))
+    except BrowserLoginError as error:
+        return _err(rid, _DISPLAY_ERR, "Не удалось открыть Google. Проверьте экран и управление; повторный вход не запущен.",
+                    data={"code": str(error)})
+    except (OSError, ValueError, RuntimeError):
+        return _err(rid, _DISPLAY_ERR, "Не удалось открыть Google. Проверьте экран и управление; повторный вход не запущен.",
+                    data={"code": "browser_login_unavailable"})
+
+
 def register(server) -> None:
     bind_module(globals(), server, skip=("_",))

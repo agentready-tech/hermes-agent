@@ -53,6 +53,13 @@ class _ViewerStreams:
 _viewer_streams: dict[tuple[str, str], _ViewerStreams] = {}
 
 
+def connected_viewer_generation(viewer_id: str) -> Optional[int]:
+    """Own-profile live RFB generation, never a reconnecting or already closed stream."""
+    from hermes_constants import hermes_home_key
+    streams = _viewer_streams.get((hermes_home_key(), viewer_id))
+    return streams.active if streams else None
+
+
 def _expire_disconnected_viewer(profile_home: str, viewer_id: str, epoch: int) -> None:
     """One bounded cleanup on the existing server loop, not a new sweeper or service."""
     from tools.bot_desktop import lease as _lease

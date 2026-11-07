@@ -61,7 +61,8 @@ def test_panel_worker_binds_its_home_before_choosing_chat_transport(monkeypatch,
     monkeypatch.setattr(agent.secret_scope, "get_secret", lambda name: "fixture-credential")
     monkeypatch.setattr(state, "main_gateway_origin", lambda: {"session_key": "agent:main:agentready:home"})
 
-    async def connected(settings, port, credential, auth, subscriptions):
+    async def connected(settings, port, credential, auth, subscriptions, google_auth):
+        assert google_auth.home == tmp_path.resolve() and google_auth.gateway_owned
         from hermes_runtime.standalone.panel_chat import gateway_chat_available
         assert hermes.enabled(), "Panel's own worker must activate the managed home"
         assert hermes.managed_home() == tmp_path.resolve()

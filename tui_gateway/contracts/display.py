@@ -9,6 +9,8 @@ in-flight result was produced under a lease that has since changed.
 
 from __future__ import annotations
 
+from pydantic import StrictInt
+
 from .base import Params, Payload, Result, WireEnum
 from .common import ProfileParams
 from .registry import event, method, server_request
@@ -203,3 +205,17 @@ class DisplayInstallDonePayload(Payload):
 
 event("display.install.done", DisplayInstallDonePayload,
       doc="The install ended (0 ok, -1 cancelled, -2 no sudo: the command to run by hand was streamed).")
+
+
+class DisplayGoogleLoginParams(Params):
+    viewer_id: str
+    expected_epoch: StrictInt
+
+
+class DisplayGoogleLoginResult(Result):
+    opened: bool
+    lease: DisplayLease
+
+
+method("display.browser.google_login", params=DisplayGoogleLoginParams, result=DisplayGoogleLoginResult,
+       doc="Explicit human Google sign-in: own live RFB, atomic lease comparison and fixed normal browser address.")

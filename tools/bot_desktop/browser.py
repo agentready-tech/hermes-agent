@@ -183,3 +183,30 @@ def env_for_agent(env: dict) -> dict:
         if not pinned or _is_headless_shell(pinned):
             env["AGENT_BROWSER_EXECUTABLE_PATH"] = exe
     return env
+
+
+def open_google() -> bool:
+    """Human settings action; never use agent-browser or a different terminal/profile fallback."""
+    from tools.bot_desktop import placement
+    where = placement.resolve()
+    if where.where == placement.TERMINAL:
+        from tools.bot_desktop import sandbox_host
+        env = runtime._owned_sandbox_env()
+        if env is None:
+            raise RuntimeError('The own desktop environment is unavailable')
+        return sandbox_host.open_google(env)
+    if where.where != placement.GATEWAY:
+        raise RuntimeError('The own desktop environment is unavailable')
+    import json
+    import subprocess
+    import sys
+    from tools.environments.local import served_profile_child_env
+    exe = executable()
+    if not exe:
+        raise RuntimeError('The own native browser is unavailable')
+    child = env_for_agent(served_profile_child_env(inherit_credentials=False))
+    child.update(runtime.published_env())
+    result = subprocess.run([sys.executable, str(Path(__file__).with_name('browser_launch.py'))],
+        input=json.dumps({'argv': dock_argv(exe, str(profile_dir())), 'open_google': True}).encode(),
+        env=child, capture_output=True, timeout=30, check=False)
+    return result.returncode == 0 and json.loads(result.stdout).get('opened') is True
