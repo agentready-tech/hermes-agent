@@ -1,0 +1,27 @@
+name: Retire only failed unused private destination
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: agentsee-private-runtime
+  cancel-in-progress: false
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Retire exact unused destination; preserve all original releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 deploy/kubernetes/retire_private_destination.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: failed-private-destination-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/failed-private-destination/cleanup-proof.json
+          if-no-files-found: error
+          retention-days: 30
