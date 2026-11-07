@@ -1,4 +1,4 @@
-"""Publication records existing visibility honestly and always checks our package."""
+"""Publication requires the private fork-owned canonical package."""
 import json
 import os
 from pathlib import Path
@@ -14,7 +14,11 @@ class PublicationTests(unittest.TestCase):
     def test_visibility_never_substitutes_for_repository_ownership(self):
         for visibility in ("public", "private", "internal"):
             value = {"visibility": visibility, "repository": {"full_name": "agentready-tech/hermes-agent"}}
-            self.assertEqual(publish.registration(value)["packageVisibility"], visibility)
+            if visibility == "private":
+                self.assertEqual(publish.registration(value)["packageVisibility"], visibility)
+            else:
+                with self.assertRaises(ValueError):
+                    publish.registration(value)
             for repository in (None, {"full_name": "another/hermes-agent"}):
                 with self.assertRaises(ValueError):
                     publish.registration({**value, "repository": repository})
@@ -22,8 +26,8 @@ class PublicationTests(unittest.TestCase):
             publish.registration({"repository": {"full_name": "agentready-tech/hermes-agent"}})
 
     def test_published_manifest_uses_the_same_package_before_and_after_push(self):
-        package = {"visibility": "public", "repository": {"full_name": "agentready-tech/hermes-agent"}}
-        path = "orgs/agentready-tech/packages/container/agentsee-hermes"
+        package = {"visibility": "private", "repository": {"full_name": "agentready-tech/hermes-agent"}}
+        path = "orgs/agentready-tech/packages/container/agentsee-hermes-runtime"
         digest = "sha256:" + "a" * 64
         calls = []
 
@@ -49,7 +53,7 @@ class PublicationTests(unittest.TestCase):
                 patch.object(publish.subprocess, "run", side_effect=lookup):
             image, facts = publish.publish(publish.IMAGE + ":2026.11.7.1")
         self.assertEqual(image, publish.IMAGE + "@" + digest)
-        self.assertEqual(facts["packageVisibility"], "public")
+        self.assertEqual(facts["packageVisibility"], "private")
         self.assertIn(["gh", "api", path], calls)
 
 

@@ -1,0 +1,53 @@
+{
+  "source": "ghcr.io/agentready-tech/agentsee-hermes",
+  "destination": "ghcr.io/agentready-tech/agentsee-hermes-runtime",
+  "versions": [
+    {
+      "id": 1520055394,
+      "digest": "sha256:e26e25ce43f40c6ffa07a5003c4cb621eb1e978783d95a8e925f829fab13b752",
+      "tags": [
+        "2026.11.7.5"
+      ],
+      "version": "2026.11.7.5",
+      "sourceRevision": "cface4841200aee5aa4103b95de0701239566a68"
+    },
+    {
+      "id": 1519827798,
+      "digest": "sha256:c74890a277179a546d3329bd00c86514397b06d38beeb6fad4b438d8c1abe559",
+      "tags": [
+        "2026.11.7.3"
+      ],
+      "version": "2026.11.7.3",
+      "sourceRevision": "ce32cc0c4b7b20c2daadfbc5907d0d6aca4aaa4c"
+    },
+    {
+      "id": 1518198311,
+      "digest": "sha256:62764d4517f5033f9c8d0e8cda2c757ebc515548bbc17a4a3db360af8801956f",
+      "tags": [
+        "2026.11.7.2"
+      ],
+      "version": "2026.11.7.2",
+      "sourceRevision": "a8e7a2f1dc6aaa6eee8dac2967f5f3eb671e8f87"
+    },
+    {
+      "id": 1518120737,
+      "digest": "sha256:f22d436098ea0d8723d0b26c521c33cc0286a206571755c0630631a0e78b749d",
+      "tags": [
+        "2026.11.7.1"
+      ],
+      "version": "2026.11.7.1",
+      "sourceRevision": "063c678b3df15446df70dacdb8e63b3661b71eb4"
+    },
+    {
+      "id": 1516253479,
+      "digest": "sha256:f00e8a3dd2d8964747494b344be7a1cba390c43896d4e1824129d8924993cf30",
+      "tags": [
+        "2026.11.6.1"
+      ],
+      "version": "2026.11.6.1",
+      "sourceRevision": "ad6a6a220af08c6da0b511f69b4a15a26489ec3d"
+    }
+  ],
+  "activeVersion": "2026.11.7.5",
+  "originalBuildRunId": 42370558671
+}

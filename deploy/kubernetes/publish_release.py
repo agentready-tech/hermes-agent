@@ -15,7 +15,7 @@ else:
     from release_source import export
 
 ROOT = Path(__file__).resolve().parents[2]
-IMAGE = "ghcr.io/agentready-tech/agentsee-hermes"
+IMAGE = "ghcr.io/agentready-tech/agentsee-hermes-runtime"
 PACKAGE = "orgs/agentready-tech/packages/container/" + IMAGE.rsplit("/", 1)[1]
 
 
@@ -88,8 +88,8 @@ def build(source: Path, revision: str, version: str) -> tuple[str, dict]:
 
 def registration(package: dict) -> dict:
     if ((package.get("repository") or {}).get("full_name") != "agentready-tech/hermes-agent"
-            or package.get("visibility") not in {"private", "public", "internal"}):
-        raise ValueError("Release package must be linked to the fork with known visibility")
+            or package.get("visibility") != "private"):
+        raise ValueError("Release package must be private and linked to the fork")
     return {"packageVisibility": package["visibility"], "sourceRepository": "agentready-tech/hermes-agent"}
 
 
