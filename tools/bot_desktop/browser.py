@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import socket
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -136,55 +135,9 @@ def dock_exec_line(exe: str, user_data_dir: str, *, sandbox_bypass: Optional[boo
 
 
 def running_instance_cdp_port(user_data_dir: str, *, exclude_session: Optional[str] = None) -> Optional[int]:
-    """DevTools port of a Chromium currently running on ``user_data_dir``, or ``None``.
-
-    Both files outlive a crashed or closed Chromium: ``SingletonLock`` is a symlink to ``host-pid`` and
-    ``DevToolsActivePort`` keeps the last port, so the pid must be alive AND the port must accept a
-    connection before it is trusted. An instance agent-browser launched for ``exclude_session`` itself is
-    reported as ``None``: its daemon already owns that browser, and handing it ``--cdp`` would make it
-    close the browser as a config change and then attach to the port that just died with it.
-    """
-    try:
-        with open(os.path.join(user_data_dir, "DevToolsActivePort"), encoding="utf-8-sig") as fh:
-            port_line = fh.readline().strip()
-        target = os.readlink(os.path.join(user_data_dir, "SingletonLock"))
-    except OSError:
-        return None
-    _host, _, pid_text = target.rpartition("-")
-    if not (port_line.isdigit() and pid_text.isdigit()) or not _pid_alive(int(pid_text)):
-        return None
-    if exclude_session and _launched_by_session(int(pid_text)) == exclude_session:
-        return None
-    port = int(port_line)
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
-            pass
-    except OSError:
-        return None
-    return port
-
-
-def _launched_by_session(chromium_pid: int) -> Optional[str]:
-    """``AGENT_BROWSER_SESSION`` of the agent-browser daemon that spawned ``chromium_pid``, or ``None``
-    for a human-started (dock) instance. Chromium itself gets a scrubbed environment, so the daemon's
-    ``/proc/<ppid>/environ`` is the marker (Linux-only, same user)."""
-    try:
-        with open(f"/proc/{chromium_pid}/status", encoding="utf-8") as fh:
-            ppid = next((int(line.split()[1]) for line in fh if line.startswith("PPid:")), 0)
-        with open(f"/proc/{ppid}/environ", "rb") as fh:
-            raw = fh.read()
-    except (OSError, ValueError):
-        return None
-    for item in raw.split(b"\0"):
-        key, sep, value = item.partition(b"=")
-        if sep and key == b"AGENT_BROWSER_SESSION":
-            return value.decode("utf-8", "replace") or None
-    return None
-
-
-def _pid_alive(pid: int) -> bool:
-    import psutil
-    return psutil.pid_exists(pid)
+    """Attach to a verified existing owner; never silently relaunch an occupied profile."""
+    from tools.bot_desktop.browser_instance import admitted_port, inspect_profile
+    return admitted_port(inspect_profile(user_data_dir, exclude_session=exclude_session))
 
 
 def env_for_agent(env: dict) -> dict:

@@ -5,13 +5,13 @@ and when a human opened that browser first, the agent attaches to it instead of 
 from __future__ import annotations
 
 import os
-import socket
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from tools.bot_desktop import browser, runtime
+pytest_plugins = ('tests.tools.browser_instance_fixture',)
 
 
 def test_dock_and_agent_share_browser_identity(tmp_path, monkeypatch):
@@ -66,30 +66,18 @@ def test_dock_browser_caps_its_disk_cache():
     assert 0 < int(cap.split("=", 1)[1]) <= 512 * 1024 * 1024
 
 
-def _fake_running_instance(user_data_dir, pid: int, port: int) -> None:
-    (user_data_dir / "DevToolsActivePort").write_text(f"{port}\n/devtools/browser/abc\n", encoding="utf-8")
-    os.symlink(f"host-{pid}", user_data_dir / "SingletonLock")
-
-
-def test_running_instance_port_requires_live_pid_and_open_port(tmp_path):
-    listener = socket.socket()
-    listener.bind(("127.0.0.1", 0))
-    listener.listen(1)
-    port = listener.getsockname()[1]
-    try:
-        _fake_running_instance(tmp_path, os.getpid(), port)
-        assert browser.running_instance_cdp_port(str(tmp_path)) == port
-
-        # Both files outlive a closed Chromium: a dead pid must not be trusted.
-        os.unlink(tmp_path / "SingletonLock")
-        os.symlink("host-2147483000", tmp_path / "SingletonLock")
-        assert browser.running_instance_cdp_port(str(tmp_path)) is None
-    finally:
-        listener.close()
-    # Live pid, port no longer accepting: still not attachable.
-    os.unlink(tmp_path / "SingletonLock")
-    os.symlink(f"host-{os.getpid()}", tmp_path / "SingletonLock")
-    assert browser.running_instance_cdp_port(str(tmp_path)) is None
+@pytest.mark.platforms('posix')
+def test_running_instance_port_requires_live_pid_and_open_port(tmp_path, native_chrome):
+    from tools.bot_desktop.browser_instance import ProfileUnavailable
+    profile = tmp_path / 'profile'
+    with native_chrome(profile):
+        port = int((profile / 'DevToolsActivePort').read_text().splitlines()[0])
+        assert browser.running_instance_cdp_port(str(profile)) == port
+        # A live owner with missing attach metadata is unavailable, never absent.
+        (profile / 'DevToolsActivePort').unlink()
+        with pytest.raises(ProfileUnavailable):
+            browser.running_instance_cdp_port(str(profile))
+    assert browser.running_instance_cdp_port(str(profile)) is None
     assert browser.running_instance_cdp_port(str(tmp_path / "missing")) is None
 
 

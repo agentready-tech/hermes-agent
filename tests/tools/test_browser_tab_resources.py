@@ -142,6 +142,55 @@ def test_idle_user_cleanup_waits_for_other_profile_owned_browser_work(monkeypatc
     assert runtime._close_idle_user_tabs(home, 'task')
 
 
+def test_completed_stale_driver_does_not_block_later_idle_user_tab_cleanup(monkeypatch, tmp_path, browser):
+    """A failed old-generation cleanup is not a still-running child turn."""
+    import subprocess
+    from hermes_cli import config
+    import agent.tool_operation_lifecycle as lifecycle
+    import tools.browser_tool_session as session
+    import tools.browser_use_cli as cli
+    b, helpers = browser
+    monkeypatch.setattr(runtime, 'get_hermes_home', lambda: tmp_path)
+    monkeypatch.setattr(runtime, '_contexts', {})
+    monkeypatch.setattr(config, 'read_raw_config', lambda: {'browser': {'close_idle_user_tabs': True}})
+    monkeypatch.setattr(lifecycle, 'preserve_resources', lambda *args: False)
+    monkeypatch.setattr(session, 'run_fenced', lambda _info, function: function())
+    old = {'BU_CDP_URL': 'fixture-old-generation'}
+    code = runtime.prepare_native_tabs('pass', 'finished-parent', ['harness'], old)
+    exec(code, {'cdp': helpers.cdp})
+
+    def cleanup(cmd, code, env, timeout):
+        if env['BU_CDP_URL'] == 'fixture-old-generation':
+            return subprocess.CompletedProcess(cmd, 1, '', '')
+        exec(code, {'cdp': helpers.cdp})
+        return subprocess.CompletedProcess(cmd, 0, '', '')
+    monkeypatch.setattr(cli, '_run_cli_killing_process_group', cleanup)
+    runtime.finish_native_tabs(object(), 'finished-parent', completed=True, interrupted=False, failed=False)
+    assert runtime._contexts[(str(tmp_path), 'finished-parent')], 'retain unconfirmed old cleanup for retry'
+    # Chrome restarted; the old endpoint and its page targets no longer exist.
+    b.tabs = {'human': {'targetId': 'human', 'type': 'page'}}
+    b.current = 'human'
+    current = {'BU_CDP_URL': 'fixture-current-generation'}
+    code = runtime.prepare_native_tabs('pass', 'new-task', ['harness'], current)
+    exec(code, {'cdp': helpers.cdp})
+    runtime.finish_native_tabs(object(), 'new-task', completed=True, interrupted=False, failed=False)
+    assert b.tabs == {}, 'the completed stale parent must not suppress current idle-user policy forever'
+
+
+def test_resumed_completed_owner_blocks_user_cleanup_until_its_new_work_finishes(monkeypatch, tmp_path):
+    from hermes_cli import config
+    from hermes_runtime.adapters import hermes
+    monkeypatch.setattr(config, 'read_raw_config', lambda: {'browser': {'close_idle_user_tabs': True}})
+    monkeypatch.setattr(hermes, 'enabled', lambda: False)
+    monkeypatch.setattr(runtime, 'get_hermes_home', lambda: tmp_path)
+    key = str(tmp_path), 'parent'
+    monkeypatch.setattr(runtime, '_contexts', {key: {'old-generation': ()}})
+    monkeypatch.setattr(runtime, '_completed_tasks', {key})
+    assert runtime._close_idle_user_tabs(str(tmp_path), 'child')
+    runtime.prepare_native_tabs('pass', 'parent', ['harness'], {'BU_CDP_URL': 'fixture-current'})
+    assert not runtime._close_idle_user_tabs(str(tmp_path), 'child')
+
+
 def test_human_takeover_even_if_handed_back_blocks_old_tab_cleanup(tmp_path, browser):
     b, _ = browser
     with managed_tabs({}, str(tmp_path), "browser", "task"):

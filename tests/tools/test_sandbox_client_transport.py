@@ -2,11 +2,11 @@
 
 import json
 import os
-import socket
 import subprocess
 import sys
 
 import pytest
+pytest_plugins = ('tests.tools.browser_instance_fixture',)
 
 
 @pytest.mark.parametrize("consumer", ["browser", "computer_use"])
@@ -77,14 +77,12 @@ def test_sandbox_tool_subprocess_reaches_selected_transport(monkeypatch, tmp_pat
 
 
 @pytest.mark.platforms("posix")
-def test_browser_attaches_using_the_sandbox_profile_and_loopback(monkeypatch, tmp_path):
+def test_browser_attaches_using_the_sandbox_profile_and_loopback(monkeypatch, tmp_path, native_chrome):
     from tools import browser_tool_session
     from tools.bot_desktop import browser, runtime, sandbox_host
     from tools.environments import streams
 
     profile = tmp_path / "sandbox-profile"
-    profile.mkdir()
-    (profile / "SingletonLock").symlink_to(f"sandbox-{os.getpid()}")
     monkeypatch.setattr(browser_tool_session, "_browser_in_sandbox", lambda: True)
     monkeypatch.setattr(runtime, "_sandbox_env", lambda **_: object())
     monkeypatch.setattr(runtime, "published_env", lambda: {"DISPLAY": ":20"})
@@ -95,12 +93,8 @@ def test_browser_attaches_using_the_sandbox_profile_and_loopback(monkeypatch, tm
         [sys.executable, *argv[1:]], capture_output=True, timeout=5, check=False
     ))
 
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        listener.listen()
-        port = listener.getsockname()[1]
-        (profile / "DevToolsActivePort").write_text(f"{port}\n/devtools/browser/test\n")
+    with native_chrome(profile):
+        port = int((profile / "DevToolsActivePort").read_text().splitlines()[0])
         session = {"session_name": "another-browser-client", "features": {"local": True}}
         assert browser_tool_session._bot_desktop_attach_port(session) == port
 
-    assert browser_tool_session._bot_desktop_attach_port(session) is None

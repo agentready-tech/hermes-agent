@@ -143,38 +143,17 @@ def desktop_config_dir(env: Any, profile: str) -> str:
     return f"{desktop_home(env).rstrip('/')}/.hermes/bot-desktop/config/{profile}"
 
 
-_BROWSER_PORT_PROBE = """
-import os, socket, sys
-from pathlib import Path
-try:
-    profile = Path(sys.argv[1])
-    pid = int(os.readlink(profile / "SingletonLock").rpartition("-")[2])
-    if pid < 1:
-        raise ValueError("invalid browser pid")
-    os.kill(pid, 0)
-    if sys.argv[2]:
-        try:
-            status = Path(f"/proc/{pid}/status").read_text()
-            parent = next(line.split()[1] for line in status.splitlines() if line.startswith("PPid:"))
-            environment = Path(f"/proc/{parent}/environ").read_bytes().split(bytes([0]))
-            if ("AGENT_BROWSER_SESSION=" + sys.argv[2]).encode() in environment:
-                raise SystemExit(0)
-        except (OSError, StopIteration):
-            pass
-    port = int((profile / "DevToolsActivePort").read_text().splitlines()[0])
-    with socket.create_connection(("127.0.0.1", port), timeout=0.5):
-        print(port)
-except (OSError, ValueError, IndexError, OverflowError):
-    pass
-"""
-
-
 def browser_instance_cdp_port(env: Any, *, exclude_session: Optional[str] = None) -> Optional[int]:
-    """Discover the shared browser where its profile, PID namespace and loopback actually live."""
-    proc = streams.run_in(env, ["python3", "-c", _BROWSER_PORT_PROBE, browser_profile_dir(env),
+    """Run the same admission probe where the profile and process namespace actually live."""
+    from tools.bot_desktop import browser_instance
+    program = Path(browser_instance.__file__).read_text(encoding='utf-8-sig')
+    proc = streams.run_in(env, ["python3", "-c", program, browser_profile_dir(env),
                                 exclude_session or ""], user=_user_for(env), timeout=15)
-    value = proc.stdout.decode("utf-8", "replace").strip()
-    return int(value) if proc.returncode == 0 and value.isdigit() else None
+    try:
+        result = json.loads(proc.stdout) if proc.returncode == 0 else {}
+    except (ValueError, TypeError):
+        result = {}
+    return browser_instance.admitted_port(result if isinstance(result, dict) else {})
 
 
 def chromium_sandbox_bypass(env: Any) -> bool:

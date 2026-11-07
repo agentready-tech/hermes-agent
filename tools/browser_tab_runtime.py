@@ -9,6 +9,7 @@ from hermes_constants import get_hermes_home
 from tools.browser_tab_harness import wrap_code
 
 _contexts: dict[tuple[str, str], dict[str, tuple]] = {}
+_completed_tasks: set[tuple[str, str]] = set()
 _lock = threading.RLock()
 
 
@@ -19,6 +20,7 @@ def _close_idle_user_tabs(home, task):
         return False
     with _lock:
         if any(other_home == home and other_task != task and contexts
+               and (other_home, other_task) not in _completed_tasks
                for (other_home, other_task), contexts in _contexts.items()):
             return False
     from hermes_runtime.adapters.hermes import enabled, managed_home
@@ -42,6 +44,7 @@ def prepare_native_tabs(code: str, task: str, cmd: list, env: dict) -> str:
     env["BU_NAME"] = name
     from tools.bot_desktop import lease
     with _lock:
+        _completed_tasks.discard((home, task))
         contexts = _contexts.setdefault((home, task), {})
         previous = contexts.get(name)
         # A later call after human takeover must not re-own the driver's startup tab.
@@ -62,6 +65,10 @@ def finish_native_tabs(agent, task: str, *, completed: bool, interrupted: bool, 
     key = home, task
     with _lock:
         contexts = dict(_contexts.get(key, {}))
+        if contexts:
+            # Keep failed old-endpoint cleanup retryable without treating its
+            # already completed owner as a live child forever.
+            _completed_tasks.add(key)
     if not contexts:
         return
     close_user_tabs = _close_idle_user_tabs(home, task)
@@ -76,3 +83,4 @@ def finish_native_tabs(agent, task: str, *, completed: bool, interrupted: bool, 
     with _lock:
         if not _contexts.get(key):
             _contexts.pop(key, None)
+            _completed_tasks.discard(key)

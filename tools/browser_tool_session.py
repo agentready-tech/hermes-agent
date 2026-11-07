@@ -868,26 +868,12 @@ def _bot_desktop_attach_port(session_info: dict[str, Any]) -> Optional[int]:
                                                  exclude_session=session_info["session_name"])
 
 
-def _dispatch_browser_command(
-    task_id: str, session_info: dict[str, Any], browser_cmd: str, command: str, args: list[str],
-    timeout: int, _engine_override: Optional[str],
-) -> tuple[str, dict[str, Any]]:
-    """Build the agent-browser argv for ``session_info`` and run it once → ``(engine, result)``."""
-    # Cleanup stops the supervisor before closing the backend; keep it stopped.
-    if command != "close" and session_info.get("cdp_url"):
-        _cdp._ensure_cdp_supervisor(task_id)
-
-    # Every backend runs in this task's own daemon (``--session <name>``); Cloud/CDP adds
-    # ``--cdp <ws_url>`` to attach it to the remote browser. Without --session every CDP task
-    # shared agent-browser's default daemon, so one task's snapshot refs or close hit the others.
-    # Engine injection keys off the resolved session backend, not global provider
-    # state: hybrid routing can create a local sidecar while a cloud provider stays configured.
-    engine = _engine_override or _cloud._get_browser_engine()
+def _browser_backend_args(session_info: dict[str, Any], engine: str, *, attach=True) -> list[str]:
     backend_args = ["--session", session_info["session_name"]]
     if session_info.get("cdp_url"):
         backend_args += ["--cdp", session_info["cdp_url"]]
     else:
-        if (bd_port := _bot_desktop_attach_port(session_info)) is not None:
+        if attach and (bd_port := _bot_desktop_attach_port(session_info)) is not None:
             # A Chromium already runs on the Bot Desktop's shared profile (the human clicked the dock's
             # Browser first): a launch would be forwarded into it by Chromium's singleton and die without
             # a DevTools endpoint, so the session's daemon attaches to the port it advertises instead.
@@ -897,6 +883,44 @@ def _dispatch_browser_command(
             backend_args.append("--headed")
         if engine != "auto" and not _bt._is_camofox_mode():
             backend_args += ["--engine", engine]
+    return backend_args
+
+
+def _shared_browser_handshake(task_id, session_info, browser_cmd, command, args, engine, timeout):
+    """Serialize only admission and daemon handshake, never a page action or wait."""
+    from tools.bot_desktop import runtime
+    shared = (not session_info.get('cdp_url') and engine != 'lightpanda' and command != 'close'
+              and _shares_bot_desktop_browser(session_info))
+    if not shared:
+        return _browser_backend_args(session_info, engine, attach=command != 'close' and engine != 'lightpanda'), None
+    directory = runtime.state_dir()
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with runtime._flocked(directory / 'browser-launch.lock') as lock:
+        os.chmod(lock.name, 0o600)
+        backend_args = _browser_backend_args(session_info, engine)
+        parts = _agent_browser_argv(browser_cmd) + backend_args + ['--json', 'get', 'cdp-url']
+        limit = min(timeout, _bt._get_open_command_timeout(first_open=True))
+        result = _spawn_and_collect(task_id, session_info, parts, 'get', engine, limit)
+    return backend_args, _unwrap_batch_result(result, 'get')
+
+
+def _dispatch_browser_command(
+    task_id: str, session_info: dict[str, Any], browser_cmd: str, command: str, args: list[str],
+    timeout: int, _engine_override: Optional[str],
+) -> tuple[str, dict[str, Any]]:
+    """Admit a local shared browser before dispatching the task's daemon command."""
+    from tools.bot_desktop.browser_instance import ProfileUnavailable
+    if command != "close" and session_info.get("cdp_url"):
+        _cdp._ensure_cdp_supervisor(task_id)
+    engine = _engine_override or _cloud._get_browser_engine()
+    try:
+        backend_args, handshake = _shared_browser_handshake(
+            task_id, session_info, browser_cmd, command, args, engine, timeout)
+    except ProfileUnavailable as error:
+        return engine, {'success': False, 'code': 'browser_profile_unavailable',
+                        'profileState': error.state, 'error': str(error)}
+    if handshake is not None and (not handshake.get('success') or (command == 'get' and args == ['cdp-url'])):
+        return engine, handshake
 
     argv = _agent_browser_argv(browser_cmd)
     spawn_command, spawn_args, stdin_payload = _shim_safe_args(argv[0], command, args)
