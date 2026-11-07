@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.7.5",
+  "defaultRuntimeVersion": "2026.11.7.6",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -1127,6 +1127,76 @@
         "userAcceptancePerformed": false
       },
       "description": "Sandbox-owned browser memory watchdog, 2 GiB threshold; one private runtime for all agents."
+    },
+    "2026.11.7.6": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:87aa93589e0ced4c37dfd88cb51a9c1dd9b672501619fd91b1f78e4c23a47dd5",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.7.6",
+      "configDigest": "sha256:9f76d301113124cfe4acc516b215847266e46538bf4e69c8e2884d605c5b388f",
+      "platform": "linux/amd64",
+      "sourceRevision": "7d0f4bb8448b4422bba6ad7bb589b68a5e037e26",
+      "runtimePolicy": "common",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:87aa93589e0ced4c37dfd88cb51a9c1dd9b672501619fd91b1f78e4c23a47dd5",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.7.6",
+        "digest": "sha256:87aa93589e0ced4c37dfd88cb51a9c1dd9b672501619fd91b1f78e4c23a47dd5",
+        "configDigest": "sha256:9f76d301113124cfe4acc516b215847266e46538bf4e69c8e2884d605c5b388f",
+        "sourceRevision": "7d0f4bb8448b4422bba6ad7bb589b68a5e037e26",
+        "publisherRevision": "cc31bb28aa6e7f6b5b3b313fce4e5405107c0a1f",
+        "workflowRunId": 42378952251,
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "originalBuildRunId": 42378952251,
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "packagePublisherRevision": "cc31bb28aa6e7f6b5b3b313fce4e5405107c0a1f",
+        "workflowAttempt": 1,
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "common",
+        "fullSourceBuild": true,
+        "sourceProof": {
+          "cleanSourceVerified": true,
+          "sourceRevision": "7d0f4bb8448b4422bba6ad7bb589b68a5e037e26",
+          "trackedPythonFiles": 2562,
+          "unexpectedPythonFiles": 0,
+          "verifiedPythonFiles": 2599
+        },
+        "productionTestsPerformed": false,
+        "userAcceptancePerformed": false,
+        "ordinaryRolloutReadiness": true,
+        "registrySourceLabelsVerified": true,
+        "dashboardDisabledForManagedAgents": true,
+        "oneWorkingTabPerExecutorInstruction": true,
+        "closeIdleUserTabs": true,
+        "browserMemoryWatchdogIncluded": true,
+        "watchdogLocation": "sandbox-image",
+        "watchdogThresholdMiB": 2048,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "imagePullPolicy": "IfNotPresent",
+        "noMacImageDownload": true,
+        "noNewBackupCopies": true,
+        "buildRecipe": "Dockerfile + Dockerfile.agentready",
+        "oldPublicRetirementPending": false,
+        "oldPublicPackageRetired": true,
+        "publicPackageRetirement": {
+          "packageId": 16640069,
+          "workflowRunId": 42381326562,
+          "proofSha256": "432827c0bfba23d89e6d463ee68c44d9238d0a59058c6176f0db376ee89a2eb3",
+          "api404": true
+        },
+        "browserProfileLaunchAdmissionFixed": true,
+        "idleUserTabCleanupFixed": true
+      },
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:17efac32894a51f43b778e6bf7620f4ee235956bf851c10f9f651144a434f154",
+      "validation": {
+        "canonicalCiSucceeded": true,
+        "privateRegistryFullPullVerified": true,
+        "registrySourceLabelsVerified": true,
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "userAcceptancePerformed": false
+      },
+      "description": "Common browser profile launch admission and idle user-tab cleanup fixes; existing sandbox watchdog/settings preserved."
     }
   },
   "supersededRuntimeAttempts": {
