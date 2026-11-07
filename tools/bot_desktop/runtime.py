@@ -365,6 +365,13 @@ def ensure_started_for_tool() -> None:
     default off) starts a Linux host's screen when it has NO display and the packages installed, so a headless
     gateway works the first time. Host failure is not an error here (the tool's own "no display" diagnosis is
     the right message then); a sandbox start failure is logged and left for :func:`tool_placement` to raise."""
+    from tools.bot_desktop.browser_memory_guard import configuration as browser_guard_config, before_tool
+    if browser_guard_config()['enabled']:
+        from tools.environments.network_transport import sandbox_environment
+        guard_environment = sandbox_environment()
+        if guard_environment is None:
+            raise RuntimeError('Browser watchdog requires the configured sandbox')
+        before_tool(guard_environment)
     if published_env().get("DISPLAY"):
         touch_activity()
         return
@@ -791,6 +798,8 @@ def _start_in_sandbox(wait_seconds: float) -> DesktopStatus:
         # uses there: the human's browser is the bot's browser, as on the host.
         from tools.bot_desktop.browser import dock_exec_line
         exe = sandbox_host.chromium_executable(env)
+        from tools.bot_desktop.browser_memory_guard import executable as guarded_executable
+        exe = guarded_executable(env, exe) if exe else None
         browser = (exe, dock_exec_line(exe, sandbox_host.browser_profile_dir(env),
                                      sandbox_bypass=sandbox_host.chromium_sandbox_bypass(env))) if exe else (None, None)
         published = sandbox_host.start(env, _profile_name(), geometry=geometry(), wait_seconds=max(wait_seconds, 20.0),

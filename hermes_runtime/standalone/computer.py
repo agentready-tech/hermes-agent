@@ -58,6 +58,6 @@ def start_desktop():
 
 def run(home):
     """Start the native sandbox screen at boot and leave its lifecycle to Hermes."""
-    import threading
     start_desktop()
-    threading.Event().wait()
+    from hermes_runtime.standalone.sandbox_events import worker
+    return worker(home)

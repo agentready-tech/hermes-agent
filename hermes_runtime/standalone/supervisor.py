@@ -181,6 +181,10 @@ def run(home, *, host=None, port=None):
         specs["backend"] = [*native, frontend, "--host", host, "--port", str(port), "--isolated", "--no-open", "--skip-build"]
     if config.get("gmail", {}).get("enabled"):
         specs["gmail"] = _argv(home, sys.executable, "gmail-worker")
+    from tools.bot_desktop.browser_memory_guard import configuration as browser_guard_config, marker
+    if ((browser_guard_config(home)['enabled'] or marker().exists()) and not config.get('panel', {}).get('url')
+            and not config.get('computer', {}).get('enabled')):
+        specs['sandbox-events'] = _argv(home, sys.executable, 'sandbox-events-worker')
     if (config.get("workspace", {}).get("url") or config.get("workspace", {}).get("native") is True
             or config.get("workspace", {}).get("environment_id")):
         specs["workspace"] = _argv(home, sys.executable, "workspace-worker")

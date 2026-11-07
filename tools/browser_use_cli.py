@@ -725,6 +725,9 @@ def _route_exec(env: dict, session: str, task_id: Optional[str], local: bool, lo
     """``_route_backend`` for one browser_exec call; returns ``(error, runs on the local sidecar)``.
     A real-profile fallback is remembered per route: the route keeps its fresh browser and the note
     waits until a result carries it (``_take_real_profile_note``)."""
+    from tools.bot_desktop.browser_memory_guard import tool_preflight_error
+    if error := tool_preflight_error():
+        return error, local_sidecar
     route_err = _route_backend(env, session, task_id, local, force_local_sidecar=local_sidecar,
                                real_profile=route_key not in _real_profile_fallback)
     note = env.pop(_REAL_PROFILE_FALLBACK_SENTINEL, None)

@@ -53,8 +53,8 @@ class PublicationTests(unittest.TestCase):
         self.assertIn(["gh", "api", path], calls)
 
 
-class OCIReferenceTests(unittest.TestCase):
-    def test_export_roundtrip_preserves_canonical_import_name_and_digest(self):
+class RegistryPullTests(unittest.TestCase):
+    def test_registry_roundtrip_verifies_all_blobs_without_an_image_archive(self):
         import hashlib
         candidate = publish.IMAGE + ':2026.11.7.3'
         digest = 'sha256:' + 'a' * 64
@@ -71,7 +71,9 @@ class OCIReferenceTests(unittest.TestCase):
                     'annotations': {'org.opencontainers.image.ref.name': candidate}}]}))
             with patch.object(publish, 'output_root', return_value=root), patch.object(publish, 'phase'), \
                     patch.object(publish, 'run', side_effect=pull):
-                bundle, checksum = publish.archive(image, candidate)
-            self.assertEqual(hashlib.sha256(bundle.read_bytes()).hexdigest(), checksum)
+                proof = publish.verify_registry_pull(image, candidate)
+            self.assertTrue(proof['registryFullPullVerified'])
+            self.assertFalse(proof['imageArchivePublished'])
+            self.assertFalse(list(root.glob('*.tar')))
         with self.assertRaises(ValueError):
-            publish.archive(image, 'release')
+            publish.verify_registry_pull(image, 'release')

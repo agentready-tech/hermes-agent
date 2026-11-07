@@ -29,6 +29,7 @@ def parser():
     schedule.add_argument("prompt", nargs="?", help="Prompt text; stdin if omitted")
     commands.add_parser("gmail-worker", help=argparse.SUPPRESS)
     commands.add_parser("workspace-worker", help=argparse.SUPPRESS)
+    commands.add_parser("sandbox-events-worker", help=argparse.SUPPRESS)
     service = commands.add_parser("install-service", help="Install a Linux systemd user service")
     service.add_argument("--enable", action="store_true", help="Enable and start the installed service")
     service.add_argument("--rdp", action="store_true", default=None, help="Install xrdp/xorgxrdp and start one persistent Xfce RDP desktop at boot (Ubuntu/Debian)")
@@ -136,6 +137,9 @@ def execute(args, home):
         return worker(home)
     if args.command == "workspace-worker":
         from hermes_runtime.standalone.workspace import worker
+        return worker(home)
+    if args.command == "sandbox-events-worker":
+        from hermes_runtime.standalone.sandbox_events import worker
         return worker(home)
     activate_home(home)
     if args.command == "event":

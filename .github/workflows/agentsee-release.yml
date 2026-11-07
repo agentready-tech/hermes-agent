@@ -36,12 +36,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 deploy/kubernetes/publish_release.py
-      - name: Save exact published image and release receipt
+      - name: Save small release and source receipts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: hermes-release-${{ github.ref_name }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/agentsee-hermes-release/hermes-release.oci.tar
             ${{ runner.temp }}/agentsee-hermes-release/release-proof.json
             ${{ runner.temp }}/agentsee-hermes-release/source-proof.json
             ${{ runner.temp }}/agentsee-hermes-release/source/agentsee-source-manifest.json

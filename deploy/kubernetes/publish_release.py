@@ -7,7 +7,6 @@ import json
 import os
 import re
 import subprocess
-import tarfile
 from pathlib import Path
 
 if __package__:
@@ -123,9 +122,9 @@ def publish(candidate: str) -> tuple[str, dict]:
     return IMAGE + "@" + digest, registration(package)
 
 
-def archive(image: str, candidate: str) -> tuple[Path, str]:
+def verify_registry_pull(image: str, candidate: str) -> dict:
     if not candidate.startswith(IMAGE + ':') or image.split('@', 1)[0] != IMAGE:
-        raise ValueError('OCI archive must retain the canonical versioned registry reference')
+        raise ValueError('Registry verification requires the canonical versioned registry reference')
     phase("verifying_registry_pull")
     layout = output_root() / "oci"
     run(["skopeo", "copy", "--all", "--preserve-digests", "--dest-oci-accept-uncompressed-layers",
@@ -138,14 +137,8 @@ def archive(image: str, candidate: str) -> tuple[Path, str]:
         with blob.open("rb") as stream:
             if hashlib.file_digest(stream, "sha256").hexdigest() != blob.name:
                 raise ValueError("Registry blob checksum mismatch")
-    phase("archiving_published_release")
-    target = output_root() / "hermes-release.oci.tar"
-    with tarfile.open(target, "w") as output:
-        for path in sorted(layout.iterdir()):
-            output.add(path, arcname=path.name)
-    with target.open("rb") as stream:
-        digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    return target, digest
+    return {'registryFullPullVerified': True, 'delivery': 'kubernetes-native-ghcr-pull',
+            'imageArchivePublished': False}
 
 
 def main() -> None:
@@ -157,14 +150,13 @@ def main() -> None:
     source = prepare(revision, version)
     candidate, proof = build(source, revision, version)
     image, package = publish(candidate)
-    bundle, checksum = archive(image, candidate)
+    pull_proof = verify_registry_pull(image, candidate)
     receipt = {"phase": "complete", "version": version, "gitTag": "agentsee-v" + version,
                "sourceRevision": revision, "image": image, "tag": candidate, "platform": "linux/amd64",
                "workflowRunId": int(os.environ["GITHUB_RUN_ID"]), "workflowAttempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
                "commonRuntimeForAllAgents": True, "fullSourceBuild": True,
                "private": package["packageVisibility"] == "private", **package,
-               "registryFullPullVerified": True, "sourceProof": proof, "archive": bundle.name,
-               "archiveSha256": checksum, "archiveBytes": bundle.stat().st_size,
+               **pull_proof, "sourceProof": proof,
                "productionTestsPerformed": False, "agentConfigurationIncluded": False}
     (output_root() / "release-proof.json").write_text(json.dumps(receipt, indent=2))
     phase("complete", image=image, version=version)

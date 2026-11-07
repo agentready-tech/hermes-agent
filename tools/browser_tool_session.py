@@ -703,6 +703,10 @@ def _sandbox_wrap(cmd_parts: list[str], browser_env: dict[str, str], task_socket
     if not sandbox_host.chromium_sandbox_bypass(env):
         from tools.bot_desktop.chromium_sandbox import sandboxed_executable
         remote_env["AGENT_BROWSER_EXECUTABLE_PATH"] = sandboxed_executable(env)
+    from tools.bot_desktop.browser_memory_guard import executable as guarded_executable
+    guarded = guarded_executable(env, remote_env.get('AGENT_BROWSER_EXECUTABLE_PATH'))
+    if guarded:
+        remote_env['AGENT_BROWSER_EXECUTABLE_PATH'] = guarded
     # cmd_parts = <agent-browser argv0 (+npx spec)> + backend args + command; keep everything after argv0.
     tail = cmd_parts[len(_agent_browser_argv(cmd_parts[0])):]
     wrapped = streams.remote_command(env, [_SANDBOX_AGENT_BROWSER, *tail], child_env=remote_env,

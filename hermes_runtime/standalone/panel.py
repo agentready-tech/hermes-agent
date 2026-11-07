@@ -208,7 +208,7 @@ async def connection(config, port, credential, auth, subscriptions=None):
             await asyncio.gather(*tasks, return_exceptions=True)
 
 
-async def worker(home):
+async def _worker(home):
     from hermes_runtime.adapters.hermes import activate
     activate(home)
     from websockets.exceptions import WebSocketException
@@ -245,6 +245,17 @@ async def worker(home):
             logger.warning("Panel connection ended; reconnecting without restarting the agent")
         await asyncio.sleep(delay)
         delay = min(delay * 2, 30)
+
+
+async def worker(home):
+    from hermes_runtime.standalone.sandbox_events import watch
+    task = asyncio.create_task(watch(home))
+    try:
+        await _worker(home)
+    finally:
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 def run(home):
