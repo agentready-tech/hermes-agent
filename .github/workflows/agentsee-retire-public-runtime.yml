@@ -1,0 +1,42 @@
+name: Retire only former public AgentSee runtime package
+on:
+  workflow_dispatch:
+    inputs:
+      retirement_source_revision:
+        description: Exact reviewed canonical fork commit
+        required: true
+        type: string
+      private_guard_sha256:
+        description: Root-verified fresh private package and version metadata receipt SHA256
+        required: true
+        type: string
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: agentsee-retire-public-runtime
+  cancel-in-progress: false
+jobs:
+  retire:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Test exact package and pinned private-evidence guards
+        run: python3 -m unittest discover -s tests/deploy/kubernetes -p test_public_runtime_retirement.py -q
+      - name: Retire exact former public package; never access private package with this token
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RETIREMENT_SOURCE_REVISION: ${{ inputs.retirement_source_revision }}
+          PRIVATE_GUARD_SHA256: ${{ inputs.private_guard_sha256 }}
+        run: python3 deploy/kubernetes/retire_public_runtime.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: public-runtime-retirement-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agentsee-public-runtime-retirement/retirement-proof.json
+          if-no-files-found: warn
+          retention-days: 30

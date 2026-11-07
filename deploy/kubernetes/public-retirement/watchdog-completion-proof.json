@@ -1,0 +1,58 @@
+{
+  "phase": "complete",
+  "releaseId": "ccc144e970f3a0c736fb621496b65907b38de9fac160d3004cb65827ea7c46fb",
+  "runtimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:e26e25ce43f40c6ffa07a5003c4cb621eb1e978783d95a8e925f829fab13b752",
+  "runtimeSourceRevision": "cface4841200aee5aa4103b95de0701239566a68",
+  "sourceRepository": "agentready-tech/hermes-agent",
+  "packagePublisherRepository": "agentready-tech/AgentReady",
+  "runtimeBuildRunId": 42370558671,
+  "privateMirrorRunId": 42377547649,
+  "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:17efac32894a51f43b778e6bf7620f4ee235956bf851c10f9f651144a434f154",
+  "sandboxSourceRevision": "0fb1f5de3ed78f60b0bc229ddf1ef18f538e9ca1",
+  "sandboxBuildRunId": 42371099261,
+  "targets": [
+    "agentsee-a-0dbfa61addbb40a88d636e18e7172117",
+    "agentsee-a-87f2912883de429cb87db22e08345d01",
+    "agentsee-a-e29bea46f65648fbb5bfb1c413d2854d",
+    "agentsee-mike"
+  ],
+  "futureDefaultsVerified": true,
+  "guardInsideEverySandbox": true,
+  "watchdogThresholdMiB": 2048,
+  "hardLimits": {
+    "sandbox": "5Gi",
+    "hermes": "2Gi"
+  },
+  "ordinaryRolloutReadiness": true,
+  "productionFunctionalTestsPerformed": false,
+  "productionPressureTestsPerformed": false,
+  "realChromeGuiVerified": false,
+  "userAcceptancePerformed": false,
+  "metadata": {
+    "agentready": {
+      "commit": "effb8d2054e33f800b69703574365421ecfd56dd",
+      "branch": "main",
+      "files": {
+        "deploy/kubernetes/registry-images.json": "7972466f7da5478b662fd5e1ecb1fb2de610bcb41fb9db8e93623fc2d904c86e",
+        "deploy/kubernetes/provisioner.example.json": "8bbafeba3452af79d86d2135cafac37a84a20c9ed8c171a8a0e47341f54da40b"
+      },
+      "pushed": true
+    },
+    "hermes": {
+      "commit": "dabc3ed3914a7ca33a03c3a3c24b30d6fe7b840c",
+      "branch": "codex/agentready-runtime",
+      "files": {
+        "deploy/kubernetes/runtime-images.json": "92e88614bbdfbfc65379db8adac80d672029f656733764eefb41ee0f87b8dc3e"
+      },
+      "pushed": true
+    }
+  },
+  "rollbackVersionsPrivate": 5,
+  "allActivePackagesPrivate": true,
+  "oldPublicRetirementPending": true,
+  "runtimeCompletionProofSha256": "dd9121367af47246c6855bdf4ac3fc63eb02292f7ebcbdeedf7f72e1360ccc89",
+  "privateCopyProofSha256": "6ec213d32442bd0890e75adb94bca84c63c44d1b02e0a6ea0b36855ae99affed",
+  "publicPackageDeletionPerformedByFinalizer": false,
+  "noMacImageDownload": true,
+  "noNewBackupCopies": true
+}

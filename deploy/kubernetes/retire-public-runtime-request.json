@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "publicPackage": {
+    "id": 16640069,
+    "name": "agentsee-hermes",
+    "owner": "agentready-tech",
+    "visibility": "public",
+    "repository": "agentready-tech/hermes-agent"
+  },
+  "privatePackage": {
+    "id": 16663531,
+    "name": "agentsee-hermes-runtime",
+    "owner": "agentready-tech",
+    "visibility": "private",
+    "packagePublisherRepository": "agentready-tech/AgentReady"
+  },
+  "sourceVersionsRequest": "deploy/kubernetes/runtime-private-request.json",
+  "sourceVersionsRequestSha256": "e047a3ed1e60b5c22f4c2a912dc24b48ee216495cf0ffa8d9504ad159efb3f56",
+  "proofs": {
+    "privateCopies": {
+      "path": "deploy/kubernetes/public-retirement/private-copy-proof.json",
+      "sha256": "6ec213d32442bd0890e75adb94bca84c63c44d1b02e0a6ea0b36855ae99affed"
+    },
+    "completedRollout": {
+      "path": "deploy/kubernetes/public-retirement/watchdog-completion-proof.json",
+      "sha256": "d5e0e7d8be0e3d52ccd4235256fb90efe1afe38d862661a96a7f239981545747"
+    }
+  },
+  "allowedPrivateExtraVersions": [
+    {
+      "version": "2026.11.7.6",
+      "sourceRevision": "7d0f4bb8448b4422bba6ad7bb589b68a5e037e26",
+      "digest": "sha256:87aa93589e0ced4c37dfd88cb51a9c1dd9b672501619fd91b1f78e4c23a47dd5"
+    }
+  ],
+  "productionMutation": false,
+  "deleteOnlyFormerPublicPackage": true
+}
