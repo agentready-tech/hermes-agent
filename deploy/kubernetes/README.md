@@ -128,27 +128,38 @@ immutable image digest, source commit, base image and build recipe for each
 recorded release. It describes the default for new agents; changing the default
 does not roll existing Pods. Existing agents require a separate scoped upgrade.
 
-The default release is published to private GHCR packages. Its immutable
-`image` and version `tag` identify the verified Linux/amd64 manifest;
-`preloadedSourceImage` and `distribution.sourceIndexDigest` preserve provenance
-from the original worker import. The published manifest can differ from that
-multi-platform index without changing config or layer bytes. Full registry pulls
-were verified before the release was used. Registry access remains private.
-Workers still preload and pin images with `imagePullPolicy: Never`; publication
-alone does not configure pull credentials on new nodes or update existing Pods.
+Current releases use the PRIVATE AgentReady workflow
+`.github/workflows/agentsee-hermes-release.yml`. Pass the pushed immutable
+`agentsee-vYYYY.M.D.N` tag and its exact Hermes fork SHA. It verifies the remote
+tag and canonical branch ancestry, then runs the fork's existing native
+Dockerfile, `Dockerfile.agentready` and complete source-inventory verification.
+The source remains `agentready-tech/hermes-agent` on `codex/agentready-runtime`;
+Hermes `main` is the upstream baseline. The old fork automatic tag publisher is
+removed, so the central workflow is the only image builder.
+
+The common image is `ghcr.io/agentready-tech/agentsee-hermes-runtime:VERSION`.
+The private AgentReady repository owns publication authority; OCI source labels
+and receipt `sourceRevision` identify the exact fork source. Keep the publisher
+SHA separate. Verify the existing package's ID/name/owner/private visibility,
+immutable tag absence, source labels and a complete registry pull. The workflow
+token can omit the package's administrative repository association; that nullable
+field is not image provenance. Publication requires only small JSON artifacts.
+
+Kubernetes pulls the immutable digest directly from GHCR with its scoped pull
+Secret and `IfNotPresent`. The centralized rollout preserves agent-owned data.
+Do not download images to a workstation, preload containerd, use application
+overlays, or create per-release backup copies. Published versions and Kubernetes
+ControllerRevisions retain rollback provenance; rolling back after retirement
+of a public package requires its preserved private digest reference.
 
 `distribution.mode: preloaded` in older records means the image was imported into
 the worker's containerd store without registry publication. A `docker.io/` name
 alone does not imply availability. Git stores metadata and recipes; image layers
 live in the registry or recorded local image stores.
 
-The recorded patch `recipe` is the historical build using the cached base.
-Export each `sourceFiles` entry from its exact `sourceRevision` to the stated
-build-context path and check the cached base against `base.dockerImageId` before
-using that recipe. `base.registryImage` records the equivalent published
-Linux/amd64 base for a future digest-pinned registry build. Do not substitute
-uncommitted worktree files or an unchecked mutable tag. Publication promoted
-existing bytes; no new build was performed.
+Recorded `preloadedSourceImage`, `distribution.sourceIndexDigest` and patch
+`recipe` fields describe historical imports and builds. Preserve those records,
+but do not use their cached application bases or source overlays for new releases.
 
 Build the fork normally, then optionally add the pinned API client:
 

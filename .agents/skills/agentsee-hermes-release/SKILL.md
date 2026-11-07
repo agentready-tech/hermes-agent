@@ -15,7 +15,9 @@ Commit and push completed release code, keep it on the fork's canonical `codex/a
 
 ## Canonical build
 
-Use .github/workflows/agentsee-release.yml in the fork. It exports a clean Git archive and builds the native Dockerfile from pinned OS stages. Dockerfile.agentready extends ONLY the source image built from that same commit in that job, adding explicitly pinned dependencies.
+The application and publisher code stay in the Hermes fork. Run `.github/workflows/agentsee-hermes-release.yml` in the PRIVATE `agentready-tech/AgentReady` repository, passing the pushed immutable fork tag and its exact full source SHA. The workflow checks out that SHA from `agentready-tech/hermes-agent`, verifies the local and remote tag plus ancestry in `codex/agentready-runtime`, and invokes the fork's existing `deploy/kubernetes/publish_release.py`. Never pass a branch name or the AgentReady publisher SHA as the runtime source. The fork's former automatic tag publisher is removed so one tag cannot start a duplicate build.
+
+The publisher exports a clean Git archive and builds the native Dockerfile from pinned OS stages. Dockerfile.agentready extends ONLY the source image built from that same source commit in that job, adding explicitly pinned dependencies. Private-package access and immutable-tag absence are checked before the heavy build and again before push.
 
 Never use an existing official or previous AgentSee Hermes application image as a source base, copy selected patches onto it, or import a locally built image into production. Copying Git source over an installed application retains upstream-only and deleted modules. Dependency caches are acceptable; inherited application code is not.
 
@@ -23,7 +25,9 @@ Reject dirty or untracked source inputs. Verify the complete first-party Python 
 
 ## Publication and rollout
 
-Publish ONE private image to ghcr.io/agentready-tech/agentsee-hermes-runtime:VERSION. Verify private visibility and the fork repository binding before and after publication. Kubernetes authenticates through its scoped imagePullSecret. Record the registry manifest digest, source revision, CI run and source receipt. Retain the previous image for rollback. Never overwrite a version tag or build employee-specific images.
+Publish ONE private image to ghcr.io/agentready-tech/agentsee-hermes-runtime:VERSION. The package is owned by the PRIVATE AgentReady publisher, while OCI source labels and `sourceRevision` identify the Hermes fork. Keep `publisherRepository`/`publisherSourceRevision` separate from `sourceRepository`/`sourceRevision` in receipts. Check the exact existing package ID/name/owner, private visibility and private CI authority. GitHub may hide the package's administrative repository association from its workflow token; record that field as unavailable without blocking a valid image. An exposed conflicting association requires inspection. Never replace source-label, digest or actual full-pull verification with repository-association metadata.
+
+Kubernetes authenticates through its scoped imagePullSecret. Record the registry manifest digest, source revision, CI run and source receipt. Retain the previous image for rollback. Never overwrite a version tag or build employee-specific images. Registry-copy recovery can publish the verified active image receipt immediately after its actual full private pull; historical copies must finish before retiring the old public package, and do not block that already verified active image's rollout.
 
 The former public `agentsee-hermes` package is retired only after exact manifests have been copied to the private canonical package and all authorized agents/future defaults use private references. Preserve every historical release digest for rollback; copying an existing release must not rebuild it or change its source revision. Public package retirement is a separate reviewed final step, never part of the copy workflow.
 
