@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -39,6 +40,8 @@ logger = logging.getLogger(__name__)
 
 AGENT = "agent"
 HUMAN = "human"
+RECONNECT_GRACE_S = 30.0
+RENEW_INTERVAL_S = 10.0
 
 
 class HumanHasControl(RuntimeError):
@@ -52,6 +55,7 @@ class Lease:
     since: float = field(default_factory=time.time)
     reason: str = ""
     epoch: int = 0
+    expires_at: Optional[float] = None
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -63,6 +67,7 @@ def public_view(lease: Lease) -> dict[str, object]:
     so it is replaced by a short hash the holder can match against its own id to know it is in control."""
     import hashlib
     d = lease.as_dict()
+    d.pop("expires_at", None)  # Persistence/liveness detail; keep the established public RPC shape.
     d["viewer_id"] = None
     d["viewer_hash"] = hashlib.sha256(lease.viewer_id.encode()).hexdigest()[:12] if lease.viewer_id else None
     return d
@@ -143,8 +148,57 @@ class _locked:
         self._fh.close()
 
 
+def _deadline(lease: Lease) -> Optional[float]:
+    """Legacy valid records use their original acquisition time; corrupt state stays closed."""
+    if (lease.holder != HUMAN or not isinstance(lease.viewer_id, str)
+            or not lease.viewer_id or lease.viewer_id == "unreadable-lease"
+            or type(lease.epoch) is not int or lease.epoch < 0
+            or type(lease.since) not in (int, float) or not math.isfinite(lease.since)):
+        return None
+    value = lease.expires_at
+    if value is None:
+        value = lease.since + RECONNECT_GRACE_S
+    return float(value) if type(value) in (int, float) and math.isfinite(value) else None
+
+
+def expire(profile_key: Optional[str] = None, *, viewer_id: Optional[str] = None,
+           expected_epoch: Optional[int] = None) -> Lease:
+    """Expire only a stale valid human grant, optionally fenced to one disconnected viewer."""
+    def _m(lease: Lease) -> bool:
+        if ((viewer_id is not None and lease.viewer_id != viewer_id)
+                or (expected_epoch is not None and lease.epoch != expected_epoch)):
+            return False
+        deadline = _deadline(lease)
+        if deadline is None or time.time() < deadline:
+            return False
+        lease.holder, lease.viewer_id, lease.since, lease.reason = AGENT, None, time.time(), ""
+        lease.expires_at = None
+        return True
+    return _transition(profile_key, _m)
+
+
 def get(profile_key: Optional[str] = None) -> Lease:
-    return _read(_path(profile_key))
+    current = _read(_path(profile_key))
+    deadline = _deadline(current)
+    # Reads never extend liveness. Recheck under the existing cross-process lock before expiry.
+    return expire(profile_key) if deadline is not None and time.time() >= deadline else current
+
+
+def renew(viewer_id: str, *, expected_epoch: int,
+          profile_key: Optional[str] = None) -> bool:
+    """Only the existing live RFB holder can extend its current grant, never revive an expired one."""
+    path = _path(profile_key)
+    with _locked(path):
+        current = _read(path)
+        deadline = _deadline(current)
+        now = time.time()
+        if (current.holder != HUMAN or current.viewer_id != viewer_id
+                or current.epoch != expected_epoch or deadline is None or now >= deadline):
+            return False
+        current.expires_at = now + RECONNECT_GRACE_S
+        _write(path, current)
+    # A heartbeat is not a control transition: preserve epoch/since and avoid event spam.
+    return True
 
 
 def on_change(listener: Callable[[str, Lease], None]) -> Callable[[], None]:
@@ -191,24 +245,28 @@ def acquire(viewer_id: str, *, profile_key: Optional[str] = None, reason: str = 
     """Human ``viewer_id`` takes control. Last writer wins: a second viewer evicts the first, and the
     RFB bridge closes the evicted socket so its UI drops to view-only."""
     def _m(lease: Lease) -> bool:
-        if lease.holder == HUMAN and lease.viewer_id == viewer_id:
+        if (lease.holder == HUMAN and lease.viewer_id == viewer_id
+                and (deadline := _deadline(lease)) is not None and time.time() < deadline):
             return False  # already theirs: no epoch bump, `since` and the reason on screen stay put
         # The agent's ask ("please log in to X") stays as the takeover reason: the human needs it
         # on screen WHILE they act, not only before they clicked Take over.
         lease.holder, lease.viewer_id, lease.since = HUMAN, viewer_id, time.time()
         lease.reason = reason or ""
+        lease.expires_at = time.time() + RECONNECT_GRACE_S
         return True
     return _transition(profile_key, _m)
 
 
 def release(viewer_id: Optional[str] = None, *, profile_key: Optional[str] = None,
-            unless_human: bool = False) -> Lease:
+            unless_human: bool = False, expected_epoch: Optional[int] = None) -> Lease:
     """Return control to the agent. With ``viewer_id`` only that holder may release (a stale viewer
     closing its window must not yank control from the one who took over after it). ``unless_human``
     makes a bare release a no-op while any human holds: the decision is taken under the file lock,
     so a takeover racing a check-then-release cannot be silently revoked. Callers read the returned
     lease's holder to learn whether anything happened."""
     def _m(lease: Lease) -> bool:
+        if expected_epoch is not None and lease.epoch != expected_epoch:
+            return False
         if unless_human and lease.holder == HUMAN:
             logger.info("bot-desktop lease: bare release ignored, a human holds")
             return False
@@ -222,6 +280,7 @@ def release(viewer_id: Optional[str] = None, *, profile_key: Optional[str] = Non
             # agent action (a double-clicked Hand back, a stray CLI stop) look overtaken and get voided.
             return False
         lease.holder, lease.viewer_id, lease.since, lease.reason = AGENT, None, time.time(), ""
+        lease.expires_at = None
         return True
     return _transition(profile_key, _m)
 

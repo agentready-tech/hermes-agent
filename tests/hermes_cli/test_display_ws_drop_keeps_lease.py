@@ -1,5 +1,5 @@
-"""A dropped viewer link (1006: lid closed, Wi-Fi) must NOT hand the screen back to the agent — the
-human may be mid-login on it. Only a clean close (1000/1001) releases."""
+"""A dropped link retains control only during its reconnect grace; a clean close releases now.
+Bounded drop expiry and active-viewer renewal are covered by test_display_lease_liveness.py."""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ async def _bridge_once(close_code: int, home: str) -> lease.Lease:
 
 
 # 1005 (no status code) is what noVNC's code-less socket.close() AND some proxies produce on a drop, so
-# the server keeps the lease; the Desktop sends an explicit 1000 when the pane is closed on purpose.
+# the server keeps the lease for a short reconnect grace; Desktop intentional close sends1000.
 @pytest.mark.parametrize(("close_code", "human_keeps_control"), [(1006, True), (1005, True), (1000, False)])
 def test_only_a_clean_viewer_close_hands_the_screen_back(monkeypatch, close_code, human_keeps_control):
     lease._reset_for_tests()
@@ -89,9 +89,8 @@ class _OpenWs(_Ws):
         return {"type": "websocket.disconnect", "code": self._code}
 
 
-def test_a_takeover_made_by_another_process_stops_input_within_the_refresh_interval(monkeypatch):
-    """The bridge caches the input decision instead of reading lease.json per message; a takeover
-    written by ANOTHER process (no in-process listener fires) must still be seen quickly."""
+def test_a_takeover_made_by_another_process_stops_input_before_the_next_frame(monkeypatch):
+    """The authoritative frame gate also observes a transition made by another process."""
     from tools.bot_desktop import rfb_filter
     captured = {}
 
@@ -99,24 +98,27 @@ def test_a_takeover_made_by_another_process_stops_input_within_the_refresh_inter
         def __init__(self, allow_input):
             super().__init__(allow_input)
             captured["allow"] = allow_input
+            captured["ready"].set()
     monkeypatch.setattr(rfb_filter, "RfbClientFilter", _Filter)
 
-    async def _run(home: str) -> float:
+    async def _run(home: str) -> None:
         sock_dir = os.path.join(home, "bot-desktop")
         os.makedirs(sock_dir, exist_ok=True)
-        server = await asyncio.start_unix_server(lambda r, w: None, path=os.path.join(sock_dir, "rfb.sock"))
+        async def _xvnc(reader, writer):
+            # Keep the synthetic RFB endpoint alive until the bridge closes its writer.
+            await reader.read()
+            writer.close()
+
+        server = await asyncio.start_unix_server(_xvnc, path=os.path.join(sock_dir, "rfb.sock"))
+        captured["ready"] = asyncio.Event()
         ws = _OpenWs()
         task = asyncio.create_task(display._bridge(ws, {"hermes_home": home, "viewer_id": "desk-1"}))
         try:
-            while "allow" not in captured:
-                await asyncio.sleep(0.01)
+            await asyncio.wait_for(captured["ready"].wait(), 2)
             assert captured["allow"]() is True
             # Another process takes over: the file changes, no listener in this process is told.
             lease._write(lease._path(home), lease.Lease(holder=lease.HUMAN, viewer_id="desk-2", epoch=2))
-            t0 = asyncio.get_running_loop().time()
-            while captured["allow"]() and asyncio.get_running_loop().time() - t0 < 2.0:
-                await asyncio.sleep(0.02)
-            return asyncio.get_running_loop().time() - t0
+            assert captured["allow"]() is False
         finally:
             ws.finish.set()
             await task
@@ -125,9 +127,8 @@ def test_a_takeover_made_by_another_process_stops_input_within_the_refresh_inter
     lease._reset_for_tests()
     with tempfile.TemporaryDirectory() as home:
         lease.acquire("desk-1", profile_key=home)
-        elapsed = asyncio.run(_run(home))
+        asyncio.run(_run(home))
     lease._reset_for_tests()
-    assert elapsed < 0.5, elapsed
 
 
 def test_no_bridge_task_or_socket_outlives_the_bridge():

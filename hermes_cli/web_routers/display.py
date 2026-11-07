@@ -12,15 +12,14 @@ Watch mode and reconnects.
 
 Design notes. The ticket rides in the query string on purpose: noVNC's Websock owns the socket and
 cannot negotiate a subprotocol or add a header, and the ticket is single-use and expires in 30 s, so
-a logged URL is spent by the time anyone reads it. The bridge's input gate re-reads ``lease.json`` at
-most every ``_LEASE_REFRESH_S`` (250 ms) between in-process ``on_change`` callbacks: that bounds how
-long another PROCESS's takeover can go unnoticed, and is the price of not stat-ing the lease file on
-the event loop for every pointer move.
+a logged URL is spent by the time anyone reads it. The input gate re-reads the lease before each
+client frame, including expiry, so a stale holder cannot keep typing after control returns.
 """
 
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import logging
 from pathlib import Path
 from typing import Optional
@@ -40,7 +39,34 @@ _CLOSE_DESKTOP_GONE = 4001
 _CLOSE_BAD_TICKET = 4401
 _CLOSE_NOT_ALLOWED = 4403
 _CLOSE_PROTOCOL = 1003
-_LEASE_REFRESH_S = 0.25
+_expiry_tasks: set[asyncio.Task] = set()
+# Viewer capabilities belong to one RPC transport; its latest RFB stream supersedes old
+# sockets in this single native API instance. The file lease remains control authority.
+@dataclass
+class _ViewerStreams:
+    issued: int = 0
+    active: Optional[int] = None
+    opened: int = 0
+    opening: int = 0
+
+
+_viewer_streams: dict[tuple[str, str], _ViewerStreams] = {}
+
+
+def _expire_disconnected_viewer(profile_home: str, viewer_id: str, epoch: int) -> None:
+    """One bounded cleanup on the existing server loop, not a new sweeper or service."""
+    from tools.bot_desktop import lease as _lease
+
+    async def _expire() -> None:
+        await asyncio.sleep(_lease.RECONNECT_GRACE_S)
+        try:
+            _lease.expire(profile_home, viewer_id=viewer_id, expected_epoch=epoch)
+        except OSError:
+            _log.warning("display lease expiry unavailable")
+
+    task = asyncio.create_task(_expire())
+    _expiry_tasks.add(task)
+    task.add_done_callback(_expiry_tasks.discard)
 
 
 def _should_evict(held: dict, lease, viewer_id: str) -> bool:
@@ -128,34 +154,65 @@ async def _bridge(ws: WebSocket, info: dict) -> None:
     profile_home = str(info["hermes_home"])
     profile_key = hermes_home_key(profile_home)
     viewer_id = str(info.get("viewer_id") or info.get("user_id") or "viewer")
+    stream_key = (profile_key, viewer_id)
+    streams = _viewer_streams.setdefault(stream_key, _ViewerStreams())
+    streams.issued += 1
+    stream_token = streams.issued
+    streams.opening += 1
+
+    def _owns_stream() -> bool:
+        return _viewer_streams.get(stream_key) is streams and streams.active == stream_token
+
+    def _forget_stream() -> None:
+        if _owns_stream():
+            streams.active = None
+        # Keep the successful-open high-water mark only while older opens are pending.
+        if streams.active is None and not streams.opening and _viewer_streams.get(stream_key) is streams:
+            _viewer_streams.pop(stream_key, None)
+
     try:
         reader, writer, relay = await _open_rfb(Path(profile_home))
     except OSError as exc:
+        streams.opening -= 1
+        _forget_stream()
         _log.warning("display ws: cannot reach RFB endpoint for %s: %s", profile_home, exc)
         await ws.close(code=_CLOSE_DESKTOP_GONE, reason="Bot Desktop is not running")
         return
+    except BaseException:
+        streams.opening -= 1
+        _forget_stream()
+        raise
+    streams.opening -= 1
+    if stream_token > streams.opened:
+        streams.opened, streams.active = stream_token, stream_token
 
     loop = asyncio.get_running_loop()
     evicted = asyncio.Event()
-    held = {"ever": _lease.viewer_may_send_input(viewer_id, profile_key=profile_home)}
-    # Input gate cache: reading lease.json per client message (a stat + read on the event loop for
-    # every pointer move) is replaced by a decision refreshed on this process's on_change callback
-    # and by a file re-read at most every _LEASE_REFRESH_S, so another process's takeover still lands.
-    allowed = {"input": held["ever"], "at": loop.time()}
+    current = _lease.get(profile_home)
+    held = {"ever": current.holder == _lease.HUMAN and current.viewer_id == viewer_id}
+    allowed = {"input": held["ever"]}
+    last_held_epoch = {"value": current.epoch if held["ever"] else None}
+    disconnect_epoch = {"value": None}
 
     def _refresh_allowed(lease=None) -> None:
+        if not _owns_stream():
+            allowed["input"] = False
+            return
         if lease is None:
             lease = _lease.get(profile_key=profile_home)
         allowed["input"] = lease.holder == _lease.HUMAN and lease.viewer_id == viewer_id
-        allowed["at"] = loop.time()
+        if allowed["input"]:
+            last_held_epoch["value"] = lease.epoch
 
     def _may_send_input() -> bool:
-        if loop.time() - allowed["at"] > _LEASE_REFRESH_S:
-            _refresh_allowed()
+        _refresh_allowed()
         return allowed["input"]
 
     def _on_lease(key: str, lease) -> None:
         if key != profile_key:
+            return
+        if not _owns_stream():
+            loop.call_soon_threadsafe(evicted.set)
             return
         loop.call_soon_threadsafe(_refresh_allowed, lease)
         if _should_evict(held, lease, viewer_id):
@@ -190,6 +247,9 @@ async def _bridge(ws: WebSocket, info: dict) -> None:
         while True:
             message = await ws.receive()
             if message.get("type") == "websocket.disconnect":
+                # Capture before async teardown: an old close must not release a newer
+                # acquisition, even when the same viewer reconnected in the meantime.
+                disconnect_epoch["value"] = last_held_epoch["value"]
                 # 1000/1001 = the viewer closed the window; anything else is a dropped link.
                 if message.get("code") in _CLEAN_CLOSE:
                     viewer_closed.set()
@@ -211,8 +271,16 @@ async def _bridge(ws: WebSocket, info: dict) -> None:
         await evicted.wait()
         await ws.close(code=_CLOSE_CONTROL_TAKEN, reason="control-taken")
 
+    async def renew_human_control() -> None:
+        while _owns_stream():
+            current = _lease.get(profile_home)
+            if current.holder == _lease.HUMAN and current.viewer_id == viewer_id:
+                _lease.renew(viewer_id, expected_epoch=current.epoch, profile_key=profile_home)
+                _refresh_allowed(current)
+            await asyncio.sleep(_lease.RENEW_INTERVAL_S)
+
     tasks = [asyncio.create_task(rfb_to_ws()), asyncio.create_task(ws_to_rfb()),
-             asyncio.create_task(watch_eviction())]
+             asyncio.create_task(watch_eviction()), asyncio.create_task(renew_human_control())]
     try:
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for t in pending:
@@ -233,11 +301,17 @@ async def _bridge(ws: WebSocket, info: dict) -> None:
             pass
         if relay is not None:
             relay.kill()  # the exec client; Xvnc inside the sandbox stays up
-        # Closing the viewer window hands control back. A DROPPED link (laptop lid, Wi-Fi, 1006)
-        # keeps the human's exclusion: they may be mid-login on that screen and the agent must not
-        # resume into it. The Desktop reconnects into the same lease, or the human hands back.
-        if viewer_closed.is_set() and _lease.viewer_may_send_input(viewer_id, profile_key=profile_home):
-            _lease.release(viewer_id, profile_key=profile_home)
+        epoch = disconnect_epoch["value"]
+        if epoch is None:
+            epoch = last_held_epoch["value"]
+        if epoch is not None and _owns_stream():
+            if viewer_closed.is_set():
+                _lease.release(viewer_id, profile_key=profile_home, expected_epoch=epoch)
+            else:
+                # Give a dropped viewer a short reconnect grace. Expiration is persisted
+                # even if no later agent action reads the lease; restart uses its deadline.
+                _expire_disconnected_viewer(profile_home, viewer_id, epoch)
+        _forget_stream()
         try:
             await ws.close()
         except Exception:  # already closed by the peer or by an eviction
