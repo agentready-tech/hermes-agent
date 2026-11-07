@@ -33,6 +33,19 @@ def validate(request):
         raise ValueError('ACTIVE_RELEASE_REQUIRED')
 
 
+def verify_package(value, expected_repository=REPOSITORY):
+    if expected_repository not in (REPOSITORY, 'agentready-tech/AgentReady') or value.get('visibility') != 'private':
+        raise ValueError('PRIVATE_FORK_PACKAGE_REQUIRED')
+    if (value.get('id') != 16663531 or value.get('name') != 'agentsee-hermes-runtime'
+            or (value.get('owner') or {}).get('login') != 'agentready-tech'
+            or os.environ.get('GITHUB_REPOSITORY') != 'agentready-tech/AgentReady'):
+        raise ValueError('EXACT_PRIVATE_PACKAGE_AND_PUBLISHER_REQUIRED')
+    observed_repository = (value.get('repository') or {}).get('full_name')
+    if observed_repository is not None and observed_repository != expected_repository:
+        raise ValueError('PACKAGE_REPOSITORY_ASSOCIATION_CHANGED')
+    return value
+
+
 def package_metadata(expected_repository=REPOSITORY):
     result = subprocess.run(['gh', 'api', PACKAGE], capture_output=True, check=False, timeout=120)
     if result.returncode:
@@ -40,11 +53,7 @@ def package_metadata(expected_repository=REPOSITORY):
             return None
         raise RuntimeError('PACKAGE_METADATA_UNAVAILABLE')
     value = json.loads(result.stdout)
-    if (expected_repository not in (REPOSITORY, 'agentready-tech/AgentReady')
-            or value.get('visibility') != 'private'
-            or (value.get('repository') or {}).get('full_name') != expected_repository):
-        raise ValueError('PRIVATE_FORK_PACKAGE_REQUIRED')
-    return value
+    return verify_package(value, expected_repository)
 
 
 def source_identity(row):

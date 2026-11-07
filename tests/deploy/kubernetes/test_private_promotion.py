@@ -1,6 +1,7 @@
 """Private registry copy preserves immutable releases and distinguishes absence from denied access."""
 import copy
 import json
+import os
 import subprocess
 from unittest.mock import patch
 
@@ -90,11 +91,13 @@ def test_source_revision_version_repository_and_digest_are_verified_before_copy(
 
 
 def test_private_publisher_binding_is_explicit_and_does_not_replace_fork_source_identity():
-    meta = {'visibility': 'private', 'repository': {'full_name': 'agentready-tech/AgentReady'}}
+    meta = {'id': 16663531, 'name': 'agentsee-hermes-runtime', 'visibility': 'private',
+            'owner': {'login': 'agentready-tech'}, 'repository': {'full_name': 'agentready-tech/AgentReady'}}
     result = subprocess.CompletedProcess([], 0, json.dumps(meta).encode(), b'')
-    with patch.object(promote.subprocess, 'run', return_value=result):
+    with patch.object(promote.subprocess, 'run', return_value=result), \
+            patch.dict(os.environ, {'GITHUB_REPOSITORY': 'agentready-tech/AgentReady'}):
         assert promote.package_metadata('agentready-tech/AgentReady') == meta
-        with pytest.raises(ValueError, match='PRIVATE_FORK_PACKAGE_REQUIRED'):
+        with pytest.raises(ValueError, match='PACKAGE_REPOSITORY_ASSOCIATION_CHANGED'):
             promote.package_metadata()
         with pytest.raises(ValueError, match='PRIVATE_FORK_PACKAGE_REQUIRED'):
             promote.package_metadata('foreign/private-publisher')
@@ -105,3 +108,19 @@ def test_private_publisher_binding_is_explicit_and_does_not_replace_fork_source_
     with patch.object(promote, 'run', return_value=json.dumps({'Digest': value['digest'], 'Labels': labels}).encode()), \
             pytest.raises(ValueError, match='LABELS_MISMATCH'):
         promote.source_identity(value)
+
+
+def test_hidden_repository_does_not_block_exact_private_package_and_publisher():
+    value = {'id': 16663531, 'name': 'agentsee-hermes-runtime', 'visibility': 'private',
+             'owner': {'login': 'agentready-tech'}, 'repository': None}
+    publisher = 'agentready-tech/AgentReady'
+    with patch.dict(os.environ, {'GITHUB_REPOSITORY': publisher}):
+        assert promote.verify_package(value, publisher) is value
+        for changed in ({'visibility': 'public'}, {'id': 2}, {'name': 'foreign-package'},
+                        {'owner': {'login': 'foreign'}},
+                        {'repository': {'full_name': promote.REPOSITORY}}):
+            with pytest.raises(ValueError):
+                promote.verify_package({**value, **changed}, publisher)
+    with patch.dict(os.environ, {'GITHUB_REPOSITORY': promote.REPOSITORY}), \
+            pytest.raises(ValueError, match='EXACT_PRIVATE_PACKAGE_AND_PUBLISHER_REQUIRED'):
+        promote.verify_package(value, publisher)
