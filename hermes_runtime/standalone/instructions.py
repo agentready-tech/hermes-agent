@@ -106,8 +106,11 @@ def install_main_delegation_instructions(agent):
             or getattr(agent, "platform", None) in {"cron", "subagent"}):
         return False
     existing = getattr(agent, "ephemeral_system_prompt", None) or ""
-    missing = [text for text in (MAIN_DELEGATION_INSTRUCTIONS, MAIN_GOOGLE_BROWSER_LOGIN_INSTRUCTIONS)
-               if text not in existing]
+    from agent.skill_utils import get_system_skill_names
+    policies = [MAIN_DELEGATION_INSTRUCTIONS]
+    if "agentsee-google-browser-login" in get_system_skill_names():
+        policies.append(MAIN_GOOGLE_BROWSER_LOGIN_INSTRUCTIONS)
+    missing = [text for text in policies if text not in existing]
     if not missing:
         return False
     agent.ephemeral_system_prompt = existing + ("\n\n" if existing else "") + "\n\n".join(missing)

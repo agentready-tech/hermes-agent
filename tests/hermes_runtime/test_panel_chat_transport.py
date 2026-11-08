@@ -85,4 +85,7 @@ async def test_skills_open_transmits_only_the_trusted_system_permission(tmp_path
     command = {"kind": "skills", "id": "fixture-skill-read", "canReadSystemSkills": permission}
     await bridge(command, {"url": "https://panel.invalid", "environment_id": "env_fixture"},
                  1, "synthetic-credential", None, skills=skills)
-    assert skills.bridge.await_args.kwargs == {"can_read_system": permission is True}
+    assert skills.bridge.await_args.kwargs == {
+        "can_read_system": permission is True,
+        "can_edit_personal": False,
+    }

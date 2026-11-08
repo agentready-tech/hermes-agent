@@ -83,3 +83,20 @@ def test_long_lived_agent_is_told_each_skill_change_once(tmp_path, monkeypatch):
     assert "terraform-ops" in _turn(agent, prompt, history)
     rebuilt = "Identity.\n\n" + pb.build_skills_system_prompt()
     assert _turn(agent, rebuilt, history) == "" and _turn(_agent(tmp_path), rebuilt, history) == ""
+
+
+def test_same_name_description_changes_reach_existing_and_restored_agents_once(tmp_path, monkeypatch):
+    skills = _home(tmp_path, monkeypatch)
+    _write_skill(skills, "same-name", "Original workflow.")
+    agent, history = _agent(tmp_path), []
+    prefix = "Immutable prefix.\n\n" + pb.build_skills_system_prompt()
+    assert _turn(agent, prefix, history) == ""
+    _write_skill(skills, "same-name", "Revised workflow [shared]")
+    _write_skill(skills, "zz-other", "Other workflow [shared]")
+    note = _turn(agent, prefix, history)
+    assert "same-name: Revised workflow [shared]" in note and "zz-other: Other workflow [shared]" in note
+    assert _turn(agent, prefix, history) == ""
+    assert _turn(_agent(tmp_path), prefix, history) == ""
+    _write_skill(skills, "same-name", "Another workflow.")
+    assert "same-name: Another workflow." in _turn(_agent(tmp_path), prefix, history)
+    assert _turn(agent, prefix, history) == ""

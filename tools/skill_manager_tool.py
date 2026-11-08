@@ -385,10 +385,10 @@ def _system_skill_write_error(name: str, path: Optional[Path] = None):
     """Reject before batch snapshots/rollback as well as every direct write handler."""
     from agent.skill_utils import get_system_skill_names, is_protected_system_skill_path
     if name in get_system_skill_names() or (path is not None and is_protected_system_skill_path(path)):
-        return _err(f"Skill '{name}' is an image-owned AgentSee system skill and is read-only.")
+        return _err(f"Skill '{name}' is an centrally managed AgentSee skill and is read-only.")
     existing = _find_skill(name) if isinstance(name, str) else None
     if existing and is_protected_system_skill_path(existing["path"]):
-        return _err(f"Skill '{name}' is an image-owned AgentSee system skill and is read-only.")
+        return _err(f"Skill '{name}' is an centrally managed AgentSee skill and is read-only.")
     return None
 
 

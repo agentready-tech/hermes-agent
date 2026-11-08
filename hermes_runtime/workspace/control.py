@@ -6,6 +6,8 @@ import re
 import sys
 from pathlib import Path
 
+from agent.skill_library import SkillLibraryError
+from hermes_runtime.skill_inventory import SkillReadError
 from hermes_constants import get_hermes_home
 from hermes_runtime.workspace import CAPABILITY
 from hermes_runtime.workspace.service import Workspace
@@ -93,6 +95,9 @@ def dispatch(home, request, *, workspace=None):
     if not isinstance(request, dict):
         raise WorkspaceError("INVALID_WORKSPACE_OPERATION")
     operation = request.get("operation")
+    if operation == "skills_validate":
+        from hermes_runtime.skill_inventory import validate_control
+        return validate_control(home, request)
     if operation not in OPERATIONS or set(request) - (OPERATIONS[operation] | {"operation", "environmentId"}):
         raise WorkspaceError("INVALID_WORKSPACE_OPERATION")
     workspace = workspace or Workspace(home)
@@ -131,7 +136,7 @@ def dispatch(home, request, *, workspace=None):
 def response(home, request, *, workspace=None):
     try:
         return {"ok": True, "value": dispatch(home, request, workspace=workspace)}
-    except WorkspaceError as error:
+    except (WorkspaceError, SkillLibraryError, SkillReadError) as error:
         return {"ok": False, "error": str(error)}
     except Exception:  # health: allow BLE001 -- no request, credential, vendor body or exception text crosses this protected boundary
         return {"ok": False, "error": "INVALID_WORKSPACE_REQUEST"}

@@ -54,6 +54,31 @@ async def _personal_library_read(request, *, content=False, system=False):
         raise HTTPException(status_code=status, detail=str(error)) from None
 
 
+@router.post("/api/skills/library/personal/content")
+async def personal_skill_library_update(request: Request):
+    import json
+    from hermes_runtime.skill_edit import MAX_UPDATE_REQUEST_BYTES, personal_update
+    from hermes_runtime.skill_inventory import SkillReadError
+    home = _personal_library_home(request)
+    if request.query_params:
+        raise HTTPException(status_code=400, detail="INVALID_SKILLS_REQUEST")
+    raw = bytearray()
+    async for chunk in request.stream():
+        if len(raw) + len(chunk) > MAX_UPDATE_REQUEST_BYTES:
+            raise HTTPException(status_code=413, detail="INVALID_SKILLS_REQUEST_TOO_LARGE")
+        raw.extend(chunk)
+    try:
+        value = json.loads(raw)
+        return await asyncio.to_thread(personal_update, home, value)
+    except (ValueError, UnicodeError) as error:
+        if not isinstance(error, SkillReadError):
+            raise HTTPException(status_code=400, detail="INVALID_SKILLS_REQUEST") from None
+        code = str(error)
+        status = 409 if code == "CONFLICT_SKILL_CHANGED" else (404 if code == "NOT_FOUND" else
+                 (403 if code == "FORBIDDEN" else (413 if code.endswith("TOO_LARGE") else 400)))
+        raise HTTPException(status_code=status, detail=code) from None
+
+
 @router.get("/api/skills/library/personal")
 async def personal_skill_library(request: Request):
     return await _personal_library_read(request)

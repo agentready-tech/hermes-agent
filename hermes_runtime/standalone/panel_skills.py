@@ -8,6 +8,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 
 from hermes_runtime.skill_inventory import CAPABILITY, MAX_RESPONSE_BYTES, SkillReadError, canonical_name
+from hermes_runtime.skill_edit import EDIT_CAPABILITY, MAX_UPDATE_REQUEST_BYTES, UPDATE_METHOD, validate_update_request
 
 
 class SkillsRead:
@@ -37,7 +38,7 @@ class SkillsRead:
         except (ValueError, UnicodeError, AttributeError):
             detail = None
         return detail if isinstance(detail, str) and re.fullmatch(
-            r"INVALID_SKILLS_[A-Z_]+|FORBIDDEN|NOT_FOUND", detail) else None
+            r"INVALID_SKILLS_[A-Z_]+|CONFLICT_SKILL_CHANGED|FORBIDDEN|NOT_FOUND", detail) else None
 
     @staticmethod
     def _row(value, *, system=False):
@@ -57,7 +58,8 @@ class SkillsRead:
 
     @classmethod
     def _project(cls, result, method):
-        if not isinstance(result, dict) or result.get("capability") != CAPABILITY:
+        capability = EDIT_CAPABILITY if method == UPDATE_METHOD else CAPABILITY
+        if not isinstance(result, dict) or result.get("capability") != capability:
             raise SkillReadError("INVALID_SKILLS_UNAVAILABLE")
         system = method.startswith("skills.system.")
         if method.endswith(".list"):
@@ -74,11 +76,13 @@ class SkillsRead:
         return {**{key: result[key] for key in ("capability", "content", "sha256", "bytes")},
                 "skill": cls._row(result["skill"], system=system)}
 
-    async def handle(self, method, params, *, can_read_system=False):
+    async def handle(self, method, params, *, can_read_system=False, can_edit_personal=False):
         if not isinstance(params, dict) or not isinstance(method, str):
             raise SkillReadError("INVALID_SKILLS_REQUEST")
         if method.startswith("skills.system.") and can_read_system is not True:
             raise SkillReadError("FORBIDDEN")
+        if method == UPDATE_METHOD:
+            return await self._update(params, can_edit_personal=can_edit_personal)
         sources = {"skills.library.list": ("personal", False), "skills.library.read": ("personal", True),
                    "skills.system.list": ("system", False), "skills.system.read": ("system", True)}
         source = sources.get(method)
@@ -99,25 +103,46 @@ class SkillsRead:
             raise SkillReadError("INVALID_SKILLS_RESPONSE_TOO_LARGE")
         return result
 
-    async def bridge(self, remote_url, credential, *, can_read_system=False):
+    async def _update(self, params, *, can_edit_personal=False):
+        if can_edit_personal is not True:
+            raise SkillReadError("FORBIDDEN")
+        validate_update_request(params)
+        try:
+            result = await asyncio.to_thread(self.auth.authenticated_request,
+                "/api/skills/library/personal/content", params, method="POST")
+        except HTTPError as error:
+            raise SkillReadError(self._native_error(error) or "INVALID_SKILLS_UNAVAILABLE") from None
+        except (OSError, ValueError):
+            raise SkillReadError("INVALID_SKILLS_UNAVAILABLE") from None
+        result = self._project(result, UPDATE_METHOD)
+        if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > MAX_RESPONSE_BYTES - 1024:
+            raise SkillReadError("INVALID_SKILLS_RESPONSE_TOO_LARGE")
+        return result
+
+    async def bridge(self, remote_url, credential, *, can_read_system=False, can_edit_personal=False):
         from websockets.asyncio.client import connect
         async with connect(remote_url, additional_headers={"Authorization": f"Bearer {credential}"},
-                           max_size=16384, open_timeout=15, close_timeout=5, proxy=None) as remote:
+                           max_size=MAX_UPDATE_REQUEST_BYTES, open_timeout=15, close_timeout=5, proxy=None) as remote:
             async for raw in remote:
                 identity = None
                 try:
-                    if len(raw.encode("utf-8") if isinstance(raw, str) else raw) > 16384:
+                    if len(raw.encode("utf-8") if isinstance(raw, str) else raw) > MAX_UPDATE_REQUEST_BYTES:
                         raise SkillReadError("INVALID_SKILLS_REQUEST_TOO_LARGE")
                     request = json.loads(raw)
+                    if (isinstance(request, dict) and request.get("method") != UPDATE_METHOD
+                            and len(raw.encode("utf-8") if isinstance(raw, str) else raw) > 16384):
+                        raise SkillReadError("INVALID_SKILLS_REQUEST_TOO_LARGE")
                     if (not isinstance(request, dict) or set(request) != {"jsonrpc", "id", "method", "params"}
                             or request["jsonrpc"] != "2.0" or type(request["id"]) not in {int, str}
                             or len(str(request["id"])) > 120):
                         raise SkillReadError("INVALID_SKILLS_REQUEST")
                     identity = request["id"]
-                    result = await self.handle(request["method"], request["params"], can_read_system=can_read_system)
+                    result = await self.handle(request["method"], request["params"], can_read_system=can_read_system,
+                                               can_edit_personal=can_edit_personal)
                     response = {"jsonrpc": "2.0", "id": identity, "result": result}
                 except SkillReadError as error:
-                    response = {"jsonrpc": "2.0", "id": identity, "error": {"code": 400, "message": str(error)}}
+                    response = {"jsonrpc": "2.0", "id": identity, "error": {
+                        "code": 409 if str(error) == "CONFLICT_SKILL_CHANGED" else 400, "message": str(error)}}
                 except Exception:  # health: allow BLE001 -- only a stable code crosses this boundary; upstream ticket URLs/body are private
                     response = {"jsonrpc": "2.0", "id": identity, "error": {"code": 503, "message": "INVALID_SKILLS_UNAVAILABLE"}}
                 await remote.send(json.dumps(response, ensure_ascii=False))

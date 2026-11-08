@@ -148,6 +148,9 @@ def preprocess_skill_content(
     """Apply configured SKILL.md template and inline-shell preprocessing."""
     if not content:
         return content
+    from agent.skill_library import is_library_path
+    if skill_dir is not None and is_library_path(skill_dir):
+        return content
     cfg = skills_cfg if isinstance(skills_cfg, dict) else load_skills_config()
     if cfg.get("template_vars", True):
         content = substitute_template_vars(content, skill_dir, session_id)

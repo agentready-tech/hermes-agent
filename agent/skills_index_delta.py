@@ -68,33 +68,34 @@ def _render(added: dict[str, str], removed: set[str]) -> str:
 
 def _parse(note: str) -> _Delta:
     """Inverse of :func:`_render` for the text that follows ``_NOTE_PREFIX``."""
-    lines = note.split("\n")
-    added: set[str] = set()
+    lines = note.removesuffix("]").split("\n")
+    added: set[tuple[str, str]] = set()
     if _ADDED_HEAD in lines[1:2]:
         for line in lines[2:]:
             if not line.startswith(_ROW):
                 break
-            added.add(_row_name(line.removesuffix("]")))
+            row = line
+            added.add((_row_name(row), row.rstrip() if ": " in row.strip() else ""))
     removed: set[str] = set()
     for line in lines[1:]:
         if line.startswith(_REMOVED_HEAD):
-            tail = line[len(_REMOVED_HEAD):].removesuffix("]")
+            tail = line[len(_REMOVED_HEAD):]
             removed = {n.strip() for n in tail.split(",") if n.strip()}
             break
     return frozenset(added), frozenset(removed)
 
 
-def _announced(conversation_history: Any) -> _Delta:
+def _announced(conversation_history: Any) -> _Delta | None:
     """The difference named by the newest skills note anywhere in the transcript: a note far back
     still describes the current state when nothing changed since it was sent."""
     for msg in reversed(conversation_history or []):
         if not isinstance(msg, dict) or msg.get("role") != "user":
             continue
         sidecar = msg.get("api_content")
-        text = (sidecar if isinstance(sidecar, str) else "") + "\n" + flatten_message_text(msg.get("content"))
+        text = sidecar if isinstance(sidecar, str) and _NOTE_PREFIX in sidecar else flatten_message_text(msg.get("content"))
         if _NOTE_PREFIX in text:
             return _parse(text.rsplit(_NOTE_PREFIX, 1)[1])
-    return frozenset(), frozenset()
+    return None
 
 
 def stage_skills_index_note(agent: Any, prompt: Any, conversation_history: Any) -> bool:
@@ -108,7 +109,7 @@ def stage_skills_index_note(agent: Any, prompt: Any, conversation_history: Any) 
     if getattr(agent, "provider", None) == "moa" or getattr(agent, "api_mode", None) == "codex_app_server":
         return False
     stored = index_entries(prompt)
-    if not stored:
+    if not stored and not (isinstance(prompt, str) and _BLOCK_RE.search(prompt)):
         return False
     try:
         from agent.system_prompt import _skills_prompt
@@ -118,15 +119,20 @@ def stage_skills_index_note(agent: Any, prompt: Any, conversation_history: Any) 
         return False
     told = getattr(agent, "_skills_index_told", None)
     key = hash(prompt)
-    told_added, told_removed = told[1] if isinstance(told, tuple) and told[0] == key else _announced(conversation_history)
+    announced = _announced(conversation_history)
+    told_added, told_removed = announced if announced is not None else (
+        told[1] if isinstance(told, tuple) and told[0] == key else (frozenset(), frozenset()))
     # What the model believes it can load: the prompt's index as amended by the newest note. A rebuilt
     # prompt (compaction) that now lists what an earlier note announced needs no further note.
-    if (set(stored) | told_added) - told_removed == set(current):
+    believed = {**stored, **dict(told_added)}
+    for name in told_removed:
+        believed.pop(name, None)
+    if believed == current:
         agent._skills_index_told = (key, (told_added, told_removed))
         return False
-    added = {name: row for name, row in current.items() if name not in stored}
+    added = {name: row for name, row in current.items() if name not in stored or stored[name] != row}
     removed = set(stored) - set(current)
-    agent._skills_index_told = (key, (frozenset(added), frozenset(removed)))
+    agent._skills_index_told = (key, (frozenset(added.items()), frozenset(removed)))
     agent._skills_index_note = _render(added, removed)
     logger.info(
         "Session %s: skills changed (+%d/-%d) since the system prompt was built; delivering the "

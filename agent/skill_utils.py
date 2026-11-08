@@ -10,6 +10,8 @@ import sys
 from pathlib import Path, PurePath
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+from agent.skill_library import current_library, custody_root, pin_library
+
 from hermes_constants import (
     get_config_path,
     get_skills_dir,
@@ -387,6 +389,7 @@ def display_skill_create_dir() -> str:
 # skills.external_dirs. Inside ONE tier two different skills sharing a name stay ambiguous — refused,
 # never guessed (59da8ec4e) — while identical copies under one root resolve to the shallowest.
 TIER_SYSTEM = -1
+TIER_OPTIONAL = 4
 TIER_PROJECT, TIER_LOCAL, TIER_CREATE_DIR, TIER_EXTERNAL = range(4)
 # Leading words of every same-tier refusal (skill_view error, preload/cron label) — one spelling.
 AMBIGUOUS_SKILL_PREFIX = "Ambiguous skill name "
@@ -400,50 +403,77 @@ def get_system_skills_dir() -> Path:
     return Path(__file__).resolve().parent.parent / "skills" / "agentsee"
 
 
+def get_system_skill_roots() -> list[Path]:
+    """Backend set is complete; the image asset only bootstraps an unprojected profile."""
+    state = current_library()
+    return [get_system_skills_dir()] if state.status == "bootstrap" else state.system_roots()
+
+
 def is_protected_system_skill_path(path: Path) -> bool:
-    """Protect the entire packaged namespace, new destinations and symlink aliases included."""
+    """Protect source assets and the full central custody tree, including unknown destinations."""
     try:
         target = Path(os.path.abspath(path))
-        root = Path(os.path.abspath(get_system_skills_dir()))
-        return target.is_relative_to(root) or target.resolve().is_relative_to(root.resolve())
+        return any(target.is_relative_to(root) or target.resolve().is_relative_to(root.resolve())
+                   for root in (get_system_skills_dir(), custody_root()))
     except (OSError, RuntimeError, ValueError):
         return True
 
 
 def is_system_skill_path(path: Path) -> bool:
-    """Source-owned paths only; a symlink escaping the packaged library gains no system authority."""
     try:
-        return Path(path).resolve().is_relative_to(get_system_skills_dir().resolve())
+        return any(Path(path).resolve().is_relative_to(root.resolve()) for root in get_system_skill_roots())
     except (OSError, RuntimeError, ValueError):
         return False
 
 
+@pin_library
 def get_system_skill_names() -> set[str]:
-    """Required platform names are source-owned, never profile suppression/provenance state."""
     names = set()
-    for skill_md in iter_skill_index_files(get_system_skills_dir(), "SKILL.md"):
-        try:
-            frontmatter, _ = parse_frontmatter(skill_md.read_text(encoding="utf-8-sig"))
-            names.add(str(frontmatter.get("name") or skill_md.parent.name))
-        except (OSError, UnicodeError):
-            continue
+    for root in get_system_skill_roots():
+        for skill_md in iter_skill_index_files(root, "SKILL.md"):
+            try:
+                frontmatter, _ = parse_frontmatter(skill_md.read_text(encoding="utf-8-sig"))
+                names.add(str(frontmatter.get("name") or skill_md.parent.name))
+            except (OSError, UnicodeError):
+                continue
     return names
 
 
+@pin_library
 def get_skill_search_roots(local: Optional[Path] = None, *, include_project: bool = True) -> list[tuple[int, Path]]:
     """``(tier, dir)`` for every skill root in precedence order — the ONE ordering the skills list,
     prompt index, slash commands, skill_view, preload and cron share. *local* overrides the profile
     skills dir (skills_tool passes its live root); that entry is kept even when missing."""
-    system = get_system_skills_dir()
-    roots = [(TIER_SYSTEM, system)] if system.is_dir() else []
+    roots = [(TIER_SYSTEM, root) for root in get_system_skill_roots() if root.is_dir()]
     roots += [(TIER_PROJECT, d) for d in get_project_skills_dirs()] if include_project else []
     roots.append((TIER_LOCAL, Path(local) if local is not None else get_skills_dir()))
     create_dir = get_skill_create_dir()
     if create_dir is not None and create_dir.is_dir():
         roots.append((TIER_CREATE_DIR, create_dir))
     roots += [(TIER_EXTERNAL, d) for d in get_external_skills_dirs()]
+    roots += [(TIER_OPTIONAL, root) for root in current_library().optional_roots()]
     seen: set[Path] = set()
     return [(t, d) for t, d in roots if not (d in seen or seen.add(d))]
+
+
+def is_visible_skill_path(path: Path) -> bool:
+    """Hide only proven unchanged upstream seeds after a backend projection, without deleting them."""
+    if current_library().status != "published":
+        return True
+    target = Path(path).resolve()
+    installed = Path(__file__).resolve().parent.parent
+    if any(target.is_relative_to(installed / name) for name in ("skills", "optional-skills")):
+        return False
+    if not target.is_relative_to(get_skills_dir().resolve()):
+        return True
+    from tools.skills_sync import _matches_origin_hash, _read_manifest
+    try:
+        metadata, _body = parse_frontmatter(target.read_text(encoding="utf-8-sig"))
+        name = str(metadata.get("name") or target.parent.name)
+        origin = _read_manifest().get(name, "")
+        return not (re.fullmatch(r"[a-f0-9]{32}", origin) and _matches_origin_hash(target.parent, origin))
+    except (OSError, UnicodeError):
+        return True
 
 
 def get_all_skills_dirs() -> list[Path]:
@@ -707,7 +737,9 @@ def normalize_skill_lookup_name(identifier: str) -> str:
         primary_root = _skills_tool._skills_dir()
     except Exception:
         primary_root = get_skills_dir()
-    trusted_roots = [get_system_skills_dir(), primary_root]
+    trusted_roots = [root for _tier, root in get_skill_search_roots()]
+    if primary_root not in trusted_roots:
+        trusted_roots.append(primary_root)
     for getter in (get_project_skills_dirs, get_external_skills_dirs):
         try:
             trusted_roots.extend(getter())
@@ -719,8 +751,10 @@ def normalize_skill_lookup_name(identifier: str) -> str:
     for root in trusted_roots:
         if identifier_path.is_relative_to(root):
             relative = identifier_path.relative_to(root)
-            if root == get_system_skills_dir() and relative.name == "SKILL.md":
+            if relative.name == "SKILL.md":
                 relative = relative.parent
+            if relative == Path("."):
+                return root.name
             return str(relative)
     try:
         return str(identifier_path.resolve().relative_to(primary_root.resolve()))
@@ -896,7 +930,7 @@ def iter_skill_index_files(skills_dir: Path, filename: str):
         if filename in files:
             matches.append(os.path.join(root, filename))
     for match in map(Path, sorted(matches)):
-        if skills_dir != get_system_skills_dir() or is_system_skill_path(match):
+        if (skills_dir != get_system_skills_dir() or is_system_skill_path(match)) and is_visible_skill_path(match):
             yield match
 
 

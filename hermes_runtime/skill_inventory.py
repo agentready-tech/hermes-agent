@@ -1,4 +1,4 @@
-"""Bounded read-only personal and image-owned SYSTEM skill inventory."""
+"""Bounded read-only OWN, assigned OPTIONAL and authoritative SYSTEM inventory."""
 
 import hashlib
 from contextlib import contextmanager
@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import stat
 
+from agent.skill_library import current_library, library_scope, validate_library, validate_selection
 from hermes_yaml import YAMLError
 
 MAX_FILE_BYTES = 64 * 1024
@@ -160,7 +161,7 @@ def _resources(directory, home):
 
 
 def _catalog(home, *, system=False):
-    from agent.skill_utils import EXCLUDED_SKILL_DIRS, SKILL_SUPPORT_DIRS, get_system_skill_names, parse_frontmatter
+    from agent.skill_utils import EXCLUDED_SKILL_DIRS, SKILL_SUPPORT_DIRS, get_system_skill_names, is_visible_skill_path, parse_frontmatter
     home = Path(home).resolve()
     installed = set() if system else _installed_paths(home)
     common_names = set() if system else get_system_skill_names()
@@ -178,6 +179,8 @@ def _catalog(home, *, system=False):
             if "SKILL.md" not in files:
                 continue
             path = directory / "SKILL.md"
+            if not system and not is_visible_skill_path(path):
+                continue
             if path in seen:
                 continue
             seen.add(path)
@@ -206,7 +209,8 @@ def _catalog(home, *, system=False):
 
 def personal_inventory(home):
     with _bound_home(home):
-        rows, truncated = _catalog(home)
+        with library_scope(home):
+            rows, truncated = _catalog(home)
         payload = {"capability": CAPABILITY, "skills": [], "truncated": truncated}
         for row in rows:
             payload["skills"].append(row["public"])
@@ -220,7 +224,8 @@ def personal_inventory(home):
 def personal_content(home, name):
     name = canonical_name(name)
     with _bound_home(home):
-        rows, truncated = _catalog(home)
+        with library_scope(home):
+            rows, truncated = _catalog(home)
         if truncated:
             raise SkillReadError("INVALID_SKILLS_INVENTORY_TRUNCATED")
         matches = [row for row in rows if row["public"]["name"] == name]
@@ -237,34 +242,72 @@ def personal_content(home, name):
 
 
 
+def _managed_catalog(state, kind):
+    if state.status not in {"published", "bootstrap"}:
+        raise SkillReadError(state.reason or "INVALID_SKILLS_LIBRARY_UNAVAILABLE")
+    if kind == "system":
+        from agent.skill_utils import get_system_skill_roots
+        roots = get_system_skill_roots()
+    else:
+        roots = state.optional_roots()
+    rows, truncated = [], False
+    for root in roots:
+        found, partial = _catalog(root, system=True)
+        for row in found:
+            row["public"]["origin"] = kind
+        rows.extend(found)
+        truncated |= partial
+    return rows, truncated
+
+
 def system_inventory():
-    """Only the fixed source-owned library; no profile, config, environment root or preprocessing."""
-    from agent.skill_utils import get_system_skills_dir
-    rows, truncated = _catalog(get_system_skills_dir(), system=True)
-    payload = {"capability": CAPABILITY, "skills": [], "truncated": truncated}
-    for row in rows:
-        payload["skills"].append(row["public"])
-        if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > MAX_RESPONSE_BYTES - 1024:
-            payload["skills"].pop()
-            payload["truncated"] = True
-            break
-    return payload
+    """The owning profile's verified backend mandatory set; image bootstrap only before enrollment."""
+    with library_scope() as state:
+        rows, truncated = _managed_catalog(state, "system")
+        payload = {"capability": CAPABILITY, "skills": [], "truncated": truncated}
+        for row in rows:
+            payload["skills"].append(row["public"])
+            if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > MAX_RESPONSE_BYTES - 1024:
+                payload["skills"].pop()
+                payload["truncated"] = True
+                break
+        return payload
 
 
 def system_content(name):
-    from agent.skill_utils import get_system_skills_dir
     name = canonical_name(name)
-    rows, truncated = _catalog(get_system_skills_dir(), system=True)
-    if truncated:
-        raise SkillReadError("INVALID_SKILLS_INVENTORY_TRUNCATED")
-    matches = [row for row in rows if row["public"]["name"] == name]
-    if not matches:
-        raise SkillReadError("NOT_FOUND")
-    if len(matches) != 1:
-        raise SkillReadError("INVALID_SKILLS_AMBIGUOUS_NAME")
-    row = matches[0]
-    payload = {"capability": CAPABILITY, "skill": row["public"], "content": row["content"],
-               "sha256": hashlib.sha256(row["raw"]).hexdigest(), "bytes": len(row["raw"])}
-    if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > MAX_RESPONSE_BYTES:
-        raise SkillReadError("INVALID_SKILLS_RESPONSE_TOO_LARGE")
-    return payload
+    with library_scope() as state:
+        rows, truncated = _managed_catalog(state, "system")
+        if truncated:
+            raise SkillReadError("INVALID_SKILLS_INVENTORY_TRUNCATED")
+        matches = [row for row in rows if row["public"]["name"] == name]
+        if not matches:
+            raise SkillReadError("NOT_FOUND")
+        if len(matches) != 1:
+            raise SkillReadError("INVALID_SKILLS_AMBIGUOUS_NAME")
+        row = matches[0]
+        payload = {"capability": CAPABILITY, "skill": row["public"], "content": row["content"],
+                   "sha256": hashlib.sha256(row["raw"]).hexdigest(), "bytes": len(row["raw"])}
+        if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > MAX_RESPONSE_BYTES:
+            raise SkillReadError("INVALID_SKILLS_RESPONSE_TOO_LARGE")
+        return payload
+
+
+def validate_control(home, request):
+    """Existing protected worker control: validation only, independent from mail enrollment or credentials."""
+    from hermes_runtime.standalone.config import settings
+    if (not isinstance(request, dict) or set(request) != {"operation", "environmentId", "library", "selectedOptional"}
+            or request.get("operation") != "skills_validate"):
+        raise SkillReadError("INVALID_SKILLS_OPERATION")
+    environment = request["environmentId"]
+    if not isinstance(environment, str) or not re.fullmatch(r"env_[a-f0-9]{32}", environment):
+        raise SkillReadError("INVALID_SKILLS_ENVIRONMENT")
+    config = settings(Path(home))
+    panel = config.get("panel", {})
+    workspace = config.get("workspace", {})
+    if environment not in {panel.get("environment_id"), workspace.get("environment_id")}:
+        raise SkillReadError("FORBIDDEN")
+    library, _raw = validate_library(request["library"])
+    selected = validate_selection(library, request["selectedOptional"])
+    return {"capability": "skills-library/v1", "valid": True, "revision": library["revision"], "digest": library["digest"],
+            "skillCount": len(library["skills"]), "selectedOptional": list(selected)}

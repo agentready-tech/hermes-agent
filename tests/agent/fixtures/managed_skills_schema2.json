@@ -1,0 +1,60 @@
+{
+  "library": {
+    "schema": 2,
+    "revision": 1,
+    "digest": "c3e764702c9f91a001000dbb9773e73037c8ad282f55567d5310a64da7c1b8b9",
+    "skills": [
+      {
+        "name": "shared-required",
+        "description": "Use the shared system workflow.",
+        "kind": "system",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "content": "---\nname: shared-required\ndescription: Use the shared system workflow.\n---\n\nRequired for every agent.\n"
+          }
+        ]
+      },
+      {
+        "name": "shared-selected",
+        "description": "Use the shared optional workflow.",
+        "kind": "optional",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "content": "---\nname: shared-selected\ndescription: Use the shared optional workflow.\n---\n\nAssigned to this agent.\n"
+          }
+        ]
+      },
+      {
+        "name": "shared-unselected",
+        "description": "Use the shared optional workflow.",
+        "kind": "optional",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "content": "---\nname: shared-unselected\ndescription: Use the shared optional workflow.\n---\n\nNot assigned to this agent.\n"
+          }
+        ]
+      }
+    ]
+  },
+  "selectedOptional": [
+    "shared-selected"
+  ],
+  "canonicalUtf8": "{\"schema\":2,\"skills\":[{\"description\":\"Use the shared system workflow.\",\"files\":[{\"content\":\"---\\nname: shared-required\\ndescription: Use the shared system workflow.\\n---\\n\\nRequired for every agent.\\n\",\"path\":\"SKILL.md\"}],\"kind\":\"system\",\"name\":\"shared-required\"},{\"description\":\"Use the shared optional workflow.\",\"files\":[{\"content\":\"---\\nname: shared-selected\\ndescription: Use the shared optional workflow.\\n---\\n\\nAssigned to this agent.\\n\",\"path\":\"SKILL.md\"}],\"kind\":\"optional\",\"name\":\"shared-selected\"},{\"description\":\"Use the shared optional workflow.\",\"files\":[{\"content\":\"---\\nname: shared-unselected\\ndescription: Use the shared optional workflow.\\n---\\n\\nNot assigned to this agent.\\n\",\"path\":\"SKILL.md\"}],\"kind\":\"optional\",\"name\":\"shared-unselected\"}]}",
+  "current": {
+    "schema": 2,
+    "revision": 1,
+    "digest": "c3e764702c9f91a001000dbb9773e73037c8ad282f55567d5310a64da7c1b8b9",
+    "selectedOptional": [
+      "shared-selected"
+    ]
+  },
+  "expectedRelativeFiles": [
+    "release.json",
+    "system/shared-required/SKILL.md",
+    "optional/shared-selected/SKILL.md",
+    "optional/shared-unselected/SKILL.md"
+  ]
+}

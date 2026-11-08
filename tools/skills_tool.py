@@ -13,6 +13,7 @@ from contextlib import contextmanager, suppress
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Dict, List, Optional, Tuple
 
+from agent.skill_library import package_metadata, pin_library
 from hermes_constants import get_hermes_home
 from tools.registry import registry, tool_error
 from hermes_cli.config import cfg_get
@@ -60,7 +61,11 @@ def _skills_scan_signature(dirs_to_scan, disabled) -> tuple:
                     if entry.is_dir(follow_symlinks=False):
                         m = max(m, entry.stat(follow_symlinks=False).st_mtime)
         sig.append((str(d), m))
-    return (tuple(sig), frozenset(disabled), platform)
+    from agent.skill_library import current_library
+    state = current_library()
+    managed = (state.revision, state.digest, tuple(str(p) for root in dirs_to_scan
+               for p in _skill_utils.iter_skill_index_files(root, "SKILL.md"))) if state.status == "published" else None
+    return (tuple(sig), frozenset(disabled), platform, managed)
 
 
 HERMES_HOME = get_hermes_home()  # all skills live in ~/.hermes/skills/ (seeded from bundled)
@@ -237,6 +242,7 @@ def _skill_catalog(*, skip_disabled: bool = False, include_hidden: bool = False)
                     "name": frontmatter.get("name", skill_md.parent.name)[:MAX_NAME_LENGTH],
                     "description": _truncate_description(description),
                     "category": "agentsee" if tier == TIER_SYSTEM else _get_category_from_path(skill_md),
+                    **({"origin": managed["origin"]} if (managed := package_metadata(skill_md)) else {}),
                     "tier": tier, "root": scan_dir,
                     "path": skill_md, "visible": bool(skill_matches_platform(frontmatter)
                                                       and skill_matches_environment(frontmatter)
@@ -266,6 +272,7 @@ def _sort_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(skills, key=lambda s: (s.get("category") or "", s["name"]))
 
 
+@pin_library
 def skills_list(category: str | None = None, task_id: str | None = None) -> str:
     """Tier 1 listing: name + description (+ category) only; ``task_id`` is handler parity."""
     try:
@@ -365,11 +372,13 @@ def _collect_skill_candidates(name, local_category_name, all_dirs):
     recursive by dir / frontmatter name, legacy flat <name>.md), deduped by resolved path.
     Every copy is returned so the caller resolves them via ``agent.skill_utils.pick_skill_candidate``
     (cross-tier precedence; a same-tier tie of different skills is refused, never guessed)."""
-    from agent.skill_utils import get_system_skills_dir, is_system_skill_path, iter_skill_index_files
+    from agent.skill_utils import get_system_skills_dir, is_system_skill_path, is_visible_skill_path, iter_skill_index_files
     candidates: list[tuple[Optional[Path], Path]] = []
     seen_md: set = set()
 
     def _record(sd: Optional[Path], smd: Path) -> None:
+        if not is_visible_skill_path(smd):
+            return
         if smd.is_relative_to(get_system_skills_dir()) and not is_system_skill_path(smd):
             return
         key = smd
@@ -570,6 +579,7 @@ def _log_security_warnings(name: str, skill_md: Path, content: str, all_dirs, ac
         logger.warning("Skill security warning for '%s': %s", name, "; ".join(warnings))
 
 
+@pin_library
 def skill_view(
     name: str, file_path: str | None = None, task_id: str | None = None, preprocess: bool = True) -> str:
     """View a skill (SKILL.md) or a file within its directory, as JSON. ``name`` is a skill name

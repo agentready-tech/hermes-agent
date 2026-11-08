@@ -21,9 +21,10 @@ from hermes_constants import (
 
 from agent.model_metadata import CHARS_PER_TOKEN
 from agent.runtime_cwd import resolve_agent_cwd
+from agent.skill_library import library_scope, package_metadata
 from agent.skill_utils import (
     EXCLUDED_SKILL_DIRS, SKILL_SUPPORT_DIRS,
-    TIER_LOCAL, TIER_SYSTEM, extract_skill_conditions, extract_skill_description, get_disabled_skill_names, get_skill_search_roots,
+    TIER_LOCAL, TIER_SYSTEM, is_visible_skill_path, extract_skill_conditions, extract_skill_description, get_disabled_skill_names, get_skill_search_roots,
     iter_skill_index_files, parse_frontmatter, skill_matches_apps, skill_matches_environment,
     skill_matches_platform, skill_matches_platform_list,
 )
@@ -1260,6 +1261,8 @@ def _build_skills_manifest(skills_dir: Path) -> dict[str, list[int]]:
             path = os.path.join(root, filename)
             try:
                 if filename in files:
+                    if filename == "SKILL.md" and not is_visible_skill_path(Path(path)):
+                        continue
                     st = os.stat(path)
                     manifest[path[prefix_len:]] = list(file_signature(st))
             except OSError:
@@ -1404,13 +1407,13 @@ def build_skills_system_prompt(
     else:
         skills_dir = get_skills_dir()
     try:
-        # Every non-local root as (tier, dir) in the shared precedence order: trusted project dirs (cwd/trust
-        # are session-stable, so byte-stable), skills.create_dir, skills.external_dirs.
-        extra_roots = [(t, d) for t, d in get_skill_search_roots(skills_dir) if t != TIER_LOCAL]
-        if not skills_dir.exists() and not extra_roots:
-            return ""
-        return _build_skills_system_prompt_inner(
-            skills_dir, extra_roots, available_tools, available_toolsets, compact_categories)
+        with library_scope(skills_dir.parent) as managed:
+            # Every non-local root as (tier, dir) in the shared precedence order: trusted project dirs (cwd/trust
+            # are session-stable, so byte-stable), skills.create_dir, skills.external_dirs.
+            extra_roots = [(t, d) for t, d in get_skill_search_roots(skills_dir) if t != TIER_LOCAL]
+            result = "" if not skills_dir.exists() and not extra_roots else _build_skills_system_prompt_inner(
+                skills_dir, extra_roots, available_tools, available_toolsets, compact_categories)
+            return result or ("<available_skills>\n</available_skills>" if managed.status == "published" else "")
     finally:
         if _home_token is not None:
             reset_hermes_home_override(_home_token)
@@ -1443,6 +1446,10 @@ def _scan_extra_root(root: Path, skill_files, tier: int, log_fmt: str) -> list[t
             entry = _build_snapshot_entry(skill_file, root, frontmatter, desc)
             if tier == TIER_SYSTEM:
                 entry["category"] = "agentsee"
+            if managed := package_metadata(skill_file):
+                entry["description"] = f"[{managed['origin']} {managed['sha256'][:12]}] {desc}"
+                if managed["origin"] == "optional":
+                    entry["category"] = "library"
             rows.append(({**entry, "tier": tier, "root": root}, is_compatible))
         except Exception as e:
             logger.debug(log_fmt, skill_file, e)
