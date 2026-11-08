@@ -124,7 +124,7 @@ db.close()"
 # we map between them inline. The noarch + symlinks tarballs are
 # architecture-independent and reused as-is.
 #
-# We use `curl` instead of `ADD` for ALL three tarballs: `ADD` evaluates its
+# Default builds use `curl` instead of `ADD` for all three tarballs: `ADD` evaluates its
 # URL at parse time (no ARG / TARGETARCH substitution) and — critically for
 # CI reliability — cannot retry, so a single GitHub-release CDN blip fails
 # the whole 15-45 min build. curl -fsSL --retry 3 self-heals those blips,
@@ -135,12 +135,18 @@ ARG S6_OVERLAY_NOARCH_SHA256=b720f9d9340efc8bb07528b9743813c836e4b02f8693d90241f
 ARG S6_OVERLAY_X86_64_SHA256=a93f02882c6ed46b21e7adb5c0add86154f01236c93cd82c7d682722e8840563
 ARG S6_OVERLAY_AARCH64_SHA256=0952056ff913482163cc30e35b2e944b507ba1025d78f5becbb89367bf344581
 ARG S6_OVERLAY_SYMLINKS_SHA256=a60dc5235de3ecbcf874b9c1f18d73263ab99b289b9329aa950e8729c4789f0e
-RUN set -eu; \
+ARG S6_OVERLAY_USE_CACHE=0
+RUN --mount=type=bind,source=.agentsee-s6-cache,target=/run/agentsee-s6-cache,ro set -eu; \
     case "${TARGETARCH:-amd64}" in \
         amd64) s6_arch="x86_64"; s6_arch_sha="${S6_OVERLAY_X86_64_SHA256}" ;; \
         arm64) s6_arch="aarch64"; s6_arch_sha="${S6_OVERLAY_AARCH64_SHA256}" ;; \
         *) echo "Unsupported TARGETARCH=${TARGETARCH} for s6-overlay" >&2; exit 1 ;; \
     esac; \
+    if [ "${S6_OVERLAY_USE_CACHE}" = "1" ]; then \
+        cp /run/agentsee-s6-cache/s6-overlay-noarch.tar.xz /tmp/s6-overlay-noarch.tar.xz; \
+        cp /run/agentsee-s6-cache/s6-overlay-symlinks-noarch.tar.xz /tmp/s6-overlay-symlinks-noarch.tar.xz; \
+        cp "/run/agentsee-s6-cache/s6-overlay-${s6_arch}.tar.xz" /tmp/s6-overlay-arch.tar.xz; \
+    else \
     base="https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}"; \
     curl -fsSL --retry 3 -o /tmp/s6-overlay-noarch.tar.xz \
         "${base}/s6-overlay-noarch.tar.xz"; \
@@ -148,6 +154,7 @@ RUN set -eu; \
         "${base}/s6-overlay-symlinks-noarch.tar.xz"; \
     curl -fsSL --retry 3 -o /tmp/s6-overlay-arch.tar.xz \
         "${base}/s6-overlay-${s6_arch}.tar.xz"; \
+    fi; \
     { \
         printf '%s  %s\n' "${S6_OVERLAY_NOARCH_SHA256}" /tmp/s6-overlay-noarch.tar.xz; \
         printf '%s  %s\n' "${s6_arch_sha}" /tmp/s6-overlay-arch.tar.xz; \
@@ -362,7 +369,7 @@ RUN mkdir -p /tmp/hermes-runtime && chmod 0700 /tmp/hermes-runtime
 # node_modules + source (21s amd64 / 222s arm64 — #49113).  `a+rX,go-w`
 # gives the non-root hermes user read + traverse but no write; root retains
 # write so the build steps below don't need chmod u+w dances.
-COPY --link --chmod=a+rX,go-w . .
+COPY --exclude=.agentsee-s6-cache --link --chmod=a+rX,go-w . .
 
 # The shared assembler binds the prepared environment and frontend products.
 RUN /opt/hermes/.venv/bin/python -m docker.build_agent
