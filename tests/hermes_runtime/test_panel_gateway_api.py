@@ -15,6 +15,10 @@ async def _rpc_reply(socket, request_id):
 
 @pytest.mark.asyncio
 async def test_gateway_api_serves_panel_auth_screen_and_subscription_metadata(tmp_path, monkeypatch):
+    home = tmp_path / 'own-gateway'
+    assert home.resolve().parent == tmp_path.resolve()
+    home.mkdir()
+    monkeypatch.setenv('HERMES_HOME', str(home))
     from contextlib import asynccontextmanager
     from gateway.config import GatewayConfig
     from gateway.run import GatewayRunner
@@ -28,7 +32,7 @@ async def test_gateway_api_serves_panel_auth_screen_and_subscription_metadata(tm
     from tools.bot_desktop import runtime
     from websockets.asyncio.client import connect
 
-    home = get_hermes_home()
+    assert get_hermes_home().resolve() == home.resolve()
     (home / 'config.yaml').write_text(json.dumps({
         'gateway': {'standalone': True}, 'terminal': {'backend': 'local'},
         'autonomous': {'dashboard': {'enabled': False}},
@@ -39,11 +43,15 @@ async def test_gateway_api_serves_panel_auth_screen_and_subscription_metadata(tm
         pytest.fail('standalone dashboard lifespan was started')
         yield
 
-    from tools.bot_desktop import browser, lease
+    from tools.bot_desktop import browser_window as window, lease
     seen = []
-    monkeypatch.setattr(browser, 'open_google', lambda: seen.append(str(get_hermes_home())) or True)
+    monkeypatch.setattr(window,'open_google',lambda:seen.append(str(get_hermes_home())) or True)
+    monkeypatch.setattr(runtime,'start',lambda:None)
+    monkeypatch.setattr(window,'_request',lambda operation,target=None,viewport=None:target or
+        {'pid':123,'generation':'a'*64,'window':20,'geometry':{'width':390,'height':700}})
     async def screen_fixture(ws, info):
-        assert info['hermes_home'] == str(home)
+        assert info['hermes_home'] == str(home) and info['surface']=='browser-window'
+        assert 'window' not in info and 'pid' not in info
         from hermes_constants import hermes_home_key
         key = (hermes_home_key(home), info['viewer_id'])
         display._viewer_streams[key] = display._ViewerStreams(active=1)
@@ -75,22 +83,26 @@ async def test_gateway_api_serves_panel_auth_screen_and_subscription_metadata(tm
         target, options = await asyncio.to_thread(auth.rpc_connection)
         assert options['subprotocols'][0] == 'hermes-gateway-v1'
         async with connect(target, proxy=None, **options) as ws:
-            await ws.send(json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'display.observe', 'params': {}}))
-            result = await _rpc_reply(ws, 1)
-            assert 'error' not in result
-            screen_url = await asyncio.to_thread(auth.display_url, result['result']['ticket'])
-            async with connect(screen_url, proxy=None) as screen:
-                assert await screen.recv() == b'RFB fixture'
-                foreign = tmp_path / 'foreign-ambient'; foreign.mkdir()
-                with monkeypatch.context() as ambient:
-                    ambient.setenv('HERMES_HOME', str(foreign))
-                    await ws.send(json.dumps({'jsonrpc':'2.0','id':2,'method':'display.browser.google_login',
-                        'params':{'viewer_id':result['result']['viewer_id'],'expected_epoch':result['result']['lease']['epoch']}}))
-                    opened = await _rpc_reply(ws, 2)
-                assert 'error' not in opened, opened
-                assert opened['result']['opened'] and opened['result']['lease']['holder'] == 'human'
-                assert seen == [str(home)]
-                assert not (foreign / 'bot-desktop').exists()
+            await ws.send(json.dumps({'jsonrpc':'2.0','id':1,'method':'display.observe',
+                'params':{'surface':'google-login','viewport':{'width':390,'height':700}}}))
+            result=await _rpc_reply(ws,1)
+            assert 'error' not in result,result
+            assert set(result['result'])=={'surface','viewer_id','lease'}
+            assert result['result']['surface']=='browser-intent'
+            foreign=tmp_path/'foreign-ambient';foreign.mkdir()
+            with monkeypatch.context() as ambient:
+                ambient.setenv('HERMES_HOME',str(foreign))
+                await ws.send(json.dumps({'jsonrpc':'2.0','id':2,'method':'display.browser.google_login',
+                    'params':{'viewer_id':result['result']['viewer_id'],'expected_epoch':result['result']['lease']['epoch']}}))
+                opened=await _rpc_reply(ws,2)
+            assert 'error' not in opened,opened
+            assert opened['result']['opened'] and opened['result']['surface']=='browser-window'
+            assert opened['result']['lease']['holder']=='human' and seen==[str(home)]
+            assert not {'pid','window','generation','display','profile_key'}&opened['result'].keys()
+            assert not (foreign/'bot-desktop').exists()
+            screen_url=await asyncio.to_thread(auth.display_url,opened['result']['ticket'])
+            async with connect(screen_url,proxy=None) as screen:
+                assert await screen.recv()==b'RFB fixture'
         assert web_server.app.state.gateway_runner is runner
     finally:
         await runner.stop()

@@ -70,7 +70,7 @@ def enroll(home, origin, environment_id, token):
     return {"environment_id": environment_id, "panel": origin}
 
 
-def screen_request(raw, *, can_control=False, can_configure=False):
+def screen_request(raw, *, can_control=False, can_configure=False, browser_only=False):
     """Keep the machine connection screen-only even if a client bypasses Panel's UI."""
     message = json.loads(raw)
     if not isinstance(message, dict) or message.get("method") not in READ_METHODS | CONTROL_METHODS | {"display.browser.google_login"}:
@@ -78,6 +78,26 @@ def screen_request(raw, *, can_control=False, can_configure=False):
     params = message.get("params") or {}
     if not isinstance(params, dict):
         raise ValueError("Screen RPC params must be an object")
+    if browser_only and message["method"] not in {"display.status","display.observe","display.browser.google_login","display.lease.release"}:
+        raise ValueError("Only the own browser login surface is permitted")
+    if message["method"]=="display.observe":
+        surface=params.get("surface")
+        if surface not in (None,"desktop","google-login","browser-window"):
+            raise ValueError("Unknown display surface")
+        if browser_only and surface not in ("google-login","browser-window"):
+            raise ValueError("A Google login cannot expose the Desktop")
+        if surface in ("google-login","browser-window"):
+            if not can_control or not can_configure:raise ValueError("Browser login requires both permissions")
+            if surface=="google-login":
+                if set(params)-{"surface","viewport"}:raise ValueError("Invalid browser intent")
+                from tools.bot_desktop.browser_window import validate_viewport
+                validate_viewport(params.get("viewport"))
+            elif (set(params)!={"surface","viewer_id"} or not isinstance(params["viewer_id"],str)
+                    or not 1<=len(params["viewer_id"])<=128):raise ValueError("Invalid browser view")
+            return json.dumps(message)
+    if browser_only and message["method"]=="display.lease.release" and (
+            set(params)!={"viewer_id"} or not isinstance(params["viewer_id"],str)):
+        raise ValueError("An own viewer is required")
     if message["method"] == "display.browser.google_login":
         if (not can_control or not can_configure or set(params) != {"viewer_id", "expected_epoch"}
                 or not isinstance(params["viewer_id"], str) or not 1 <= len(params["viewer_id"]) <= 128
@@ -148,7 +168,8 @@ async def bridge(command, config, port, credential, auth, subscriptions=None, go
                         if not isinstance(frame, str) or len(frame) > 16384:
                             raise ValueError("Invalid screen RPC frame")
                         frame = screen_request(frame, can_control=command.get("canControl") is True,
-                                               can_configure=command.get("canConfigure") is True and command.get("googleLogin") is True)
+                                               can_configure=command.get("canConfigure") is True and command.get("googleLogin") is True,
+                                               browser_only=command.get("googleLogin") is True)
                     if kind == "chat" and inbound and isinstance(frame, str):
                         # A Telegram binding can appear after a browser-only viewer attached.
                         # Reconnect onto its owner before accepting another legacy write.
@@ -160,7 +181,10 @@ async def bridge(command, config, port, credential, auth, subscriptions=None, go
                     await destination.send(frame)
             except ConnectionClosed as error:
                 code = error.rcvd.code if error.rcvd else 1012
-                await destination.close(code=code if code in {1000, 1001, 4000, 4001, 4401} else 1012)
+                reason=error.rcvd.reason if error.rcvd else ""
+                reason=reason if (not inbound and kind=="rfb" and command.get("googleLogin") is True
+                    and code==4001 and reason in {"browser-window-target-changed","browser-window-geometry-changed"}) else ""
+                await destination.close(code=code if code in {1000,1001,4000,4001,4401} else 1012,reason=reason)
             else:
                 await destination.close(code=1000)
         tasks = [asyncio.create_task(pump(remote, native, True)), asyncio.create_task(pump(native, remote, False))]
@@ -203,11 +227,12 @@ async def connection(config, port, credential, auth, subscriptions=None, google_
         if google_auth is not None:
             try:
                 await asyncio.to_thread(google_auth.endpoint)
-                google_ready = True
+                from tools.bot_desktop.browser_window import available
+                google_ready = await asyncio.to_thread(available)
             except (OSError, ValueError):
                 pass  # No intent capability until the existing own gateway is ready.
         await control.send(json.dumps({"type": "hello", "capabilities": ["screen", "chat", *(["subscriptions"] if subscriptions else []),
-            *(["google-browser-login-v1"] if google_ready else [])]}))
+            *(["google-browser-window-v1"] if google_ready else [])]}))
         async def open_channel(command):
             try:
                 await bridge(command, config, port, credential, auth, subscriptions, google_auth)

@@ -146,12 +146,35 @@ def _foreign_viewer_id(rid, viewer_id: str):
                 data={"code": "viewer_mismatch"})
 
 
+def _browser_observe(rid, params):
+    from tools.bot_desktop import browser_window
+    surface=params.get("surface")
+    allowed={"surface","viewport"} if surface=="google-login" else {"surface","viewer_id"}
+    if set(params)-allowed:
+        return _err(rid,_DISPLAY_ERR,"Invalid browser window request",data={"code":"browser_window_invalid_request"})
+    try:
+        _install_lease_listener()
+        if surface=="google-login":
+            return _ok(rid,browser_window.prepare(_mint_viewer_id(""),params.get("viewport")))
+        viewer=params.get("viewer_id")
+        if not isinstance(viewer,str) or (refused:=_foreign_viewer_id(rid,viewer)) is not None:
+            return refused if isinstance(viewer,str) else _err(rid,_DISPLAY_ERR,"viewer_id required")
+        return _ok(rid,browser_window.resume(viewer))
+    except browser_window.WindowUnavailable as error:
+        return _err(rid,_DISPLAY_ERR,"Окно Chrome недоступно. Повторный вход не запущен.",data={"code":str(error)})
+
+
 @method("display.observe")
 @_profile_scoped
 def _(rid, params: dict) -> dict:
     """Mint a single-use, 30 s ticket for ``/api/display/ws``. The ticket carries the profile home so
     the bridge dials THIS profile's RFB socket, and a server-minted viewer id (returned to the caller,
     who passes it to ``display.lease.acquire`` / ``release``) so the lease can name the holder."""
+    surface=params.get("surface")
+    if surface in ("google-login","browser-window"):
+        return _browser_observe(rid,params)
+    if surface not in (None,"desktop"):
+        return _err(rid,_DISPLAY_ERR,"Unknown display surface",data={"code":"browser_window_invalid_request"})
     from hermes_constants import get_hermes_home
     from hermes_cli.dashboard_auth.ws_tickets import mint_ticket
     from tools.bot_desktop import runtime as _bd_runtime
@@ -254,6 +277,9 @@ def _(rid, params: dict) -> dict:
     if viewer_id is not None and not params.get("force") and (refused := _foreign_viewer_id(rid, viewer_id)) is not None:
         return refused
     # Same atomicity as display.stop: the "is a human holding?" decision happens inside the transition.
+    if viewer_id is not None:
+        from tools.bot_desktop.browser_window import restore
+        restore(viewer_id)
     lease = _bd_lease.release(viewer_id, unless_human=viewer_id is None and not params.get("force"))
     if viewer_id is None and lease.holder == _bd_lease.HUMAN:
         return _err(rid, _DISPLAY_ERR, "viewer_id required to release another viewer's lease (or pass force: true)",
@@ -265,12 +291,13 @@ def _(rid, params: dict) -> dict:
 @_profile_scoped
 def _(rid, params: dict) -> dict:
     from tools.bot_desktop.browser_login import BrowserLoginError, open_google
+    from tools.bot_desktop.browser_window import WindowUnavailable
     viewer_id = params.get("viewer_id")
     if not isinstance(viewer_id, str) or (refused := _foreign_viewer_id(rid, viewer_id)) is not None:
         return refused if isinstance(viewer_id, str) else _err(rid, _DISPLAY_ERR, "viewer_id required")
     try:
         return _ok(rid, open_google(viewer_id, params.get("expected_epoch")))
-    except BrowserLoginError as error:
+    except (BrowserLoginError,WindowUnavailable) as error:
         return _err(rid, _DISPLAY_ERR, "Не удалось открыть Google. Проверьте экран и управление; повторный вход не запущен.",
                     data={"code": str(error)})
     except (OSError, ValueError, RuntimeError):

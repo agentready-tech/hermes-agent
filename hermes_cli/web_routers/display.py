@@ -19,8 +19,9 @@ client frame, including expiry, so a stale holder cannot keep typing after contr
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -39,6 +40,7 @@ _CLOSE_DESKTOP_GONE = 4001
 _CLOSE_BAD_TICKET = 4401
 _CLOSE_NOT_ALLOWED = 4403
 _CLOSE_PROTOCOL = 1003
+_WINDOW_CHANGE_REASONS = {45:"browser-window-geometry-changed",46:"browser-window-target-changed"}
 _expiry_tasks: set[asyncio.Task] = set()
 # Viewer capabilities belong to one RPC transport; its latest RFB stream supersedes old
 # sockets in this single native API instance. The file lease remains control authority.
@@ -48,6 +50,7 @@ class _ViewerStreams:
     active: Optional[int] = None
     opened: int = 0
     opening: int = 0
+    lock: threading.Lock = field(default_factory=threading.Lock,repr=False)
 
 
 _viewer_streams: dict[tuple[str, str], _ViewerStreams] = {}
@@ -102,6 +105,13 @@ def _consume_display_ticket(ws: WebSocket) -> Optional[dict]:
         return None
     if info.get("provider") != "bot-desktop" or not info.get("hermes_home"):
         return None
+    surface=info.get("surface")
+    if surface not in (None,"desktop","browser-window"):
+        return None
+    if surface=="browser-window" and (type(info.get("lease_epoch")) is not int
+            or not isinstance(info.get("window_nonce"),str) or len(info["window_nonce"])!=48
+            or not isinstance(info.get("viewer_id"),str)):
+        return None
     return info
 
 
@@ -141,6 +151,10 @@ async def _open_rfb(profile_home: Path):
             return reader, writer, None
     finally:
         reset_hermes_home_override(token)
+    return await _relay_io(relay)
+
+
+async def _relay_io(relay):
     loop = asyncio.get_running_loop()
     reader = asyncio.StreamReader()
     await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), relay.stdout)
@@ -149,6 +163,41 @@ async def _open_rfb(profile_home: Path):
     w_transport, w_protocol = await loop.connect_write_pipe(lambda: asyncio.StreamReaderProtocol(asyncio.StreamReader()), relay.stdin)
     writer = asyncio.StreamWriter(w_transport, w_protocol, None, loop)
     return reader, writer, relay
+
+
+async def _finish_browser_view(info, commit):
+    from tui_gateway.server import _session_profile_runtime_scope
+    from tools.bot_desktop import browser_window
+    def finish():
+        with _session_profile_runtime_scope({"profile_home":info["hermes_home"]},hydrate_secrets=False):
+            browser_window.finish(info["viewer_id"],info["lease_epoch"],info["window_nonce"],commit=commit)
+    await asyncio.to_thread(finish)
+
+
+async def _open_browser_rfb(info):
+    from tools.bot_desktop import browser_window, lease
+    from tui_gateway.server import _session_profile_runtime_scope
+    def owned_open():
+        with _session_profile_runtime_scope({"profile_home":info["hermes_home"]},hydrate_secrets=False):
+            return browser_window.open_stream(info["viewer_id"],info["lease_epoch"],info["window_nonce"])
+    relay=None;writer=None
+    try:
+        relay,geometry=await asyncio.to_thread(owned_open)
+        reader,writer,_=await _relay_io(relay)
+        raw=await asyncio.wait_for(reader.readline(),timeout=15)
+        import json
+        ready=json.loads(raw) if len(raw)<=512 else {}
+        current=lease.get(info["hermes_home"])
+        if (ready!={"ok":True,"geometry":geometry} or current.holder!=lease.HUMAN
+                or current.viewer_id!=info["viewer_id"] or current.epoch!=info["lease_epoch"]):
+            raise OSError("browser_window_unavailable")
+        return reader,writer,relay
+    except BaseException as error:
+        if writer is not None:writer.close()
+        if relay is not None:relay.kill()
+        if isinstance(error,(ValueError,RuntimeError,TimeoutError)):
+            raise OSError("browser_window_unavailable") from None
+        raise
 
 
 async def _bridge(ws: WebSocket, info: dict) -> None:
@@ -163,35 +212,45 @@ async def _bridge(ws: WebSocket, info: dict) -> None:
     viewer_id = str(info.get("viewer_id") or info.get("user_id") or "viewer")
     stream_key = (profile_key, viewer_id)
     streams = _viewer_streams.setdefault(stream_key, _ViewerStreams())
-    streams.issued += 1
-    stream_token = streams.issued
-    streams.opening += 1
+    with streams.lock:
+        streams.issued += 1
+        stream_token = streams.issued
+        streams.opening += 1
 
     def _owns_stream() -> bool:
         return _viewer_streams.get(stream_key) is streams and streams.active == stream_token
 
+    def _commit_finish(action, *, failed=False):
+        with streams.lock:
+            current=_viewer_streams.get(stream_key) is streams and streams.issued==stream_token and not streams.opening
+            valid=current and (streams.active is None if failed else streams.active==stream_token)
+            return action() if valid else False
+
     def _forget_stream() -> None:
-        if _owns_stream():
-            streams.active = None
-        # Keep the successful-open high-water mark only while older opens are pending.
-        if streams.active is None and not streams.opening and _viewer_streams.get(stream_key) is streams:
-            _viewer_streams.pop(stream_key, None)
+        with streams.lock:
+            if _owns_stream():streams.active=None
+            if streams.active is None and not streams.opening and _viewer_streams.get(stream_key) is streams:
+                _viewer_streams.pop(stream_key,None)
 
     try:
-        reader, writer, relay = await _open_rfb(Path(profile_home))
+        reader, writer, relay = (await _open_browser_rfb(info) if info.get("surface")=="browser-window"
+                                 else await _open_rfb(Path(profile_home)))
     except OSError as exc:
-        streams.opening -= 1
+        with streams.lock:streams.opening -= 1
+        if info.get("surface")=="browser-window":await _finish_browser_view(info,lambda action:_commit_finish(action,failed=True))
         _forget_stream()
         _log.warning("display ws: cannot reach RFB endpoint for %s: %s", profile_home, exc)
-        await ws.close(code=_CLOSE_DESKTOP_GONE, reason="Bot Desktop is not running")
+        await ws.close(code=_CLOSE_DESKTOP_GONE, reason=("browser-window-unavailable"
+                       if info.get("surface")=="browser-window" else "Bot Desktop is not running"))
         return
     except BaseException:
-        streams.opening -= 1
+        with streams.lock:streams.opening -= 1
         _forget_stream()
         raise
-    streams.opening -= 1
-    if stream_token > streams.opened:
-        streams.opened, streams.active = stream_token, stream_token
+    with streams.lock:
+        streams.opening -= 1
+        if stream_token > streams.opened:
+            streams.opened, streams.active = stream_token, stream_token
 
     loop = asyncio.get_running_loop()
     evicted = asyncio.Event()
@@ -207,7 +266,8 @@ async def _bridge(ws: WebSocket, info: dict) -> None:
             return
         if lease is None:
             lease = _lease.get(profile_key=profile_home)
-        allowed["input"] = lease.holder == _lease.HUMAN and lease.viewer_id == viewer_id
+        allowed["input"] = (lease.holder == _lease.HUMAN and lease.viewer_id == viewer_id
+                            and (info.get("surface")!="browser-window" or lease.epoch==info["lease_epoch"]))
         if allowed["input"]:
             last_held_epoch["value"] = lease.epoch
 
@@ -222,6 +282,9 @@ async def _bridge(ws: WebSocket, info: dict) -> None:
             loop.call_soon_threadsafe(evicted.set)
             return
         loop.call_soon_threadsafe(_refresh_allowed, lease)
+        if info.get("surface")=="browser-window" and (lease.holder!=_lease.HUMAN
+                or lease.viewer_id!=viewer_id or lease.epoch!=info["lease_epoch"]):
+            loop.call_soon_threadsafe(evicted.set)
         if _should_evict(held, lease, viewer_id):
             loop.call_soon_threadsafe(evicted.set)
     unsubscribe = _lease.on_change(_on_lease)
@@ -229,6 +292,7 @@ async def _bridge(ws: WebSocket, info: dict) -> None:
     rfb_filter = RfbClientFilter(_may_send_input)
 
     viewer_closed = asyncio.Event()
+    view_change = {"value":False}
     activity_file = Path(profile_home) / "bot-desktop" / "activity"
     stamped = {"at": 0.0}
 
@@ -246,6 +310,13 @@ async def _bridge(ws: WebSocket, info: dict) -> None:
         while True:
             chunk = await reader.read(_READ_CHUNK)
             if not chunk:
+                if info.get("surface")=="browser-window" and relay is not None:
+                    import subprocess
+                    try:code=await asyncio.to_thread(relay.wait,timeout=2)
+                    except subprocess.TimeoutExpired:code=None
+                    reason=_WINDOW_CHANGE_REASONS.get(code,"browser-window-unavailable")
+                    view_change["value"]=code in _WINDOW_CHANGE_REASONS
+                    await ws.close(code=_CLOSE_DESKTOP_GONE,reason=reason)
                 return
             _stamp_activity()
             await ws.send_bytes(chunk)  # awaiting the send is the backpressure toward Xvnc
@@ -281,7 +352,8 @@ async def _bridge(ws: WebSocket, info: dict) -> None:
     async def renew_human_control() -> None:
         while _owns_stream():
             current = _lease.get(profile_home)
-            if current.holder == _lease.HUMAN and current.viewer_id == viewer_id:
+            if (current.holder == _lease.HUMAN and current.viewer_id == viewer_id
+                    and (info.get("surface")!="browser-window" or current.epoch==info["lease_epoch"])):
                 _lease.renew(viewer_id, expected_epoch=current.epoch, profile_key=profile_home)
                 _refresh_allowed(current)
             await asyncio.sleep(_lease.RENEW_INTERVAL_S)
@@ -312,8 +384,9 @@ async def _bridge(ws: WebSocket, info: dict) -> None:
         if epoch is None:
             epoch = last_held_epoch["value"]
         if epoch is not None and _owns_stream():
-            if viewer_closed.is_set():
-                _lease.release(viewer_id, profile_key=profile_home, expected_epoch=epoch)
+            if viewer_closed.is_set() and not view_change["value"]:
+                if info.get("surface")=="browser-window":await _finish_browser_view(info,_commit_finish)
+                else:_lease.release(viewer_id, profile_key=profile_home, expected_epoch=epoch)
             else:
                 # Give a dropped viewer a short reconnect grace. Expiration is persisted
                 # even if no later agent action reads the lease; restart uses its deadline.

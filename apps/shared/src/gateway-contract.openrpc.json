@@ -836,7 +836,7 @@
     },
     {
       "name": "display.browser.google_login",
-      "summary": "Explicit human Google sign-in: own live RFB, atomic lease comparison and fixed normal browser address.",
+      "summary": "Explicit own Chrome sign-in: bounded human intent, fixed address and qualified window-only ticket.",
       "params": [
         {
           "name": "params",
@@ -920,7 +920,7 @@
       "result": {
         "name": "result",
         "schema": {
-          "$ref": "#/components/schemas/DisplayObserveResult"
+          "$ref": "#/components/schemas/DisplayObserveWire"
         }
       }
     },
@@ -7701,6 +7701,49 @@
         "title": "BrowserControllerResultResult",
         "type": "object"
       },
+      "BrowserGeometry": {
+        "additionalProperties": false,
+        "properties": {
+          "width": {
+            "title": "Width",
+            "type": "integer"
+          },
+          "height": {
+            "title": "Height",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "width",
+          "height"
+        ],
+        "title": "BrowserGeometry",
+        "type": "object"
+      },
+      "BrowserIntentResult": {
+        "additionalProperties": false,
+        "properties": {
+          "surface": {
+            "const": "browser-intent",
+            "title": "Surface",
+            "type": "string"
+          },
+          "viewer_id": {
+            "title": "Viewer Id",
+            "type": "string"
+          },
+          "lease": {
+            "$ref": "#/components/schemas/DisplayLease"
+          }
+        },
+        "required": [
+          "surface",
+          "viewer_id",
+          "lease"
+        ],
+        "title": "BrowserIntentResult",
+        "type": "object"
+      },
       "BrowserManageParams": {
         "additionalProperties": false,
         "properties": {
@@ -7831,6 +7874,68 @@
           "level"
         ],
         "title": "BrowserProgressPayload",
+        "type": "object"
+      },
+      "BrowserViewport": {
+        "additionalProperties": false,
+        "properties": {
+          "width": {
+            "maximum": 4096,
+            "minimum": 240,
+            "title": "Width",
+            "type": "integer"
+          },
+          "height": {
+            "maximum": 4096,
+            "minimum": 240,
+            "title": "Height",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "width",
+          "height"
+        ],
+        "title": "BrowserViewport",
+        "type": "object"
+      },
+      "BrowserWindowResult": {
+        "additionalProperties": false,
+        "properties": {
+          "surface": {
+            "const": "browser-window",
+            "title": "Surface",
+            "type": "string"
+          },
+          "viewer_id": {
+            "title": "Viewer Id",
+            "type": "string"
+          },
+          "ticket": {
+            "title": "Ticket",
+            "type": "string"
+          },
+          "path": {
+            "const": "/api/display/ws",
+            "title": "Path",
+            "type": "string"
+          },
+          "geometry": {
+            "$ref": "#/components/schemas/BrowserGeometry"
+          },
+          "lease": {
+            "$ref": "#/components/schemas/DisplayLease"
+          }
+        },
+        "required": [
+          "surface",
+          "viewer_id",
+          "ticket",
+          "path",
+          "geometry",
+          "lease"
+        ],
+        "title": "BrowserWindowResult",
         "type": "object"
       },
       "CanonicalApprovalParams": {
@@ -16506,17 +16611,43 @@
       "DisplayGoogleLoginResult": {
         "additionalProperties": false,
         "properties": {
-          "opened": {
-            "title": "Opened",
-            "type": "boolean"
+          "surface": {
+            "const": "browser-window",
+            "title": "Surface",
+            "type": "string"
+          },
+          "viewer_id": {
+            "title": "Viewer Id",
+            "type": "string"
+          },
+          "ticket": {
+            "title": "Ticket",
+            "type": "string"
+          },
+          "path": {
+            "const": "/api/display/ws",
+            "title": "Path",
+            "type": "string"
+          },
+          "geometry": {
+            "$ref": "#/components/schemas/BrowserGeometry"
           },
           "lease": {
             "$ref": "#/components/schemas/DisplayLease"
+          },
+          "opened": {
+            "title": "Opened",
+            "type": "boolean"
           }
         },
         "required": [
-          "opened",
-          "lease"
+          "surface",
+          "viewer_id",
+          "ticket",
+          "path",
+          "geometry",
+          "lease",
+          "opened"
         ],
         "title": "DisplayGoogleLoginResult",
         "type": "object"
@@ -16811,6 +16942,34 @@
             "default": null,
             "title": "Profile"
           },
+          "surface": {
+            "anyOf": [
+              {
+                "enum": [
+                  "desktop",
+                  "google-login",
+                  "browser-window"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Surface"
+          },
+          "viewport": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BrowserViewport"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "viewer_id": {
             "anyOf": [
               {
@@ -17004,6 +17163,20 @@
         ],
         "title": "DisplayObserveResult",
         "type": "object"
+      },
+      "DisplayObserveWire": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/DisplayObserveResult"
+          },
+          {
+            "$ref": "#/components/schemas/BrowserIntentResult"
+          },
+          {
+            "$ref": "#/components/schemas/BrowserWindowResult"
+          }
+        ],
+        "title": "DisplayObserveWire"
       },
       "DisplayStatus": {
         "additionalProperties": false,

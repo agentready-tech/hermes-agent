@@ -9,7 +9,9 @@ in-flight result was produced under a lease that has since changed.
 
 from __future__ import annotations
 
-from pydantic import StrictInt
+from typing import Literal
+
+from pydantic import StrictInt, Field, RootModel
 
 from .base import Params, Payload, Result, WireEnum
 from .common import ProfileParams
@@ -101,7 +103,14 @@ method("display.stop", params=DisplayStopParams, result=DisplayStopResult,
        doc="Stop the screen. Refused (5300, code viewer_mismatch) while a human holds unless force.")
 
 
+class BrowserViewport(Params):
+    width: StrictInt = Field(ge=240,le=4096)
+    height: StrictInt = Field(ge=240,le=4096)
+
+
 class DisplayObserveParams(ProfileParams):
+    surface: Literal["desktop","google-login","browser-window"] | None = None
+    viewport: BrowserViewport | None = None
     viewer_id: str | None = None  # an id THIS connection minted earlier keeps its identity across a reconnect
 
 
@@ -111,7 +120,31 @@ class DisplayObserveResult(DisplayStatus):
     viewer_id: str
 
 
-method("display.observe", params=DisplayObserveParams, result=DisplayObserveResult,
+class BrowserIntentResult(Result):
+    surface: Literal["browser-intent"]
+    viewer_id: str
+    lease: DisplayLease
+
+
+class BrowserGeometry(Result):
+    width: StrictInt
+    height: StrictInt
+
+
+class BrowserWindowResult(Result):
+    surface: Literal["browser-window"]
+    viewer_id: str
+    ticket: str
+    path: Literal["/api/display/ws"]
+    geometry: BrowserGeometry
+    lease: DisplayLease
+
+
+class DisplayObserveWire(RootModel[DisplayObserveResult | BrowserIntentResult | BrowserWindowResult]):
+    pass
+
+
+method("display.observe", params=DisplayObserveParams, result=DisplayObserveWire,
        doc="Mint a single-use ticket for /api/display/ws and the server-minted viewer id for this connection.")
 
 
@@ -212,10 +245,9 @@ class DisplayGoogleLoginParams(Params):
     expected_epoch: StrictInt
 
 
-class DisplayGoogleLoginResult(Result):
+class DisplayGoogleLoginResult(BrowserWindowResult):
     opened: bool
-    lease: DisplayLease
 
 
 method("display.browser.google_login", params=DisplayGoogleLoginParams, result=DisplayGoogleLoginResult,
-       doc="Explicit human Google sign-in: own live RFB, atomic lease comparison and fixed normal browser address.")
+       doc="Explicit own Chrome sign-in: bounded human intent, fixed address and qualified window-only ticket.")

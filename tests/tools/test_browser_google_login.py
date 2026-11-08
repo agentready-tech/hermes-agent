@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from tools.bot_desktop import browser, browser_launch, browser_login, lease, runtime
+from tools.bot_desktop import browser, browser_launch, browser_login, browser_window as window, lease, runtime
 from hermes_cli.web_routers import display
 from hermes_constants import hermes_home_key
 
@@ -21,7 +21,14 @@ def own(tmp_path, monkeypatch):
     lease._reset_for_tests()
     token = display._ViewerStreams(active=1, issued=1, opened=1)
     display._viewer_streams[(hermes_home_key(), "synthetic-viewer")] = token
-    monkeypatch.setattr(browser, "open_google", Mock(return_value=True))
+    opener=Mock(return_value=True)
+    monkeypatch.setattr(browser,"open_google",opener);monkeypatch.setattr(window,"open_google",opener)
+    monkeypatch.setattr(runtime,"start",Mock())
+    monkeypatch.setattr(browser_login,"_schedule_intent",Mock())
+    monkeypatch.setattr(browser_login,"_rpc_live",lambda:True)
+    monkeypatch.setattr(window,"_request",lambda operation,target=None,viewport=None: target or
+        {"pid":123,"generation":"a"*64,"window":20,"geometry":{"width":390,"height":700}})
+    window.prepare("synthetic-viewer")
     yield tmp_path
     display._viewer_streams.clear()
     lease._reset_for_tests()
@@ -31,8 +38,9 @@ def test_fixed_action_is_atomic_and_idempotent_per_human_lease_without_raw_capab
     first = browser_login.open_google("synthetic-viewer", 0)
     assert first["opened"] and first["lease"]["holder"] == "human"
     assert first["lease"]["viewer_id"] is None and "expires_at" not in first["lease"]
-    assert browser_login.open_google("synthetic-viewer", 0) == first
-    assert browser_login.open_google("synthetic-viewer", first["lease"]["epoch"]) == first
+    second=browser_login.open_google("synthetic-viewer",0)
+    assert {k:v for k,v in second.items() if k!="ticket"}=={k:v for k,v in first.items() if k!="ticket"}
+    assert browser_login.open_google("synthetic-viewer",first["lease"]["epoch"])["opened"]
     browser.open_google.assert_called_once()
     raw = (own / "bot-desktop/google-login.json").read_text()
     assert "synthetic-viewer" not in raw and hashlib.sha256(b"synthetic-viewer").hexdigest() in raw
@@ -49,15 +57,13 @@ def test_active_foreign_human_and_stale_epoch_refuse_without_eviction_or_browser
     browser.open_google.assert_not_called()
 
 
-def test_no_rfb_or_replaced_generation_refuses_before_native_launch(own, monkeypatch):
+def test_no_rfb_is_required_for_explicit_intent_and_resume_does_not_navigate(own,monkeypatch):
     display._viewer_streams.clear()
-    with pytest.raises(browser_login.BrowserLoginError, match="screen_not_connected"):
-        browser_login.open_google("synthetic-viewer", 0)
-    assert lease.get().holder == lease.AGENT
-    monkeypatch.setattr(display, "connected_viewer_generation", Mock(side_effect=[1, 2]))
-    with pytest.raises(browser_login.BrowserLoginError, match="control_changed"):
-        browser_login.open_google("synthetic-viewer", 0)
-    browser.open_google.assert_not_called()
+    first=browser_login.open_google("synthetic-viewer",0)
+    assert first["opened"] and first["surface"]=="browser-window"
+    resumed=window.resume("synthetic-viewer")
+    assert resumed["surface"]=="browser-window" and "opened" not in resumed
+    window.open_google.assert_called_once()
 
 
 def test_ambiguous_launch_failure_is_not_blindly_retried_and_existing_profile_survives(own):
@@ -87,7 +93,7 @@ def test_native_rpc_requires_connection_minted_viewer_and_closed_schema(own, mon
     monkeypatch.setattr(runtime, "rfb_socket_path", lambda: own / "rfb.sock")
     def call(method, params):
         return server.handle_request({"jsonrpc": "2.0", "id": 8, "method": method, "params": params})
-    mine = call("display.observe", {})["result"]["viewer_id"]
+    mine = call("display.observe", {"surface":"google-login"})["result"]["viewer_id"]
     display._viewer_streams[(hermes_home_key(), mine)] = display._ViewerStreams(active=1)
     for params in ({"viewer_id": "synthetic-viewer", "expected_epoch": 0},
                    {"viewer_id": mine, "expected_epoch": 0, "url": "https://invalid.invalid"},
@@ -195,12 +201,13 @@ def test_native_rpc_does_not_expose_private_filesystem_failure(own, monkeypatch)
     import utils
     monkeypatch.setattr(runtime,"rfb_socket_path",lambda:own/'rfb.sock')
     def call(method,params):return server.handle_request({'jsonrpc':'2.0','id':9,'method':method,'params':params})
-    viewer=call('display.observe',{})['result']['viewer_id']
+    viewer=call('display.observe',{'surface':'google-login'})['result']['viewer_id']
     display._viewer_streams[(hermes_home_key(),viewer)]=display._ViewerStreams(active=1)
     monkeypatch.setattr(utils,'atomic_write_text',Mock(side_effect=OSError('synthetic private path must not cross RPC')))
     reply=call('display.browser.google_login',{'viewer_id':viewer,'expected_epoch':0})
     assert reply['error']['data']['code']=='browser_login_unavailable'
     assert 'synthetic private' not in json.dumps(reply)
+    assert lease.get().holder==lease.AGENT
     browser.open_google.assert_not_called()
 
 

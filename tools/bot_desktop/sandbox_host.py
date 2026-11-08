@@ -211,7 +211,7 @@ def ensure_browser_cdp_port(env: Any, *, exclude_session: Optional[str] = None) 
     return browser_instance.admitted_port(value if isinstance(value, dict) else {})
 
 
-def open_google(env: Any) -> bool:
+def open_google(env: Any, *, launch_helper: Optional[str] = None) -> bool:
     """Use the existing owned sandbox launcher, executable, pressure gate and persistent profile."""
     from tools.bot_desktop import browser, browser_instance, runtime
     from tools.bot_desktop.browser_memory_guard import before_tool, executable as guarded_executable
@@ -221,9 +221,18 @@ def open_google(env: Any) -> bool:
     before_tool(env)
     argv = browser.dock_argv(guarded_executable(env, exe), browser_profile_dir(env),
                             sandbox_bypass=chromium_sandbox_bypass(env))
-    result = streams.run_in(env, ['python3', browser_launch_path(env)],
+    if launch_helper is not None:
+        from tools.bot_desktop.browser_window import isolated_command, desktop_environment, _HELPER_ROOT
+        if launch_helper != _HELPER_ROOT+'/browser_launch.py':
+            raise RuntimeError('The own immutable browser launcher is unavailable')
+        command = isolated_command('browser_launch',desktop_environment(env))
+        child = {}
+    else:
+        command = ['python3', browser_launch_path(env)]
+        child = runtime.published_env()
+    result = streams.run_in(env, command,
         stdin=json.dumps({'argv': argv, 'open_google': True}).encode(),
-        child_env=runtime.published_env(), user=_user_for(env), timeout=30)
+        child_env=child, user=_user_for(env), timeout=30)
     value = json.loads(result.stdout) if result.returncode == 0 else {}
     return value.get('opened') is True
 

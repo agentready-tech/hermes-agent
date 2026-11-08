@@ -46,8 +46,9 @@ class RfbClientFilter:
     key or pointer event.
     """
 
-    def __init__(self, allow_input: Callable[[], bool]) -> None:
+    def __init__(self, allow_input: Callable[[], bool], *, input_handler: Callable[[bytes], None] | None = None) -> None:
         self._allow_input = allow_input
+        self._input_handler = input_handler
         self._buf = bytearray()
         self._handshake_left = 12 + 1 + 1  # version + security type + ClientInit(shared flag)
 
@@ -73,8 +74,12 @@ class RfbClientFilter:
                 break
             msg = bytes(self._buf[:length])
             del self._buf[:length]
-            if msg[0] in _INPUT_TYPES and not self._allow_input():
-                continue
+            if msg[0] in _INPUT_TYPES:
+                if not self._allow_input():
+                    continue
+                if self._input_handler is not None:
+                    self._input_handler(msg)
+                    continue
             out += msg
         return bytes(out)
 

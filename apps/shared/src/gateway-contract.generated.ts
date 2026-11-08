@@ -1386,8 +1386,15 @@ export interface DisplayStopResult {
 }
 export interface DisplayObserveParams {
   profile?: string | null
+  surface?: 'desktop' | 'google-login' | 'browser-window' | null
+  viewport?: BrowserViewport | null
   viewer_id?: string | null
 }
+export interface BrowserViewport {
+  width: number
+  height: number
+}
+export type DisplayObserveWire = DisplayObserveResult | BrowserIntentResult | BrowserWindowResult
 export interface DisplayObserveResult {
   profile: string
   supported: boolean
@@ -1410,6 +1417,23 @@ export interface DisplayObserveResult {
   ticket: string
   path: string
   viewer_id: string
+}
+export interface BrowserIntentResult {
+  surface: 'browser-intent'
+  viewer_id: string
+  lease: DisplayLease
+}
+export interface BrowserWindowResult {
+  surface: 'browser-window'
+  viewer_id: string
+  ticket: string
+  path: '/api/display/ws'
+  geometry: BrowserGeometry
+  lease: DisplayLease
+}
+export interface BrowserGeometry {
+  width: number
+  height: number
 }
 export interface DisplaySwitchSandboxImageParams {
   profile?: string | null
@@ -1459,8 +1483,13 @@ export interface DisplayGoogleLoginParams {
   expected_epoch: number
 }
 export interface DisplayGoogleLoginResult {
-  opened: boolean
+  surface: 'browser-window'
+  viewer_id: string
+  ticket: string
+  path: '/api/display/ws'
+  geometry: BrowserGeometry
   lease: DisplayLease
+  opened: boolean
 }
 export interface GroupsCapabilitiesParams {
   profile?: string | null
@@ -5973,7 +6002,7 @@ export interface RpcMethods {
   'delegation.status': { params: ProfileParams; result: DelegationStatusResult }
   /** Upload a force-redacted debug bundle to Nous-internal diagnostics storage. */
   'diagnostics.share_nous': { params: DiagnosticsShareNousParams; result: DiagnosticsShareNousResult }
-  /** Explicit human Google sign-in: own live RFB, atomic lease comparison and fixed normal browser address. */
+  /** Explicit own Chrome sign-in: bounded human intent, fixed address and qualified window-only ticket. */
   'display.browser.google_login': { params: DisplayGoogleLoginParams; result: DisplayGoogleLoginResult }
   /** Run the distro package install on the gateway host; progress streams as display.install.log/.done. */
   'display.install': { params: ProfileParams; result: DisplayInstallResult }
@@ -5982,7 +6011,7 @@ export interface RpcMethods {
   /** Hand back. Without a viewer id the release is refused while a human holds unless force. */
   'display.lease.release': { params: DisplayLeaseReleaseParams; result: DisplayLeaseResult }
   /** Mint a single-use ticket for /api/display/ws and the server-minted viewer id for this connection. */
-  'display.observe': { params: DisplayObserveParams; result: DisplayObserveResult }
+  'display.observe': { params: DisplayObserveParams; result: DisplayObserveWire }
   /** Start this profile's Xvnc + Xfce (idempotent); blocks until the display is published. */
   'display.start': { params: ProfileParams; result: DisplayStatus }
   /** Runtime + lease snapshot for this profile's screen. */
