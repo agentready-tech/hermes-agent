@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.8.4",
+  "defaultRuntimeVersion": "2026.11.8.6",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -1529,6 +1529,107 @@
         "userAcceptancePerformed": false
       },
       "description": "Own Chrome-window-only Google sign-in through Panel. Real isolated Chrome window, input, singleton forwarding and ownership fixtures passed. Actual Google account sign-in and production functional acceptance were not exercised."
+    },
+    "2026.11.8.6": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:899294ed056f0edef2880660276719191be2667822625177b9581727dd0bba44",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.8.6",
+      "configDigest": "sha256:ea6cf1dad21c92f5097876d74f17c9ac9e8c278bda358184d373cede13390656",
+      "platform": "linux/amd64",
+      "sourceRevision": "b547e64c7dab007166e467b696935fede46c109b",
+      "runtimePolicy": "common",
+      "publisherRecipe": {
+        "localScriptSha256": "e7c4478c330f2cb5070d83cc175b3dce1322a50f8c8fcd97de02db42bfd01130",
+        "recipeGitRevision": "b547e64c7dab007166e467b696935fede46c109b"
+      },
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:899294ed056f0edef2880660276719191be2667822625177b9581727dd0bba44",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.8.6",
+        "digest": "sha256:899294ed056f0edef2880660276719191be2667822625177b9581727dd0bba44",
+        "configDigest": "sha256:ea6cf1dad21c92f5097876d74f17c9ac9e8c278bda358184d373cede13390656",
+        "sourceRevision": "b547e64c7dab007166e467b696935fede46c109b",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "common",
+        "fullSourceBuild": true,
+        "sourceProof": {
+          "sourceRevision": "b547e64c7dab007166e467b696935fede46c109b",
+          "trackedPythonFiles": 2568,
+          "verifiedPythonFiles": 2605,
+          "unexpectedPythonFiles": 0,
+          "cleanSourceVerified": true
+        },
+        "productionTestsPerformed": false,
+        "userAcceptancePerformed": false,
+        "ordinaryRolloutReadiness": true,
+        "registrySourceLabelsVerified": true,
+        "dashboardDisabledForManagedAgents": true,
+        "oneWorkingTabPerExecutorInstruction": true,
+        "closeIdleUserTabs": true,
+        "browserMemoryWatchdogIncluded": true,
+        "watchdogLocation": "sandbox-image",
+        "watchdogThresholdMiB": 2048,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "imagePullPolicy": "IfNotPresent",
+        "noMacImageDownload": true,
+        "noNewBackupCopies": true,
+        "buildRecipe": "Dockerfile + Dockerfile.agentready",
+        "oldPublicRetirementPending": false,
+        "oldPublicPackageRetired": true,
+        "publicPackageRetirement": {
+          "packageId": 16640069,
+          "workflowRunId": 42381326562,
+          "proofSha256": "432827c0bfba23d89e6d463ee68c44d9238d0a59058c6176f0db376ee89a2eb3",
+          "api404": true
+        },
+        "browserProfileLaunchAdmissionFixed": true,
+        "idleUserTabCleanupFixed": true,
+        "loginCompatibleSharedBrowserDefault": true,
+        "commonDockAndAgentLauncher": true,
+        "googleLoginUserAcceptancePerformed": false,
+        "nativeHumanLeaseAutoReturnInstalled": true,
+        "realHumanDesktopAcceptanceTested": false,
+        "productionFunctionalTests": false,
+        "nativeGoogleBrowserLoginActionInstalled": true,
+        "realGoogleAcceptanceTested": false,
+        "ownGatewayGoogleLoginFixtureVerified": true,
+        "atMostOnceGoogleLaunchReceiptFixtureVerified": true,
+        "nativeGoogleBrowserWindowInstalled": true,
+        "standaloneDesktopNotUsedForGoogleLogin": true,
+        "realIsolatedChromeWindowFixtureVerified": true,
+        "browserWindowQualificationProofSha256": "811d82b10b2a5495c7e2c3209839566e7c1ef37dfda55025072266ef091f62e7",
+        "verifiedExistingBrowserCdpRecoveryInstalled": true,
+        "sourceTag": "agentsee-v2026.11.8.6",
+        "buildProvenance": {
+          "method": "local",
+          "scriptSha256": "e7c4478c330f2cb5070d83cc175b3dce1322a50f8c8fcd97de02db42bfd01130",
+          "recipeGitRevision": "b547e64c7dab007166e467b696935fede46c109b",
+          "sourceCleanGit": true,
+          "targetPlatform": "linux/amd64",
+          "dockerCapabilityProofSha256": "7b4b4527d275bdcb189cbebcab719efd833c709e5d823a3a71e63caedfa276f6",
+          "recordedDockerServerArchitecture": "arm64",
+          "amd64EmulationRecorded": true
+        },
+        "localBuildVerified": true,
+        "canonicalCiSucceeded": false,
+        "actualFullPullPerformedInCI": false
+      },
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "validation": {
+        "canonicalCiSucceeded": false,
+        "localBuildVerified": true,
+        "privateRegistryFullPullVerified": true,
+        "ordinaryRolloutReadiness": true,
+        "realIsolatedChromeWindowFixtureVerified": true,
+        "nativeGoogleBrowserWindowInstalled": true,
+        "verifiedExistingBrowserCdpRecoveryInstalled": true,
+        "productionTestsPerformed": false,
+        "realGoogleAcceptanceTested": false,
+        "userAcceptancePerformed": false
+      },
+      "description": "Recover missing discovery only for a verified existing Chrome owner and its fixed debug port. Native and image-owned Sandbox helpers are source-matched. Persistent profile and Panel are preserved. The recovery operation reuses the verified browser generation; the at-idle Sandbox image upgrade may restart the Sandbox and browser. Actual provider and production functional acceptance were not exercised."
     }
   },
   "supersededRuntimeAttempts": {
