@@ -60,8 +60,10 @@ def _owner(profile, pid, generation=None):
     return owner, lock
 
 
-def _publish(profile, pid, port):
-    owner, lock = _owner(profile, pid)
+def _publish(profile, pid, port, *, expected_generation=None, expected_lock=None, missing_only=False):
+    owner, lock = _owner(profile, pid, expected_generation)
+    if expected_lock is not None and lock != expected_lock:
+        raise ValueError('Native browser profile lock changed')
     generation = instance._generation(owner)
     if not instance._owns_listener(owner, port, address='127.0.0.1'):
         raise ValueError('Native browser does not own CDP listener')
@@ -77,11 +79,27 @@ def _publish(profile, pid, port):
         if (_owner(profile, pid, generation)[1] != lock
                 or not instance._owns_listener(owner, port, address='127.0.0.1')):
             raise ValueError('Native browser generation changed before publication')
-        os.replace(temporary, profile / 'DevToolsActivePort')
+        if missing_only:
+            os.link(temporary, profile / 'DevToolsActivePort', follow_symlinks=False)
+        else:
+            os.replace(temporary, profile / 'DevToolsActivePort')
     finally:
         Path(temporary).unlink(missing_ok=True)
     # The same read-only admission guard remains authoritative after publication.
     return instance.inspect_profile(profile)
+
+
+def _recover_existing_cdp(profile):
+    """Republish only a verified live owner's declared fixed loopback CDP listener."""
+    lock = instance._lock(profile)
+    if lock is None:
+        return None
+    owner, lock = _owner(profile, lock['pid'])
+    value = instance._flag(owner['argv'], '--remote-debugging-port')
+    if not isinstance(value, str) or not re.fullmatch(r'[0-9]+', value) or not 0 < int(value) < 65536:
+        return None
+    return _publish(profile, owner['pid'], int(value), expected_generation=instance._generation(owner),
+                    expected_lock=lock, missing_only=True)
 
 
 def _wait_ready(profile, process, port, timeout):
@@ -149,6 +167,13 @@ def ensure(argv, *, exclude_session=None, timeout=15, open_google=False):
         # Human singleton forwarding needs a verified owner, not its agent-only CDP endpoint.
         if open_google and result['state'] in ('attachable', 'owned', 'blocked'):
             return _forward_google(argv, profile)
+        if result['state'] == 'blocked' and not os.path.lexists(profile / 'DevToolsActivePort'):
+            try:
+                recovered = _recover_existing_cdp(profile)
+                if recovered is not None and recovered.get('state') == 'attachable':
+                    result = recovered
+            except (OSError, ValueError, KeyError, IndexError, TypeError, http.client.HTTPException):
+                pass  # Failed proof preserves the original refusal; it never grants a new launch.
         instance.admitted_port(result)  # Agent attachment still refuses blocked/unknown owners.
         if result['state'] in ('attachable', 'owned'):
             return result
