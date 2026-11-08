@@ -12,6 +12,8 @@ from tools.bot_desktop import browser, browser_launch, browser_login, lease, run
 from hermes_cli.web_routers import display
 from hermes_constants import hermes_home_key
 
+pytest_plugins = ('tests.tools.browser_instance_fixture',)
+
 
 @pytest.fixture
 def own(tmp_path, monkeypatch):
@@ -119,7 +121,7 @@ def test_launcher_forwards_fixed_address_only_to_admitted_existing_owner(own, mo
     assert browser_launch.open_google(argv) == {"opened": True}
     assert forward.call_args.args[0] == [*argv, "--new-tab", "https://accounts.google.com/"]
     spawn.assert_not_called()
-    monkeypatch.setattr(browser_launch.instance, "inspect_profile", lambda *a, **k: {"state": "blocked"})
+    monkeypatch.setattr(browser_launch.instance, "inspect_profile", lambda *a, **k: {"state": "unknown"})
     with pytest.raises(browser_launch.instance.ProfileUnavailable): browser_launch.open_google(argv)
     assert forward.call_count == 1
 
@@ -200,3 +202,71 @@ def test_native_rpc_does_not_expose_private_filesystem_failure(own, monkeypatch)
     assert reply['error']['data']['code']=='browser_login_unavailable'
     assert 'synthetic private' not in json.dumps(reply)
     browser.open_google.assert_not_called()
+
+
+@pytest.mark.platforms('posix')
+def test_human_fixed_address_accepts_verified_live_owner_without_cdp_but_agent_still_refuses(tmp_path, monkeypatch, native_chrome):
+    from tools.bot_desktop import browser_instance
+    profile=tmp_path/'profile'
+    with native_chrome(profile,pipe=True):
+        saved=(profile/'SingletonLock').lstat()
+        assert browser_instance.inspect_profile(profile)=={'state':'blocked'}
+        forward=Mock(return_value=SimpleNamespace(returncode=0))
+        monkeypatch.setattr(browser_launch.subprocess,'run',forward)
+        spawn=Mock(side_effect=AssertionError('no second persistent browser'))
+        monkeypatch.setattr(browser_launch.subprocess,'Popen',spawn)
+        argv=['/synthetic/chrome','--user-data-dir='+str(profile)]
+        assert browser_launch.open_google(argv)=={'opened':True}
+        assert forward.call_args.args[0]==[*argv,'--new-tab','https://accounts.google.com/']
+        with pytest.raises(browser_instance.ProfileUnavailable):
+            browser_launch.ensure(argv)
+        assert forward.call_count==1 and (profile/'SingletonLock').lstat()==saved
+        spawn.assert_not_called()
+
+def _blocked_owner(monkeypatch):
+    monkeypatch.setattr(browser_launch, '_fence', lambda *a: contextlib.nullcontext())
+    monkeypatch.setattr(browser_launch.instance, 'inspect_profile', lambda *a, **k: {'state': 'blocked'})
+    monkeypatch.setattr(browser_launch.instance, '_lock', lambda *a: {'pid': 123})
+    monkeypatch.setattr(browser_launch.instance, '_generation', lambda *a: 'first-generation')
+    monkeypatch.setattr(browser_launch.subprocess, 'Popen', Mock(side_effect=AssertionError('no persistent browser launch')))
+
+
+def test_blocked_human_forward_rechecks_owner_before_launching_the_singleton_client(tmp_path, monkeypatch):
+    _blocked_owner(monkeypatch)
+    check = Mock(side_effect=ValueError('synthetic owner mismatch'))
+    monkeypatch.setattr(browser_launch, '_owner', check)
+    client = Mock(side_effect=AssertionError('unverified owner must not receive an address'))
+    monkeypatch.setattr(browser_launch.subprocess, 'run', client)
+    with pytest.raises(ValueError, match='owner mismatch'):
+        browser_launch.open_google(['/synthetic/chrome', '--user-data-dir='+str(tmp_path)])
+    check.assert_called_once_with(tmp_path, 123)
+    client.assert_not_called()
+
+
+def test_generation_change_during_forward_cannot_report_opened(tmp_path, monkeypatch):
+    _blocked_owner(monkeypatch)
+    check = Mock(side_effect=[({}, {'pid':123}), ValueError('synthetic generation changed')])
+    monkeypatch.setattr(browser_launch, '_owner', check)
+    client = Mock(return_value=SimpleNamespace(returncode=0))
+    monkeypatch.setattr(browser_launch.subprocess, 'run', client)
+    argv=['/synthetic/chrome','--user-data-dir='+str(tmp_path)]
+    with pytest.raises(ValueError, match='generation changed'):
+        browser_launch.open_google(argv)
+    client.assert_called_once()
+    assert client.call_args.args[0] == [*argv,'--new-tab','https://accounts.google.com/']
+    assert check.call_args_list[-1].args == (tmp_path,123,'first-generation')
+    browser_launch.subprocess.Popen.assert_not_called()
+
+
+def test_fixed_google_action_still_refuses_memory_pressure_before_seeding_or_forward(monkeypatch):
+    from tools.bot_desktop import browser_memory_guard, sandbox_host
+    from tools.environments import streams
+    monkeypatch.setattr(sandbox_host,'chromium_executable',lambda env:'/synthetic/chrome')
+    def pressure(env):
+        raise RuntimeError('BROWSER_MEMORY_PRESSURE')
+    monkeypatch.setattr(browser_memory_guard,'before_tool',pressure)
+    execute=Mock(side_effect=AssertionError('no executable after failed pressure gate'))
+    monkeypatch.setattr(streams,'run_in',execute)
+    with pytest.raises(RuntimeError,match='BROWSER_MEMORY_PRESSURE'):
+        sandbox_host.open_google(object())
+    execute.assert_not_called()

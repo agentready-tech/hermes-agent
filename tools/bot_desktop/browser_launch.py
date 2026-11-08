@@ -146,9 +146,12 @@ def ensure(argv, *, exclude_session=None, timeout=15, open_google=False):
     profile.mkdir(mode=0o700, parents=True, exist_ok=True)
     with _fence(profile, timeout):
         result = instance.inspect_profile(profile, exclude_session=exclude_session)
-        instance.admitted_port(result)  # blocked/unknown stay refusals, including live pipe siblings.
+        # Human singleton forwarding needs a verified owner, not its agent-only CDP endpoint.
+        if open_google and result['state'] in ('attachable', 'owned', 'blocked'):
+            return _forward_google(argv, profile)
+        instance.admitted_port(result)  # Agent attachment still refuses blocked/unknown owners.
         if result['state'] in ('attachable', 'owned'):
-            return _forward_google(argv, profile) if open_google else result
+            return result
         port = _positive_port()  # executed HERE, in the browser's user/network namespace.
         command = [*argv, '--remote-debugging-address=127.0.0.1', f'--remote-debugging-port={port}',
                    *(['https://accounts.google.com/'] if open_google else [])]
