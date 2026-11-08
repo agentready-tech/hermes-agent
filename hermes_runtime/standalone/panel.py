@@ -113,13 +113,13 @@ def screen_request(raw, *, can_control=False, can_configure=False, browser_only=
     return json.dumps(message)
 
 
-async def bridge(command, config, port, credential, auth, subscriptions=None, google_auth=None):
+async def bridge(command, config, port, credential, auth, subscriptions=None, google_auth=None, skills=None):
     from urllib.parse import urlencode
     from websockets.asyncio.client import connect
     from websockets.exceptions import ConnectionClosed, WebSocketException
 
     kind, identity = command.get("kind"), command.get("id")
-    if kind not in {"rpc", "rfb", "chat", "subscriptions"} or not isinstance(identity, str) or len(identity) > 100:
+    if kind not in {"rpc", "rfb", "chat", "subscriptions", "skills"} or not isinstance(identity, str) or len(identity) > 100:
         raise ValueError("Invalid Panel channel")
     if command.get("googleLogin") is True:
         if (kind not in {"rpc", "rfb"} or command.get("canControl") is not True
@@ -128,6 +128,12 @@ async def bridge(command, config, port, credential, auth, subscriptions=None, go
             raise ValueError("Own Google browser authority is unavailable")
         await asyncio.to_thread(google_auth.endpoint)
         auth = google_auth
+    if kind == "skills":
+        if skills is None or not await asyncio.to_thread(skills.available):
+            raise ValueError("Skills unavailable")
+        remote_url = socket_url(config["url"], config["environment_id"], "reverse", urlencode({"id": identity}))
+        await skills.bridge(remote_url, credential, can_read_system=command.get("canReadSystemSkills") is True)
+        return
     if kind == "subscriptions":
         if subscriptions is None:
             raise ValueError("Subscriptions unavailable")
@@ -215,7 +221,7 @@ async def bridge(command, config, port, credential, auth, subscriptions=None, go
             await remote.close(code=1012)
 
 
-async def connection(config, port, credential, auth, subscriptions=None, google_auth=None):
+async def connection(config, port, credential, auth, subscriptions=None, google_auth=None, skills=None):
     from websockets.asyncio.client import connect
     from websockets.exceptions import WebSocketException
     tasks = set()
@@ -232,10 +238,11 @@ async def connection(config, port, credential, auth, subscriptions=None, google_
             except (OSError, ValueError):
                 pass  # No intent capability until the existing own gateway is ready.
         await control.send(json.dumps({"type": "hello", "capabilities": ["screen", "chat", *(["subscriptions"] if subscriptions else []),
-            *(["google-browser-window-v1"] if google_ready else [])]}))
+            *(["google-browser-window-v1"] if google_ready else []),
+            *(["skills-library-read-v1"] if skills and await asyncio.to_thread(skills.available) else [])]}))
         async def open_channel(command):
             try:
-                await bridge(command, config, port, credential, auth, subscriptions, google_auth)
+                await bridge(command, config, port, credential, auth, subscriptions, google_auth, skills)
             except (OSError, ValueError, WebSocketException, TimeoutError):
                 # Native tickets and credentials may occur in exception URLs; never log them.
                 logger.warning("Panel screen channel ended; reconnect from the Panel if needed")
@@ -283,10 +290,12 @@ async def _worker(home):
     subscriptions = Subscriptions(home, auth)
     from hermes_runtime.standalone.panel_gateway_auth import GatewayPanelAuth
     google_auth = GatewayPanelAuth(home)
+    from hermes_runtime.standalone.panel_skills import SkillsRead
+    skills = SkillsRead(home, GatewayPanelAuth(home))
     delay = 1
     while True:
         try:
-            await connection(panel, config["port"], credential, auth, subscriptions, google_auth)
+            await connection(panel, config["port"], credential, auth, subscriptions, google_auth, skills)
             delay = 1
         except (OSError, ValueError):
             logger.warning("Panel unavailable; the agent and its desktop continue locally")

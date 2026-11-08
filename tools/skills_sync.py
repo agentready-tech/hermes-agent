@@ -176,7 +176,8 @@ def _discover_bundled_skills(bundled_dir: Path) -> list[tuple[str, Path]]:
     return [
         (_read_skill_name(md, md.parent.name), md.parent)
         for md in bundled_dir.rglob("SKILL.md")
-        if not is_excluded_skill_path(md.relative_to(bundled_dir), root=bundled_dir)]
+        if md.relative_to(bundled_dir).parts[0] != "agentsee"
+        and not is_excluded_skill_path(md.relative_to(bundled_dir), root=bundled_dir)]
 
 
 def _compute_relative_dest(skill_dir: Path, bundled_dir: Path) -> Path:

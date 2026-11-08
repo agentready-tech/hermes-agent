@@ -80,6 +80,40 @@ async def test_gateway_api_serves_panel_auth_screen_and_subscription_metadata(tm
         publish_gateway_runtime_ready(runner)
         auth = GatewayPanelAuth(home)
         assert await asyncio.to_thread(auth.authenticated_request, '/api/providers/oauth') == {'providers': []}
+        from hermes_runtime.standalone.panel_skills import SkillsRead
+        from hermes_runtime.skill_inventory import CAPABILITY
+        personal = home / 'skills' / 'own-example'
+        personal.mkdir(parents=True, exist_ok=True)
+        own_text = '---\nname: own-example\ndescription: Own workflow.\n---\nOWN_PROFILE_BODY\n'
+        (personal / 'SKILL.md').write_text(own_text)
+        foreign = tmp_path / 'skills-foreign-ambient'
+        foreign_skill = foreign / 'skills' / 'own-example'
+        foreign_skill.mkdir(parents=True)
+        (foreign_skill / 'SKILL.md').write_text(own_text.replace('OWN_PROFILE_BODY', 'FOREIGN_PROFILE_BODY'))
+        reader = SkillsRead(home, auth)
+        with monkeypatch.context() as foreign_context:
+            foreign_context.setenv('HERMES_HOME', str(foreign))
+            listed = await reader.handle('skills.library.list', {})
+            assert listed['capability'] == CAPABILITY
+            assert any(row['name'] == 'own-example' for row in listed['skills'])
+            detail = await reader.handle('skills.library.read', {'name': 'own-example'})
+            assert detail['content'] == own_text
+            assert 'FOREIGN_PROFILE_BODY' not in json.dumps(detail)
+            assert str(home) not in json.dumps(detail)
+        from urllib.error import HTTPError
+        for path in ('/api/skills/library/personal?home=other',
+                     '/api/skills/library/personal/content?name=own-example&filePath=secret',
+                     '/api/skills/library/personal/content?name=own-example&name=other'):
+            with pytest.raises(HTTPError) as denied:
+                await asyncio.to_thread(auth.authenticated_request, path)
+            assert denied.value.code == 400
+        with pytest.raises(HTTPError) as unsafe_name:
+            await asyncio.to_thread(auth.authenticated_request, '/api/skills/library/personal/content?name=../other')
+        assert unsafe_name.value.code == 400
+        system_rows = await reader.handle('skills.system.list', {}, can_read_system=True)
+        assert all(row['origin'] == 'system' for row in system_rows['skills'])
+        system_detail = await reader.handle('skills.system.read', {'name': 'agentsee-google-browser-login'}, can_read_system=True)
+        assert system_detail['skill']['origin'] == 'system' and 'Google Browser Login Skill' in system_detail['content']
         target, options = await asyncio.to_thread(auth.rpc_connection)
         assert options['subprotocols'][0] == 'hermes-gateway-v1'
         async with connect(target, proxy=None, **options) as ws:

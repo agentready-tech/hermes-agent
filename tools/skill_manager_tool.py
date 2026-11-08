@@ -381,6 +381,17 @@ def _resolve_supporting_file(skill_dir: Path, file_path: str):
     return (None, _err(err)) if err else (target, None)
 
 
+def _system_skill_write_error(name: str, path: Optional[Path] = None):
+    """Reject before batch snapshots/rollback as well as every direct write handler."""
+    from agent.skill_utils import get_system_skill_names, is_protected_system_skill_path
+    if name in get_system_skill_names() or (path is not None and is_protected_system_skill_path(path)):
+        return _err(f"Skill '{name}' is an image-owned AgentSee system skill and is read-only.")
+    existing = _find_skill(name) if isinstance(name, str) else None
+    if existing and is_protected_system_skill_path(existing["path"]):
+        return _err(f"Skill '{name}' is an image-owned AgentSee system skill and is read-only.")
+    return None
+
+
 def _locate_for_write(name: str, action: str, not_found_suffix: str = ""):
     """Find the skill; a delete also runs the background-review delete guard -> ``(skill_dir, None)``
     | ``(None, error_dict)``."""
@@ -388,6 +399,8 @@ def _locate_for_write(name: str, action: str, not_found_suffix: str = ""):
     if not existing:
         return None, _err(_skill_not_found_error(name, not_found_suffix))
     skill_dir = existing["path"]
+    if guard := _system_skill_write_error(name, skill_dir):
+        return None, guard
     guard = _background_review_delete_guard(name, skill_dir) if action == "delete" else None
     return (None, guard) if guard else (skill_dir, None)
 
@@ -396,6 +409,8 @@ def _guarded_write(name: str, skill_dir: Path, target: Path, action: str, label:
                    content: str) -> Optional[dict[str, Any]]:
     """Read-before-write guard (existing targets only), atomic write, then the security scan;
     a blocked scan restores the original (or unlinks a new file). Error dict or None."""
+    if guard := _system_skill_write_error(name, target):
+        return guard
     original = None
     if target.exists():
         if read_guard := _background_review_read_before_write_guard(name, target, action, label):
@@ -457,6 +472,8 @@ def _create_skill(name: str, content: str, category: str | None = None) -> dict[
     if existing := _find_skill(name):
         return _err(f"A skill named '{name}' already exists at {existing['path']}.")
     skill_dir = _resolve_skill_dir(name, category)
+    if guard := _system_skill_write_error(name, skill_dir):
+        return guard
     from hermes_constants import mkdir_under_hermes_home
     mkdir_under_hermes_home(skill_dir.parent)
     try:
@@ -772,6 +789,16 @@ def skill_manage(
     session_id: str | None = None, operations=None) -> str:
     """Dispatch to the action handler -> JSON string. ``operations`` (atomic batch shape,
     see _skill_manage_batch) overrides the flat fields."""
+    targets = [(name, action, category)] if operations is None else [
+        (op.get("name") or name, op.get("action"), op.get("category"))
+        for op in operations if isinstance(op, dict)] if isinstance(operations, list) else []
+    for target, target_action, target_category in targets:
+        if not isinstance(target, str):
+            continue
+        destination = (_resolve_skill_dir(target, target_category)
+                       if target_action == "create" and isinstance(target_category, (str, type(None))) else None)
+        if guard := _system_skill_write_error(target, destination):
+            return json.dumps(guard, ensure_ascii=False)
     if operations is not None:
         return _skill_manage_batch(
             operations, default_name=name or None, task_id=task_id, session_id=session_id)

@@ -1,5 +1,52 @@
 """Mandatory scheduling policy for the persistent main agent, independent of skill loading."""
 
+MAIN_DELEGATION_INSTRUCTIONS = (
+    "## Mandatory native delegation for the main conversation\n"
+    "These mandatory rules govern only the user-facing main coordinator, from the first user request, "
+    "including when resuming an existing conversation. A delegated worker, focused review fork, side agent, board "
+    "worker or finite cron run must execute its assigned scope under its own role and depth limits; "
+    "inheriting this text does not require recursively handing off that same assignment.\n"
+    "The main coordinator MUST use the existing delegate_task tool in these cases:\n"
+    "- Split independent user tasks or workstreams into native children and run them in parallel within "
+    "available capacity. Keep dependent steps ordered. Batching direct tool calls is not a substitute "
+    "for delegating independent tasks.\n"
+    "- When a new independent user task arrives while work is running, delegate the new task and retain "
+    "the original work. Route corrections, related follow-ups and scope changes to the existing child "
+    "using its returned ID and native message/steer controls; do not create a duplicate assignment. "
+    "Use send only to queue later input for that same saved child, not to answer a running child's current question.\n"
+    "- Put long-running work or waiting in a native persistent asynchronous child so the main remains "
+    "available for new requests. Use ordinary persistent delegation, not an ephemeral worker, for work "
+    "that needs continued coordination or recovery. These mandatory task-routing cases take precedence "
+    "over generic advice to perform mechanical work or a single tool call directly; the child can use "
+    "those tools within its assignment. Simple acknowledgements, clarification and status replies remain "
+    "in the main conversation.\n"
+    "Check existing children before spawning; reuse a suitable available child or the child owning related scope. "
+    "Do not queue independent new work behind an unrelated busy child. Pass the task, required "
+    "facts, boundaries and expected result. Respect native tool availability, capacity, permissions, "
+    "owner/profile scopes, child-depth rules and shared browser/desktop leases or human control. Never "
+    "raise limits or change permissions just to delegate. If dispatch is unavailable, paused, rejected "
+    "or at capacity, report the actual limitation and preserve the outstanding work; do not invent "
+    "workers or silently take the whole long task inline.\n"
+    "Confirm assignments only from actual tool receipts, with their IDs and running/pending status. "
+    "Dispatch is not completion. Track and read results, steer or stop through native controls, and "
+    "verify material claims before reporting success. When only children are still working, give an "
+    "honest pending status and yield control instead of blocking or polling when native durable delivery "
+    "is confirmed. Honor the runtime's existing delivery mode: a durable main uses native async completion "
+    "in this conversation; a finite caller retains its native join and must not promise background continuation. "
+    "A pending-status yield does not mean the user task is finished."
+)
+
+MAIN_GOOGLE_BROWSER_LOGIN_INSTRUCTIONS = (
+    "## Google account browser sign-in\n"
+    "For Google account browser sign-in, the main coordinator MUST first read skill_view(name='agentsee-google-browser-login'). "
+    "Use the common headed persistent profile and native browser/CUA described there. Use authorized protected "
+    "vault autofill as the skill describes; otherwise the human enters the password in the employee's "
+    "Panel Settings Google Chrome-window view. 2FA and challenges use that same native human handoff; "
+    "Готово closes the human connection and returns control. Browser sign-in is separate from "
+    "Google Workspace API grants."
+)
+
+
 MAIN_SCHEDULE_INSTRUCTIONS = (
     "## Main-session scheduling policy\n"
     "Reminders, recurring checks and scheduled agent work MUST target this persistent main conversation. "
@@ -51,8 +98,25 @@ MAIN_INTEGRATION_INSTRUCTIONS = (
 )
 
 
+def install_main_delegation_instructions(agent):
+    """Install the common coordinator policy once; keep assigned workers on their native roles."""
+    from agent.delegation_context import is_delegated_child_process_context, owned_kanban_task
+
+    if (is_delegated_child_process_context() or owned_kanban_task() or getattr(agent, "side_agent", False)
+            or getattr(agent, "platform", None) in {"cron", "subagent"}):
+        return False
+    existing = getattr(agent, "ephemeral_system_prompt", None) or ""
+    missing = [text for text in (MAIN_DELEGATION_INSTRUCTIONS, MAIN_GOOGLE_BROWSER_LOGIN_INSTRUCTIONS)
+               if text not in existing]
+    if not missing:
+        return False
+    agent.ephemeral_system_prompt = existing + ("\n\n" if existing else "") + "\n\n".join(missing)
+    return True
+
+
 def install_main_schedule_instructions(agent):
     """Use Hermes' existing immutable per-agent system suffix; never rewrite a saved prefix or transcript."""
+    install_main_delegation_instructions(agent)
     from agent.delegation_context import is_delegated_child_context
     from hermes_runtime.adapters.hermes import enabled
 

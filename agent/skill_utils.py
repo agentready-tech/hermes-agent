@@ -275,7 +275,7 @@ def get_disabled_skill_names(platform: str | None = None) -> set[str]:
     platform_disabled = (skills_cfg.get("platform_disabled") or {}).get(resolved_platform) if resolved_platform else None
     if platform_disabled is not None:
         disabled |= _normalize_string_set(platform_disabled)
-    return disabled - ESSENTIAL_SKILLS
+    return disabled - ESSENTIAL_SKILLS - get_system_skill_names()
 
 
 def parse_config_string_list(value) -> list[str]:
@@ -383,9 +383,10 @@ def display_skill_create_dir() -> str:
     return create_dir.as_posix() + "/"
 
 
-# Cross-directory precedence, lowest tier wins: trusted project > local profile > skills.create_dir >
+# Cross-directory precedence, lowest tier wins: image-owned AgentSee > trusted project > local profile > skills.create_dir >
 # skills.external_dirs. Inside ONE tier two different skills sharing a name stay ambiguous — refused,
 # never guessed (59da8ec4e) — while identical copies under one root resolve to the shallowest.
+TIER_SYSTEM = -1
 TIER_PROJECT, TIER_LOCAL, TIER_CREATE_DIR, TIER_EXTERNAL = range(4)
 # Leading words of every same-tier refusal (skill_view error, preload/cron label) — one spelling.
 AMBIGUOUS_SKILL_PREFIX = "Ambiguous skill name "
@@ -394,11 +395,48 @@ AMBIGUOUS_SKILL_PREFIX = "Ambiguous skill name "
 _SHADOW_CHECKED: set[tuple[str, ...]] = set()
 
 
+def get_system_skills_dir() -> Path:
+    """Reserved image-owned platform library; independent of profile seeding and opt-outs."""
+    return Path(__file__).resolve().parent.parent / "skills" / "agentsee"
+
+
+def is_protected_system_skill_path(path: Path) -> bool:
+    """Protect the entire packaged namespace, new destinations and symlink aliases included."""
+    try:
+        target = Path(os.path.abspath(path))
+        root = Path(os.path.abspath(get_system_skills_dir()))
+        return target.is_relative_to(root) or target.resolve().is_relative_to(root.resolve())
+    except (OSError, RuntimeError, ValueError):
+        return True
+
+
+def is_system_skill_path(path: Path) -> bool:
+    """Source-owned paths only; a symlink escaping the packaged library gains no system authority."""
+    try:
+        return Path(path).resolve().is_relative_to(get_system_skills_dir().resolve())
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def get_system_skill_names() -> set[str]:
+    """Required platform names are source-owned, never profile suppression/provenance state."""
+    names = set()
+    for skill_md in iter_skill_index_files(get_system_skills_dir(), "SKILL.md"):
+        try:
+            frontmatter, _ = parse_frontmatter(skill_md.read_text(encoding="utf-8-sig"))
+            names.add(str(frontmatter.get("name") or skill_md.parent.name))
+        except (OSError, UnicodeError):
+            continue
+    return names
+
+
 def get_skill_search_roots(local: Optional[Path] = None, *, include_project: bool = True) -> list[tuple[int, Path]]:
     """``(tier, dir)`` for every skill root in precedence order — the ONE ordering the skills list,
     prompt index, slash commands, skill_view, preload and cron share. *local* overrides the profile
     skills dir (skills_tool passes its live root); that entry is kept even when missing."""
-    roots = [(TIER_PROJECT, d) for d in get_project_skills_dirs()] if include_project else []
+    system = get_system_skills_dir()
+    roots = [(TIER_SYSTEM, system)] if system.is_dir() else []
+    roots += [(TIER_PROJECT, d) for d in get_project_skills_dirs()] if include_project else []
     roots.append((TIER_LOCAL, Path(local) if local is not None else get_skills_dir()))
     create_dir = get_skill_create_dir()
     if create_dir is not None and create_dir.is_dir():
@@ -409,7 +447,7 @@ def get_skill_search_roots(local: Optional[Path] = None, *, include_project: boo
 
 
 def get_all_skills_dirs() -> list[Path]:
-    """Skill dirs: local ``~/.hermes/skills/`` first, then create_dir, then external.
+    """Skill dirs: image-owned AgentSee, local ``~/.hermes/skills/``, create_dir, external.
     Trusted project dirs are NOT included (higher precedence; see get_project_skills_dirs)."""
     return [d for _tier, d in get_skill_search_roots(include_project=False)]
 
@@ -451,7 +489,8 @@ def is_disabled_entry(entry: dict[str, Any], disabled: set[str]) -> bool:
     """``skills.disabled`` matches a resolved catalog entry by its declared name OR its ``load_name`` —
     the exact path a same-tier duplicate's list/config/web row shows (``a/one``) and saves. A unique
     copy elsewhere that merely sits at the same relative path is not matched."""
-    return not disabled.isdisjoint({str(entry["name"]), entry.get("load_name")} - {None})
+    return entry.get("tier") != TIER_SYSTEM and not disabled.isdisjoint(
+        {str(entry["name"]), entry.get("load_name")} - {None})
 
 
 def resolve_skill_catalog(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -668,7 +707,7 @@ def normalize_skill_lookup_name(identifier: str) -> str:
         primary_root = _skills_tool._skills_dir()
     except Exception:
         primary_root = get_skills_dir()
-    trusted_roots = [primary_root]
+    trusted_roots = [get_system_skills_dir(), primary_root]
     for getter in (get_project_skills_dirs, get_external_skills_dirs):
         try:
             trusted_roots.extend(getter())
@@ -679,7 +718,10 @@ def normalize_skill_lookup_name(identifier: str) -> str:
     # resolving first would turn that trusted path into one skill_view rejects.
     for root in trusted_roots:
         if identifier_path.is_relative_to(root):
-            return str(identifier_path.relative_to(root))
+            relative = identifier_path.relative_to(root)
+            if root == get_system_skills_dir() and relative.name == "SKILL.md":
+                relative = relative.parent
+            return str(relative)
     try:
         return str(identifier_path.resolve().relative_to(primary_root.resolve()))
     except Exception:
@@ -853,7 +895,9 @@ def iter_skill_index_files(skills_dir: Path, filename: str):
         dirs[:] = [d for d in dirs if d not in EXCLUDED_SKILL_DIRS and not (has_skill_md and d in SKILL_SUPPORT_DIRS)]
         if filename in files:
             matches.append(os.path.join(root, filename))
-    yield from map(Path, sorted(matches))
+    for match in map(Path, sorted(matches)):
+        if skills_dir != get_system_skills_dir() or is_system_skill_path(match):
+            yield match
 
 
 # Namespace helpers for plugin-provided skills.

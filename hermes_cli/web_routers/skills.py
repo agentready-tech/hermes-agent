@@ -10,7 +10,7 @@ seam so ``monkeypatch.setattr(<owning module>, ...)`` keeps working.
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from hermes_cli.web_deps import late
 from hermes_cli.web_server_profiles import _hub_action_name, _installed_hub_identifiers
@@ -23,6 +23,56 @@ from hermes_cli.web_routers._common import (
 
 hub_router = APIRouter()
 router = APIRouter()
+
+def _personal_library_home(request):
+    from pathlib import Path
+    from hermes_constants import get_hermes_home
+    grant = getattr(request.state, "native_http_principal", None)
+    if (not isinstance(grant, dict) or grant.get("purpose") != "native-http"
+            or grant.get("capabilities") != frozenset({"http:owner"})
+            or not isinstance(grant.get("profile_id"), str)):
+        raise HTTPException(status_code=403, detail="FORBIDDEN")
+    home = Path(grant["profile_id"])
+    if not home.is_absolute() or home != home.resolve() or home != get_hermes_home().resolve():
+        raise HTTPException(status_code=403, detail="FORBIDDEN")
+    return home
+
+
+async def _personal_library_read(request, *, content=False, system=False):
+    from hermes_runtime.skill_inventory import SkillReadError
+    from hermes_runtime.skill_inventory import personal_content, personal_inventory, system_content, system_inventory
+    home = _personal_library_home(request)
+    pairs = list(request.query_params.multi_items())
+    if await request.body() or (not content and pairs) or (content and (len(pairs) != 1 or pairs[0][0] != "name")):
+        raise HTTPException(status_code=400, detail="INVALID_SKILLS_REQUEST")
+    try:
+        if system:
+            return await asyncio.to_thread(system_content, pairs[0][1]) if content else await asyncio.to_thread(system_inventory)
+        return await asyncio.to_thread(personal_content, home, pairs[0][1]) if content else await asyncio.to_thread(personal_inventory, home)
+    except SkillReadError as error:
+        status = 404 if str(error) == "NOT_FOUND" else (413 if str(error).endswith("TOO_LARGE") else 400)
+        raise HTTPException(status_code=status, detail=str(error)) from None
+
+
+@router.get("/api/skills/library/personal")
+async def personal_skill_library(request: Request):
+    return await _personal_library_read(request)
+
+
+@router.get("/api/skills/library/personal/content")
+async def personal_skill_library_content(request: Request):
+    return await _personal_library_read(request, content=True)
+
+
+@router.get("/api/skills/library/system")
+async def system_skill_library(request: Request):
+    return await _personal_library_read(request, system=True)
+
+
+@router.get("/api/skills/library/system/content")
+async def system_skill_library_content(request: Request):
+    return await _personal_library_read(request, content=True, system=True)
+
 
 _config_profile_scope = late("_config_profile_scope", "hermes_cli.web_server_profiles")
 load_config = late("load_config", "hermes_cli.config")

@@ -250,3 +250,9 @@ class TestQuarantine:
         su.is_quarantined_project_skill(evil_dir / "SKILL.md")
         assert not (project_env["repo"] / ".hermes" / "skills" / ".scan-cache").exists()
         assert (project_env["home"] / "cache" / "project_skill_scans").exists()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_packaged_skills(tmp_path, monkeypatch):
+    """Unit catalogs own every input root; do not inherit image-owned platform skills."""
+    monkeypatch.setattr("agent.skill_utils.get_system_skills_dir", lambda: tmp_path / "packaged-skills")

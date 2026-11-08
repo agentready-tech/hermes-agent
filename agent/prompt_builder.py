@@ -23,7 +23,7 @@ from agent.model_metadata import CHARS_PER_TOKEN
 from agent.runtime_cwd import resolve_agent_cwd
 from agent.skill_utils import (
     EXCLUDED_SKILL_DIRS, SKILL_SUPPORT_DIRS,
-    TIER_LOCAL, extract_skill_conditions, extract_skill_description, get_disabled_skill_names, get_skill_search_roots,
+    TIER_LOCAL, TIER_SYSTEM, extract_skill_conditions, extract_skill_description, get_disabled_skill_names, get_skill_search_roots,
     iter_skill_index_files, parse_frontmatter, skill_matches_apps, skill_matches_environment,
     skill_matches_platform, skill_matches_platform_list,
 )
@@ -1440,7 +1440,10 @@ def _scan_extra_root(root: Path, skill_files, tier: int, log_fmt: str) -> list[t
     for skill_file in skill_files:
         try:
             is_compatible, frontmatter, desc = _parse_skill_file(skill_file)
-            rows.append(({**_build_snapshot_entry(skill_file, root, frontmatter, desc), "tier": tier, "root": root}, is_compatible))
+            entry = _build_snapshot_entry(skill_file, root, frontmatter, desc)
+            if tier == TIER_SYSTEM:
+                entry["category"] = "agentsee"
+            rows.append(({**entry, "tier": tier, "root": root}, is_compatible))
         except Exception as e:
             logger.debug(log_fmt, skill_file, e)
     return rows
@@ -1560,9 +1563,9 @@ def _build_skills_system_prompt_inner(
             _SKILLS_PROMPT_CACHE.move_to_end(cache_key)
             return cached
 
-    def hides(skill_name: str, conditions: dict) -> bool:
+    def hides(skill_name: str, conditions: dict, tier: int) -> bool:
         """Per-build visibility rule shared by every skill source (snapshot, scan, project, external)."""
-        return (skill_name in disabled
+        return ((tier != TIER_SYSTEM and skill_name in disabled)
                 or not _skill_should_show(conditions, available_tools, available_toolsets, _platform_hint or None))
 
     skills_by_category: dict[str, list[tuple[str, str]]] = {}
@@ -1594,7 +1597,7 @@ def _build_skills_system_prompt_inner(
             category_descriptions.setdefault(cat, cat_desc)
     resolved = resolve_skill_catalog([
         {**entry, "name": _entry_name(entry), "path": entry["root"] / entry["rel"],
-         "visible": ok and not hides(entry.get("skill_name") or "", entry.get("conditions") or {})}
+         "visible": ok and not hides(entry.get("skill_name") or "", entry.get("conditions") or {}, entry["tier"])}
         for entry, ok in rows])
     visible_entries = [e for e in resolved
                        if e["visible"] and e["status"] != "shadowed" and not is_disabled_entry(e, disabled)]

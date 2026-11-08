@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 from hermes_constants import get_hermes_home
-from agent.skill_utils import is_excluded_skill_path, is_external_skill_path
+from agent.skill_utils import is_excluded_skill_path, is_external_skill_path, is_protected_system_skill_path
 from utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,8 @@ PROTECTED_BUILTIN_SKILLS: set[str] = set()
 
 
 def is_protected_builtin(skill_name: str) -> bool:
-    return skill_name in PROTECTED_BUILTIN_SKILLS
+    from agent.skill_utils import get_system_skill_names
+    return skill_name in PROTECTED_BUILTIN_SKILLS or skill_name in get_system_skill_names()
 
 
 def _skills_dir() -> Path:
@@ -278,13 +279,15 @@ def _external_read_only_message(skill_name: str) -> str:
 def is_curation_eligible(skill_name: str, skill_path: Optional[Path] = None) -> bool:
     """Agent-created: yes. Bundled: only with ``curator.prune_builtins``. Hub / external-dir / protected built-ins:
     never (external owner)."""
-    if ((skill_path is not None and is_external_skill_path(skill_path)) or is_protected_builtin(skill_name)
+    from agent.skill_utils import is_protected_system_skill_path
+    if ((skill_path is not None and (is_external_skill_path(skill_path) or is_protected_system_skill_path(skill_path)))
+            or is_protected_builtin(skill_name)
             or is_hub_installed(skill_name)):
         return False
     if is_bundled(skill_name):
         return _prune_builtins_enabled()
     local_dir = _find_skill_dir(skill_name)
-    return not is_external_skill_path(local_dir) if local_dir else _find_external_skill_dir(skill_name) is None
+    return not (is_external_skill_path(local_dir) or is_protected_system_skill_path(local_dir)) if local_dir else _find_external_skill_dir(skill_name) is None
 
 
 def _is_curator_managed_record(record: Any) -> bool:
@@ -334,7 +337,7 @@ def adopt_skill(skill_name: str) -> tuple[bool, str]:
         if _find_external_skill_dir(skill_name) is not None:
             return False, f"'{skill_name}' lives in skills.external_dirs and is read-only to the curator"
         return False, f"skill '{skill_name}' not found"
-    if is_external_skill_path(skill_dir):
+    if is_external_skill_path(skill_dir) or is_protected_system_skill_path(skill_dir):
         return False, _external_read_only_message(skill_name)
     if is_curator_managed(skill_name):
         return True, f"'{skill_name}' is already curator-managed"
@@ -586,6 +589,8 @@ def forget(skill_name: str) -> None:
 def _relocate(src: Path, dest: Path, skill_name: str, action: str, **capture_kwargs: Any) -> tuple[bool, str]:
     """Move *src* to *dest* for *action* ("archive" | "restore") inside a best-effort audit-ledger entry, then apply
     suppression + state side effects; rename falls back to shutil.move across devices."""
+    if is_protected_builtin(skill_name) or any(is_protected_system_skill_path(p) for p in (src, dest)):
+        return False, "Image-owned skills are read-only to the curator"
     try:
         from tools import skill_ledger as _ledger
         _ledger_before = _ledger.capture_before(src, **capture_kwargs)
@@ -628,7 +633,7 @@ def archive_skill(skill_name: str) -> tuple[bool, str]:
         return False, f"skill '{skill_name}' is a bundled built-in; enable curator.prune_builtins to allow pruning it"
     if skill_dir is None:
         return False, f"skill '{skill_name}' not found"
-    if is_external_skill_path(skill_dir):
+    if is_external_skill_path(skill_dir) or is_protected_system_skill_path(skill_dir):
         return False, _external_read_only_message(skill_name)
     # Flatten under the skill NAME, not the directory name: `mlops/training/accelerate` is the skill
     # `huggingface-accelerate`, and restore/list/purge all key on the name.
@@ -685,8 +690,9 @@ def _find_skill_dir(skill_name: str) -> Optional[Path]:
 
 def _find_external_skill_dir(skill_name: str) -> Optional[Path]:
     """Skill dir under configured external dirs by frontmatter name."""
-    from agent.skill_utils import get_all_skills_dirs
-    return next((found for base in get_all_skills_dirs()[1:] if base.exists()
+    from agent.skill_utils import TIER_CREATE_DIR, TIER_EXTERNAL, get_skill_search_roots
+    return next((found for tier, base in get_skill_search_roots(include_project=False)
+                 if tier in (TIER_CREATE_DIR, TIER_EXTERNAL) and base.exists()
                  if (found := _match_skill_dir((p for p in base.rglob("SKILL.md") if not is_excluded_skill_path(p)),
                                                skill_name)) is not None), None)
 
@@ -714,10 +720,10 @@ def is_external_only(skill_name: str) -> bool:
 def _external_skill_names() -> set:
     """Frontmatter names of all skills under configured external dirs (one scan per call; the
     router's set-based provenance uses this instead of a per-skill dir lookup)."""
-    from agent.skill_utils import get_all_skills_dirs
+    from agent.skill_utils import TIER_CREATE_DIR, TIER_EXTERNAL, get_skill_search_roots
     names: set = set()
-    for base in get_all_skills_dirs()[1:]:
-        if not base.exists():
+    for tier, base in get_skill_search_roots(include_project=False):
+        if tier not in (TIER_CREATE_DIR, TIER_EXTERNAL) or not base.exists():
             continue
         for skill_md in base.rglob("SKILL.md"):
             if not is_excluded_skill_path(skill_md):

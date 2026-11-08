@@ -130,3 +130,9 @@ def test_profile_name_correct_when_ambient_is_another_profile(tmp_path, monkeypa
     monkeypatch.setenv("HERMES_HOME", str(other_home))
 
     assert system_prompt._profile_name_for_home(bot_home) == "mybot"
+
+
+@pytest.fixture(autouse=True)
+def _isolated_packaged_skills(tmp_path, monkeypatch):
+    """Unit catalogs own every input root; do not inherit image-owned platform skills."""
+    monkeypatch.setattr("agent.skill_utils.get_system_skills_dir", lambda: tmp_path / "packaged-skills")

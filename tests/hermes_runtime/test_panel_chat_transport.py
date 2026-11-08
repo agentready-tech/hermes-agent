@@ -61,7 +61,8 @@ def test_panel_worker_binds_its_home_before_choosing_chat_transport(monkeypatch,
     monkeypatch.setattr(agent.secret_scope, "get_secret", lambda name: "fixture-credential")
     monkeypatch.setattr(state, "main_gateway_origin", lambda: {"session_key": "agent:main:agentready:home"})
 
-    async def connected(settings, port, credential, auth, subscriptions, google_auth):
+    async def connected(settings, port, credential, auth, subscriptions, google_auth, skills):
+        assert skills.home == tmp_path.resolve() and skills.auth.gateway_owned
         assert google_auth.home == tmp_path.resolve() and google_auth.gateway_owned
         from hermes_runtime.standalone.panel_chat import gateway_chat_available
         assert hermes.enabled(), "Panel's own worker must activate the managed home"
@@ -73,3 +74,15 @@ def test_panel_worker_binds_its_home_before_choosing_chat_transport(monkeypatch,
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(panel.worker(tmp_path))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("permission", [None, False, True, 1, "true"])
+async def test_skills_open_transmits_only_the_trusted_system_permission(tmp_path, permission):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    skills = SimpleNamespace(available=lambda: True, bridge=AsyncMock())
+    command = {"kind": "skills", "id": "fixture-skill-read", "canReadSystemSkills": permission}
+    await bridge(command, {"url": "https://panel.invalid", "environment_id": "env_fixture"},
+                 1, "synthetic-credential", None, skills=skills)
+    assert skills.bridge.await_args.kwargs == {"can_read_system": permission is True}

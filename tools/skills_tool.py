@@ -210,7 +210,7 @@ def _skill_catalog(*, skip_disabled: bool = False, include_hidden: bool = False)
     Resolution runs over ALL files first — skill_view ignores platform/disabled gates when
     collecting candidates, so it asks for hidden rows too."""
     from agent.skill_utils import (
-        TIER_PROJECT, is_disabled_entry, iter_project_skill_files, iter_skill_index_files, resolve_skill_catalog)
+        TIER_PROJECT, TIER_SYSTEM, is_disabled_entry, iter_project_skill_files, iter_skill_index_files, resolve_skill_catalog)
     cache_key = ("with_disabled" if skip_disabled else "filtered", include_hidden)
     disabled = set() if skip_disabled else _get_disabled_skill_names()
     roots, _ = _skill_search_dirs()
@@ -236,7 +236,8 @@ def _skill_catalog(*, skip_disabled: bool = False, include_hidden: bool = False)
                 scanned.append({
                     "name": frontmatter.get("name", skill_md.parent.name)[:MAX_NAME_LENGTH],
                     "description": _truncate_description(description),
-                    "category": _get_category_from_path(skill_md), "tier": tier, "root": scan_dir,
+                    "category": "agentsee" if tier == TIER_SYSTEM else _get_category_from_path(skill_md),
+                    "tier": tier, "root": scan_dir,
                     "path": skill_md, "visible": bool(skill_matches_platform(frontmatter)
                                                       and skill_matches_environment(frontmatter)
                                                       and skill_matches_apps(frontmatter))})
@@ -364,11 +365,13 @@ def _collect_skill_candidates(name, local_category_name, all_dirs):
     recursive by dir / frontmatter name, legacy flat <name>.md), deduped by resolved path.
     Every copy is returned so the caller resolves them via ``agent.skill_utils.pick_skill_candidate``
     (cross-tier precedence; a same-tier tie of different skills is refused, never guessed)."""
-    from agent.skill_utils import iter_skill_index_files
+    from agent.skill_utils import get_system_skills_dir, is_system_skill_path, iter_skill_index_files
     candidates: list[tuple[Optional[Path], Path]] = []
     seen_md: set = set()
 
     def _record(sd: Optional[Path], smd: Path) -> None:
+        if smd.is_relative_to(get_system_skills_dir()) and not is_system_skill_path(smd):
+            return
         key = smd
         with suppress(Exception):
             key = smd.resolve()
@@ -604,7 +607,8 @@ def skill_view(
         # Disabled by declared name, or by the exact path that IS this copy's load name (a same-tier
         # duplicate's row) — whatever alias reached it; an unrelated copy at that path elsewhere is not.
         rel = _owned_relative(skill_dir, skill_md, all_dirs)
-        if _is_skill_disabled(resolved_name, rel) and (_is_skill_disabled(resolved_name) or any(
+        from agent.skill_utils import is_system_skill_path
+        if not is_system_skill_path(skill_md) and _is_skill_disabled(resolved_name, rel) and (_is_skill_disabled(resolved_name) or any(
                 e["path"] == skill_md and e["load_name"] == rel for e in _skill_catalog(skip_disabled=True, include_hidden=True))):
             return _fail(f"Skill '{resolved_name}' is disabled. Enable it with `hermes skills` or inspect the files directly on disk.")
         if file_path and skill_dir:
