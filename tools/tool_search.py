@@ -1,7 +1,8 @@
 """Progressive tool disclosure ("tool search"): MCP/plugin tools and a curated set of
 event-triggered core tools are replaced in the model-visible array by three bridge tools —
 tool_search / tool_describe / tool_call. Invariants: core tools (``toolsets._HERMES_CORE_TOOLS``)
-and session-gated GUI toolsets never defer unless named in ``defer``; ANY deferrable tool
+and session-gated GUI toolsets never defer unless named in ``defer``. Native browser,
+computer_use and delegate_task tools always stay direct when permitted. ANY deferrable tool
 activates the bridge (the listing scales with budget, not activation); the catalog is
 stateless — rebuilt from the live tool-defs every assembly (a session-keyed one drifts and
 silently drops tools); bridge calls route through ``model_tools.handle_function_call``."""
@@ -69,7 +70,7 @@ class ToolSearchConfig:
             # tool surface and got nothing — never silently ignore it (#116404).
             logger.warning(
                 "tools.tool_search.defer is %r, expected a YAML list of tool names "
-                "(e.g. [todo_list, computer_use]; [] keeps every tool eager) - "
+                "(e.g. [todo_list, session_search]; [] keeps every tool eager) - "
                 "using the curated default set.", defer_raw)
             defer_raw = None
         return cls(
@@ -149,8 +150,10 @@ _DEFAULT_DEFERRED_TOOLS = frozenset(DEFAULT_CONFIG["tools"]["tool_search"]["defe
 def is_deferrable_tool_name(name: str, defer_tools: Optional[frozenset] = None) -> bool:
     """True if a tool is *eligible* for deferral: named in ``defer_tools`` (curated set or
     user override), OR an MCP tool, OR neither core nor a session-gated GUI surface (i.e. a
-    plugin tool). Bridge names never defer."""
-    if name in BRIDGE_TOOL_NAMES:
+    plugin tool). Bridge and essential native interaction/delegation tools never defer,
+    including under explicit legacy defer lists. Availability is filtered upstream."""
+    if (name in BRIDGE_TOOL_NAMES or name in {"computer_use", "delegate_task"}
+            or (name.startswith("browser_") and name in _core_tool_names())):
         return False
     if defer_tools is not None and name in defer_tools:
         return True

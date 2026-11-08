@@ -554,8 +554,36 @@ GOOGLE_MODEL_OPERATIONAL_GUIDANCE = (
 )
 
 
-# computer_use has no prompt block on purpose: its guidance lives in the tool
-# schema and each action result's verdict.
+# Required for every model/role, including restored prompts and restricted children.
+DESKTOP_APPLICATION_UI_POLICY = (
+    "# Mandatory desktop application UI policy\n"
+    "Operate desktop application UI ONLY with computer_use, including UI inspection and screenshots. "
+    "This applies to main agents and delegated children even when computer_use is absent from the current tool list. "
+    "An empty or incomplete accessibility tree is not a reason to switch tools: use computer_use screenshots/vision, "
+    "coordinates, click, type, key and scroll actions.\n"
+    "Never operate or inspect desktop application UI through terminal/shell, Python, ctypes, XTEST, xdotool, "
+    "ImageMagick, direct application-window CDP, or homemade UI/screenshot/input helpers. "
+    "If computer_use is unavailable, not exposed, fails, or reports human_has_control/HUMAN_CONTROL, "
+    "stop the desktop UI action and report the blocker to the user or parent; do not bypass it, install alternatives, "
+    "or expand permissions.\n"
+    "Terminal/Python remain appropriate for code, files and non-UI data processing. "
+    "Use the proper browser tools for website automation; that does not authorize controlling another desktop application's UI."
+)
+
+
+def enforce_desktop_ui_policy(messages: list[dict]) -> tuple[list[dict], str]:
+    """Add the required stable instruction to a wire copy, never saved history."""
+    wire = list(messages)
+    first = wire[0] if wire else {}
+    if first.get("role") in {"system", "developer"} and isinstance(first.get("content"), str):
+        prompt = first["content"]
+        if DESKTOP_APPLICATION_UI_POLICY not in prompt:
+            prompt = (prompt + "\n\n" + DESKTOP_APPLICATION_UI_POLICY).strip()
+        wire[0] = {**first, "content": prompt}
+    else:
+        prompt = DESKTOP_APPLICATION_UI_POLICY
+        wire.insert(0, {"role": "system", "content": prompt})
+    return wire, prompt
 
 # Mid-turn steering (/steer). A steer is delivered as a standalone role:"user" message right after the newest
 # tool result (see steer_user_row / apply_pending_steer_to_tool_results) — the only role-alternation-safe slot

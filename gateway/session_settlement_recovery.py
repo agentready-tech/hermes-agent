@@ -61,6 +61,9 @@ def completion_payload(row, settled, response, captured):
     if isinstance(captured_result.get('persisted_turn'), dict):
         complete['persisted_turn'] = {**captured_result['persisted_turn'],
                                       'submission_id': row['request_id']}
+    if isinstance(captured_result.get('panel_files'), dict):
+        complete.update({key: value for key, value in captured_result['panel_files'].items()
+                         if key in {'attachments', 'attachment_error'}})
     return complete
 
 
@@ -106,7 +109,14 @@ def commit_and_publish(authority, live, ref, row, response, outcome, captured, s
         settlement['settled'], settlement['response'] = finish_result(
             authority.db, epoch=authority.epoch, row=row, response=response, outcome=outcome,
             result=captured, prepared=prepared)
+        from hermes_runtime.standalone.main_files import settle_files
+        delivered = settle_files(authority, live, ref, settlement['settled'], captured, settlement['response'])
         with live.event_stream.lock:
+            if delivered is not None:
+                settlement['response'] = delivered
+                delivery = authority.pending_deliveries.get(admission_id)
+                if delivery is not None:
+                    authority.pending_deliveries[admission_id] = (*delivery[:3], delivered, delivery[4])
             live.settling.pop(admission_id, None)
             _publish_completion(authority, live, ref, row, settlement['settled'], settlement['response'], captured)
     finally:

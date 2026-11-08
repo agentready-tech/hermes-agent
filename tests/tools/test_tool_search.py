@@ -163,8 +163,8 @@ class TestClassification:
         assert mcp_name not in names
         assert BRIDGE_TOOL_NAMES <= names
         assert {"terminal", "memory"} <= names
-        # computer_use IS in the curated defer set → behind the bridge.
-        assert "computer_use" not in names
+        # Desktop control stays direct even while optional tools use discovery.
+        assert "computer_use" in names
 
 
 

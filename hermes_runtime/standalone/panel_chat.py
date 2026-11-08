@@ -45,7 +45,10 @@ class MainChat:
         self.generation = result['execution_generation']
         requests = list(result.get('open_requests') or [])
         requests.extend(question for prompt in result.get('prompts', []) if (question := self.question(prompt)))
-        return {**result, 'messages': result.get('display_messages', result['messages']), 'open_requests': requests}
+        from hermes_runtime.standalone.main_files import project_row
+        rows = result.get('display_messages', result['messages'])
+        return {**{key: value for key, value in result.items() if key != 'display_messages'},
+                'messages': [project_row(row) for row in rows], 'open_requests': requests}
 
     async def dispatch(self, request):
         method, params = request.get('method'), request.get('params') or {}
@@ -71,6 +74,16 @@ class MainChat:
             return await self.client.rpc(method, session_id=self.session_id, execution_generation=self.generation)
         if method == 'image.attach_bytes':
             return await self.client.rpc(method, **params)
+        if method == 'panel.attachment.download':
+            if set(params) != {'session_id', 'id'}:
+                raise ValueError('Invalid attachment request')
+            result = await self.client.rpc('session.resume', session_id=HOME_SESSION_ID, display_projection=True)
+            if result.get('session_id') != self.session_id:
+                raise ValueError('Unexpected main conversation')
+            from hermes_runtime.adapters.hermes import managed_home
+            from hermes_runtime.standalone.main_files import download
+            return await asyncio.to_thread(download, result.get('display_messages', result['messages']),
+                                           params['id'], managed_home())
         if method == 'file.attach':
             return await asyncio.to_thread(self._file, params)
         raise ValueError('Chat method is not permitted')
@@ -127,6 +140,15 @@ class MainChat:
             self.questions.pop(identity, None)
             return {'jsonrpc': '2.0', 'method': 'event', 'params': {'type': 'request.cancel',
                     'session_id': HOME_SESSION_ID, 'payload': {'id': identity}}}
+        if kind == 'message.complete' and isinstance(params.get('payload'), dict):
+            payload = params['payload']
+            if payload.get('attachments') or payload.get('attachment_error'):
+                from gateway.platforms.base import BasePlatformAdapter
+                payload = {**payload}
+                for key in ('text', 'content'):
+                    if isinstance(payload.get(key), str):
+                        payload[key] = BasePlatformAdapter.strip_media_directives_for_display(payload[key])
+                return {**frame, 'params': {**params, 'payload': payload}}
         return frame
 
 
@@ -143,7 +165,7 @@ async def bridge_chat(remote_url, credential, options):
             remote_url, additional_headers={'Authorization': f'Bearer {credential}'}, **options) as remote:
         chat = MainChat(client)
         await remote.send(json.dumps({'jsonrpc': '2.0', 'method': 'event', 'params': {
-            'type': 'gateway.ready', 'payload': {'main_queue': True}}}))
+            'type': 'gateway.ready', 'payload': {'main_queue': True, 'outgoing_files': 'chat-files-v1'}}}))
 
         async def requests():
             async for raw in remote:

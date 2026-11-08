@@ -445,11 +445,12 @@ def _history_mentions(conn, references, after_id=0):
         for tail in (reference['sha256'] + sep + Path(raw).name for sep in ('/', '\\')):
             needles[tail] = needles[json.dumps(tail)[1:-1]] = raw
     prefixes = sorted({reference['sha256'] for reference in references})
-    match = ' OR '.join(['instr(content,?)'] * len(prefixes))
-    query = f'SELECT content FROM messages WHERE ({match})' + (' AND id>?' if after_id else '')
+    match = ' OR '.join(['instr(content,?) OR instr(display_metadata,?)'] * len(prefixes))
+    query = f'SELECT content,display_metadata FROM messages WHERE ({match})' + (' AND id>?' if after_id else '')
     mentioned = set()
-    for (content,) in conn.execute(query, (*prefixes, *((after_id,) if after_id else ()))):
-        text = content.decode('utf-8', 'replace') if isinstance(content, bytes) else str(content)
+    args = tuple(value for prefix in prefixes for value in (prefix, prefix))
+    for content, metadata in conn.execute(query, (*args, *((after_id,) if after_id else ()))):
+        text = (content.decode('utf-8', 'replace') if isinstance(content, bytes) else str(content)) + str(metadata or '')
         mentioned.update(raw for needle, raw in needles.items() if needle in text)
     return mentioned
 

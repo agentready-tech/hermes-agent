@@ -196,6 +196,11 @@ def assemble_api_request(
     # they crash json.dumps() inside the OpenAI SDK and trigger the 3-retry cycle.
     _sanitize_messages_surrogates(api_messages)
 
+    # Apply after context selection, before provider/cache conversion. Saved system
+    # prompts and transcript rows remain unchanged, including on child/resume paths.
+    from agent.prompt_builder import enforce_desktop_ui_policy
+    api_messages, effective_system = enforce_desktop_ui_policy(api_messages)
+
     # No send-time pad loop here: ``repair_empty_non_final_messages`` (inside
     # ``_sanitize_api_messages``) is the single owner of empty-turn repair.
 

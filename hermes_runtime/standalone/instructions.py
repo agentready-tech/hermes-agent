@@ -63,7 +63,8 @@ def install_main_schedule_instructions(agent):
     if resolve_home(agent.session_id) is None:
         return False
     existing = getattr(agent, "ephemeral_system_prompt", None) or ""
-    instructions = "\n\n".join((MAIN_SCHEDULE_INSTRUCTIONS, MAIN_TOOL_OPERATION_INSTRUCTIONS, MAIN_INTEGRATION_INSTRUCTIONS))
+    from hermes_runtime.standalone.main_files import HINT
+    instructions = "\n\n".join((MAIN_SCHEDULE_INSTRUCTIONS, MAIN_TOOL_OPERATION_INSTRUCTIONS, MAIN_INTEGRATION_INSTRUCTIONS, HINT))
     if instructions in existing:
         return False
     agent.ephemeral_system_prompt = existing + ("\n\n" if existing else "") + instructions

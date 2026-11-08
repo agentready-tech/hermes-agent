@@ -817,13 +817,14 @@ _ROOT_CREDENTIAL_PATHS = (
 
 
 def _profile_cache_roots() -> list[Path]:
-    """Per-profile cache roots ``<root>/profiles/<name>/cache/{images,...}`` and every home's connector
-    downloads dir (the static safe roots cover only the launch HERMES_HOME). Enumerated at check
-    time so profiles created after startup count, and allowlisted BEFORE the ``/root`` denylist,
-    which otherwise wins when HERMES_HOME is symlinked under a denied prefix (#31733).
+    """Canonical media caches and connector downloads for the active home and registered profiles.
+
+    Static safe roots cover only the launch HERMES_HOME; the active scoped home may differ.
+    Enumerated before the ``/root`` denylist without allowing scratch or entire cache/home trees.
     """
-    return [*(p / "cache" / subdir for p in _profile_dirs() for subdir in _MEDIA_DELIVERY_CACHE_SUBDIRS),
-            *(p / CONNECTOR_DOWNLOADS_SUBDIR for p in (get_hermes_home(), *_profile_dirs()))]
+    homes = tuple(dict.fromkeys((Path(get_hermes_home()), *_profile_dirs())))
+    return [*(home / "cache" / subdir for home in homes for subdir in _MEDIA_DELIVERY_CACHE_SUBDIRS),
+            *(home / CONNECTOR_DOWNLOADS_SUBDIR for home in homes)]
 
 
 def _profile_dirs() -> list[Path]:
@@ -1171,27 +1172,6 @@ _LOG_UNSAFE_CHARS = re.compile(r"[\x00-\x1f\x7f\x85\u2028\u2029]")
 def _log_safe_path(path: str) -> str:
     """Return a single-line, length-bounded path for log output."""
     return _LOG_UNSAFE_CHARS.sub("?", str(path))[:200]
-
-
-def _validated_delivery_path(raw_path, session_key: str, label: str,
-                             dropped: Optional[list[dict]] = None) -> Optional[str]:
-    """``validate_media_delivery_path`` plus the shared "Skipping unsafe ..." warning. A path the
-    host cannot see is retried against the active remote sandbox (ssh/modal/...; #466). When
-    ``dropped`` is a list, a rejected path is appended as ``{"path", "reason"}`` so the caller can
-    report the drop instead of booking a delivery that never happened (#115908)."""
-    raw = str(raw_path)
-    safe_path = validate_media_delivery_path(raw, session_key=session_key)
-    if not safe_path:
-        from gateway.media_fetch import fetch_remote_media
-        safe_path = fetch_remote_media(raw)
-    if not safe_path:
-        # Say WHY: a path that does not exist on the host is the common case (a model hallucinated or
-        # a sandbox path failed to translate) and is not a security rejection.
-        reason = "not found on this host" if not _existing_regular_file(raw) else "denied by the delivery policy"
-        logger.warning("Skipping %s (%s): %s", label, reason, _log_safe_path(raw))
-        if dropped is not None:
-            dropped.append({"path": raw, "reason": reason})
-    return safe_path
 
 
 def _existing_regular_file(raw: str) -> bool:
@@ -3221,13 +3201,15 @@ class BasePlatformAdapter(ABC):
     def filter_media_delivery_paths(media_files, session_key: str = "",
                                     dropped: Optional[list[dict]] = None) -> list[tuple[str, bool]]:
         """Drop unsafe MEDIA paths and normalize accepted paths; ``dropped`` collects the rejects."""
+        from gateway.media_delivery import _validated_delivery_path
         return [
             (safe_path, bool(is_voice)) for media_path, is_voice in media_files or []
-            if (safe_path := _validated_delivery_path(media_path, session_key, "MEDIA directive path", dropped))]
+            if (safe_path := _validated_delivery_path(media_path, session_key, "MEDIA directive path", dropped, explicit=True))]
 
     @staticmethod
     def filter_local_delivery_paths(file_paths, session_key: str = "") -> list[str]:
         """Drop unsafe bare local file paths and normalize accepted paths."""
+        from gateway.media_delivery import _validated_delivery_path
         safe_paths = (_validated_delivery_path(p, session_key, "local file path") for p in file_paths or [])
         return [p for p in safe_paths if p]
 
@@ -4467,7 +4449,7 @@ class BasePlatformAdapter(ABC):
         # bare-path validator infer the sandbox from the ACTIVE profile (#109024).
         with self._media_delivery_scope(event.source):
             media_files, response = self.extract_media(response)
-            media_files = self.filter_media_delivery_paths(media_files, session_key=session_key)
+            media_files = await asyncio.to_thread(self.filter_media_delivery_paths, media_files, session_key=session_key)
             images, text_content = self.extract_images(response)
             # Strip any remaining internal directives from message body (fixes #1561). _strip_media_directives
             # shares MEDIA_TAG_CLEANUP_RE, so a MEDIA: tag with an unknown extension is intentionally left in

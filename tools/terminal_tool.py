@@ -1316,6 +1316,14 @@ def _pre_exec_block(
     Order matters: gateway lifecycle first (protects the running gateway),
     then the dangerous-workdir check, then the self-repo guard (local only).
     """
+    from tools.desktop_ui_guard import desktop_ui_refusal, read_backend_script
+    guard_cwd = _resolve_command_cwd(
+        workdir=workdir, default_cwd=get_session_cwd(session_key) or getattr(env, "cwd", None) or cwd,
+        session_key=session_key, env_type=env_type, mounted_host=getattr(env, "host_cwd", None), env=env,
+    )
+    refusal = desktop_ui_refusal(command, read_script=lambda path: read_backend_script(env, guard_cwd, path))
+    if refusal:
+        raise _Rejected(_error_json(refusal, status="blocked"))
     blocked = gateway_lifecycle_block(
         command=command, env=env, env_type=env_type, cwd=cwd, workdir=workdir, session_key=session_key,
     )
@@ -1399,6 +1407,10 @@ def terminal_tool(
     ``_host_local`` forces the local backend for Hermes-owned control-plane
     children (kept in a separate env cache from the configured backend).
     """
+    from tools.desktop_ui_guard import desktop_ui_refusal
+    refusal = desktop_ui_refusal(command)
+    if refusal:
+        return _error_json(refusal, status="blocked")
     from hermes_cli.observability.shared_metrics_loop import record_terminal_backend as _metered
     plan = None
     try:

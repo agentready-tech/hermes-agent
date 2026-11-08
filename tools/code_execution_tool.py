@@ -763,6 +763,10 @@ def _execute_code(
     the security envelope (env scrubbing, tool whitelist + call budget, output redaction), not an
     isolation jail: default `project` mode runs in the session's cwd with the project venv.
     ``enabled_tools`` ∩ SANDBOX_ALLOWED_TOOLS; ``reset`` kills the existing kernel first."""
+    from tools.desktop_ui_guard import desktop_ui_refusal
+    refusal = desktop_ui_refusal(code, language="python")
+    if refusal:
+        return tool_error(refusal, code="desktop_ui_requires_computer_use")
     if not SANDBOX_AVAILABLE:
         return tool_error("execute_code sandbox is unavailable in this environment. "
                           "Use normal tool calls (terminal, read_file, write_file, ...) instead.")
@@ -817,6 +821,17 @@ def _execute_code(
     from tools.terminal_tool import _get_env_config, _docker_has_host_access
     _env_config = _get_env_config()
     env_type = _env_config["env_type"]
+    # The reader is lazy: only explicit script entry paths acquire the already
+    # selected backend. Trusted CUA/browser child execution never uses this entry.
+    def read_entry(path):
+        from tools.desktop_ui_guard import read_backend_script
+        env, actual_type = _get_or_create_env(task_id or "default")
+        cwd = (str(_resolve_child_cwd(_get_execution_mode(), "", task_id=task_id or ""))
+               if actual_type == "local" else env.cwd)
+        return read_backend_script(env, cwd, path)
+    refusal = desktop_ui_refusal(code, language="python", read_script=read_entry)
+    if refusal:
+        return tool_error(refusal, code="desktop_ui_requires_computer_use")
     # Arbitrary Python never passes through terminal()/DANGEROUS_PATTERNS, so guard the whole
     # script before either dispatch path spawns it — in this (tool-executor) thread, which holds
     # the session context. A Docker sandbox with host bind mounts gets no container fast-path.

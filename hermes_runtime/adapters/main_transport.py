@@ -9,8 +9,9 @@ from hermes_state_runtime import RuntimeStoreError
 def register_platform():
     # Persisted sources must be decodable before SessionStore loads its routing index.
     from gateway.platform_registry import PlatformEntry, platform_registry
+    from hermes_runtime.standalone.main_files import HINT
     platform_registry.register(PlatformEntry(name='agentready', label='AgentReady main',
-        adapter_factory=_private_only, check_fn=lambda: True, source='builtin'))
+        adapter_factory=_private_only, check_fn=lambda: True, source='builtin', platform_hint=HINT))
 
 
 def _private_only(_config):
