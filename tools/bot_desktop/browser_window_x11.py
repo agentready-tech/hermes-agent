@@ -246,6 +246,20 @@ def owner(profile, expected=None):
     return {'pid':value['pid'],'generation':identity}
 
 
+
+def _active_window(x):
+    """Decode one WINDOW, with xfwm4's optional CARD32 timestamp as metadata.
+
+    The second value never names another candidate. Exact XRes ownership,
+    profile generation and actual input focus remain separate required guards.
+    """
+    value=x.property(x.root,'_NET_ACTIVE_WINDOW')
+    if type(value) is not list or len(value) not in (1,2):return None
+    if type(value[0]) is not int or not 1<value[0]<=0xffffffff:return None
+    if len(value)==2 and (type(value[1]) is not int or not 0<=value[1]<=0xffffffff):return None
+    return value[0]
+
+
 def discover(profile, previous=None, *, x11=None):
     profile=Path(profile)
     if not profile.is_absolute():raise WindowUnavailable('browser_window_owner_unavailable')
@@ -253,9 +267,9 @@ def discover(profile, previous=None, *, x11=None):
     try:
         with x.grabbed():
             current=owner(profile,previous)
-            active=x.property(x.root,'_NET_ACTIVE_WINDOW')
+            active=_active_window(x)
             windows=x.property(x.root,'_NET_CLIENT_LIST_STACKING') or x.property(x.root,'_NET_CLIENT_LIST')
-            candidates=[w for w in windows if active==[w] and x.client_pid(w)==current['pid']]
+            candidates=[w for w in windows if active==w and x.client_pid(w)==current['pid']]
             if len(candidates)!=1:raise WindowUnavailable('browser_window_target_unavailable')
             window=candidates[0]
             # XRes proves the same exact browser owner for second top-levels too.
@@ -306,10 +320,10 @@ def resize(profile, target, viewport, *, x11=None):
 
 def check_view(x, profile, target):
     owner(Path(profile),target)
-    active=x.property(x.root,'_NET_ACTIVE_WINDOW')
-    if len(active)!=1:raise WindowUnavailable('browser_window_focus_changed')
-    if active!=[target['window']] and x.client_pid(active[0])==target['pid']:
-        x.attributes(active[0])
+    active=_active_window(x)
+    if active is None:raise WindowUnavailable('browser_window_focus_changed')
+    if active!=target['window'] and x.client_pid(active)==target['pid']:
+        x.attributes(active)
         raise WindowUnavailable('browser_window_target_changed')
     verify(x,profile,target)
     if not x.focus_is(target['window']):raise WindowUnavailable('browser_window_focus_changed')
