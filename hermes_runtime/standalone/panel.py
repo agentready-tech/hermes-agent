@@ -129,7 +129,7 @@ async def bridge(command, config, port, credential, auth, subscriptions=None, go
         await asyncio.to_thread(google_auth.endpoint)
         auth = google_auth
     if kind == "skills":
-        if skills is None or not await asyncio.to_thread(skills.available):
+        if skills is None:
             raise ValueError("Skills unavailable")
         remote_url = socket_url(config["url"], config["environment_id"], "reverse", urlencode({"id": identity}))
         await skills.bridge(remote_url, credential, can_read_system=command.get("canReadSystemSkills") is True,
@@ -240,8 +240,7 @@ async def connection(config, port, credential, auth, subscriptions=None, google_
                 pass  # No intent capability until the existing own gateway is ready.
         await control.send(json.dumps({"type": "hello", "capabilities": ["screen", "chat", *(["subscriptions"] if subscriptions else []),
             *(["google-browser-window-v1"] if google_ready else []),
-            *(["skills-library-read-v1", "skills-personal-edit-v1"] if skills and await asyncio.to_thread(skills.available) else []),
-            *(["skills-builtin-selection-v1"] if skills and await asyncio.to_thread(skills.builtin_available) else [])]}))
+            *(["skills-library-read-v1", "skills-personal-edit-v1", "skills-builtin-selection-v1"] if skills is not None else [])]}))
         async def open_channel(command):
             try:
                 await bridge(command, config, port, credential, auth, subscriptions, google_auth, skills)

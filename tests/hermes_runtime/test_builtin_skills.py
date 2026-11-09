@@ -168,27 +168,62 @@ def test_existing_native_http_and_panel_channel_bind_owner_cas_and_readonly(home
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('builtin_ready', [False, True])
-async def test_hello_advertises_builtin_only_after_native_capability_probe(monkeypatch, builtin_ready):
+async def test_hello_keeps_skills_protocols_when_cold_http_recovers_on_same_connection(monkeypatch, tmp_path):
     from hermes_runtime.standalone.panel import connection
-    sent = []
+    from hermes_runtime.standalone.panel_skills import SkillsRead
+    ready = False
+    native_calls, hellos, replies, connections = [], [], [], []
+    completed = asyncio.Event()
+
+    def endpoint():
+        if not ready:
+            raise OSError('Synthetic cold native HTTP')
+
+    def native(path, payload=None, *, method):
+        endpoint()
+        native_calls.append((method, path))
+        assert method == 'GET'
+        return {'capability': 'skills-library-read-v1', 'skills': [], 'truncated': False}
+
+    skills = SkillsRead(tmp_path, SimpleNamespace(home=tmp_path.resolve(), gateway_owned=True,
+                       endpoint=endpoint, authenticated_request=native))
+    assert skills.available() is False
+    frames = [json.dumps({'jsonrpc': '2.0', 'id': index, 'method': method, 'params': {}})
+              for index, method in enumerate(('skills.library.list', 'skills.library.update',
+                                               'skills.builtin.select'), 1)]
+
+    class Remote:
+        async def send(self, raw):
+            replies.append(json.loads(raw))
+            if len(replies) == len(frames):
+                completed.set()
+
+        async def __aiter__(self):
+            for frame in frames:
+                yield frame
+
     class Control:
         async def send(self, raw):
-            sent.append(json.loads(raw))
+            nonlocal ready
+            hellos.append(json.loads(raw))
+            ready = True
 
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            raise StopAsyncIteration
+        async def __aiter__(self):
+            yield json.dumps({'type': 'open', 'kind': 'skills', 'id': 'fixture',
+                              'canEditPersonalSkills': False})
+            await completed.wait()
 
     @asynccontextmanager
-    async def connect(*_args, **_kwargs):
-        yield Control()
+    async def connect(url, **_kwargs):
+        connections.append(url)
+        yield Control() if url.endswith('/agent') else Remote()
 
     monkeypatch.setattr('websockets.asyncio.client.connect', connect)
-    skills = SimpleNamespace(available=lambda: True, builtin_available=lambda: builtin_ready)
     await connection({'url': 'https://panel.invalid', 'environment_id': 'env_' + 'a' * 32},
                      0, 'fixture', None, skills=skills)
-    assert ('skills-builtin-selection-v1' in sent[0]['capabilities']) == builtin_ready
-    assert 'skills-library-read-v1' in sent[0]['capabilities']
+    assert {'skills-library-read-v1', 'skills-personal-edit-v1',
+            'skills-builtin-selection-v1'} <= set(hellos[0]['capabilities'])
+    assert len(connections) == 2, 'one control connection and one skills channel; no reconnect'
+    assert replies[0]['result']['capability'] == 'skills-library-read-v1'
+    assert all(reply['error']['message'] == 'FORBIDDEN' for reply in replies[1:])
+    assert native_calls == [('GET', '/api/skills/library/personal')]
