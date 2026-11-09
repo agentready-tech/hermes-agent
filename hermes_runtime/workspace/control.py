@@ -11,7 +11,7 @@ from hermes_runtime.skill_inventory import SkillReadError
 from hermes_constants import get_hermes_home
 from hermes_runtime.workspace import CAPABILITY
 from hermes_runtime.workspace.service import Workspace
-from hermes_runtime.workspace.store import WorkspaceError, now, public_connection, rules, validate_connection, validate_credential
+from hermes_runtime.workspace.store import SERVICES, WorkspaceError, now, rules, validate_connection, validate_credential, validate_google_settings
 
 OPERATIONS = {
     "list": set(), "import": {"connections", "google"}, "upsert": {"connection", "credential"},
@@ -66,10 +66,16 @@ def import_connections(workspace, request, environment):
 def google_exchange(workspace, request, environment):
     if environment and request.get("environmentId") != environment:
         raise WorkspaceError("FORBIDDEN")
-    google = {"clientId": request["clientId"], "clientSecret": request["clientSecret"]}
+    services = request.get("services")
+    if not isinstance(services, list) or any(not isinstance(item, str) for item in services) or len(services) != len(SERVICES) or set(services) != SERVICES:
+        raise WorkspaceError("INVALID_WORKSPACE_PERMISSIONS")
+    if not re.fullmatch(r"connection_[a-f0-9]{32}", str(request.get("connectionId", ""))):
+        raise WorkspaceError("INVALID_WORKSPACE_CONNECTION")
+    google = validate_google_settings({"clientId": request["clientId"], "clientSecret": request["clientSecret"]})
     current = workspace.store.read()
-    if request["connectionId"] in current["connections"] or len(current["connections"]) >= 5:
-        raise WorkspaceError("INVALID_WORKSPACE_CONNECTION_LIMIT")
+    previous = current["connections"].get(request["connectionId"])
+    if previous and (previous["connection"]["provider"] != "google" or previous["connection"]["environmentId"] != environment):
+        raise WorkspaceError("FORBIDDEN")
     if current["google"].get("clientId") not in {None, google["clientId"]} and any(record["connection"]["provider"] == "google" for record in current["connections"].values()):
         raise WorkspaceError("INVALID_GOOGLE_CLIENT_IN_USE")
     result = workspace.runner(workspace.home, "sandbox_google", {**request, "operation": "exchange", "google": google})
@@ -80,15 +86,7 @@ def google_exchange(workspace, request, environment):
         "createdAt": moment, "verifiedAt": moment}
     if result.get("gmailHistoryId"):
         connection["gmailHistoryId"] = result["gmailHistoryId"]
-    # Both the application and grant are committed inside one native vault transaction.
-    value = validate_connection(connection, environment)
-    secret = validate_credential("google", result["credential"])
-    with workspace.store.transaction() as state:
-        if value["id"] in state["connections"] or len(state["connections"]) >= 5:
-            raise WorkspaceError("INVALID_WORKSPACE_CONNECTION_LIMIT")
-        state["google"] = google
-        state["connections"][value["id"]] = {"connection": value, "credential": secret}
-    return {"connection": {**value, "credentialConfigured": True}}
+    return {"connection": workspace.store.reconnect_google(connection, result["credential"], google, current["google"], environment_id=environment)}
 
 
 def dispatch(home, request, *, workspace=None):

@@ -91,6 +91,30 @@ def public_connection(record):
     return {**copy.deepcopy(record["connection"]), "credentialConfigured": bool(record.get("credential"))}
 
 
+def validate_google_settings(value):
+    if not isinstance(value, dict) or set(value) != {"clientId", "clientSecret"} or any(not isinstance(v, str) or not v or len(v) > 8192 for v in value.values()):
+        raise WorkspaceError("INVALID_GOOGLE_OAUTH_NOT_CONFIGURED")
+    return copy.deepcopy(value)
+
+
+def google_connection_order(record):
+    moment = datetime.fromisoformat(record["connection"]["createdAt"])
+    return moment.replace(tzinfo=UTC).timestamp() if moment.tzinfo is None else moment.timestamp(), record["connection"]["id"]
+
+
+def google_delivery_rules(records):
+    variants = {}
+    for record in records:
+        connection = record["connection"]
+        value = rules(connection)
+        if value["proactive"] or value["senderPolicy"] != "allowlist" or value["allowedSenders"]:
+            identity = value["proactive"], value["senderPolicy"], tuple(sorted(set(value["allowedSenders"])))
+            variants.setdefault(identity, {key: copy.deepcopy(connection[key]) for key in ("proactive", "senderPolicy", "allowedSenders") if key in connection})
+    if len(variants) > 1:
+        raise WorkspaceError("INVALID_GOOGLE_DUPLICATE_RULES_CONFLICT")
+    return next(iter(variants.values()), {})
+
+
 class ConnectionStore:
     """Reuse the native vault's crypto, locks and durable writes in a separate vault slot."""
 
@@ -150,9 +174,44 @@ class ConnectionStore:
             return public_connection(record)
 
     def settings(self, google):
-        if not isinstance(google, dict) or set(google) != {"clientId", "clientSecret"} or any(not isinstance(v, str) or not v or len(v) > 8192 for v in google.values()):
-            raise WorkspaceError("INVALID_GOOGLE_OAUTH_NOT_CONFIGURED")
+        google = validate_google_settings(google)
         with self.transaction() as state:
             if state["google"].get("clientId") not in {None, google["clientId"]} and any(record["connection"]["provider"] == "google" for record in state["connections"].values()):
                 raise WorkspaceError("INVALID_GOOGLE_CLIENT_IN_USE")
             state["google"] = copy.deepcopy(google)
+
+    def reconnect_google(self, value, credential, google, expected_google, *, environment_id):
+        connection = validate_connection(value, environment_id)
+        secret = validate_credential("google", credential)
+        google = validate_google_settings(google)
+        if connection["provider"] != "google" or set(connection["services"]) != SERVICES:
+            raise WorkspaceError("INVALID_WORKSPACE_PERMISSIONS")
+        with self.transaction() as state:
+            records = state["connections"]
+            if state["google"] not in (expected_google, google):
+                raise WorkspaceError("INVALID_GOOGLE_CLIENT_IN_USE")
+            previous = records.get(connection["id"])
+            if previous and (any(previous["connection"].get(key) != connection[key] for key in ("environmentId", "provider")) or address(previous["connection"].get("address")) != connection["address"]):
+                raise WorkspaceError("FORBIDDEN")
+            matches = [record for record in records.values() if record["connection"]["provider"] == "google" and address(record["connection"]["address"]) == connection["address"]]
+            if any(record["connection"]["environmentId"] != environment_id for record in matches):
+                raise WorkspaceError("FORBIDDEN")
+            matches.sort(key=google_connection_order)
+            delivery = google_delivery_rules(matches)
+            if not matches and len(records) >= 5:
+                raise WorkspaceError("INVALID_WORKSPACE_CONNECTION_LIMIT")
+            if matches:
+                current = copy.deepcopy(matches[0]["connection"])
+                current.update(delivery)
+                for key in ("address", "services", "enabled", "status", "verifiedAt"):
+                    current[key] = copy.deepcopy(connection[key])
+                current.pop("lastError", None)
+                if not current.get("gmailHistoryId") and connection.get("gmailHistoryId"):
+                    current["gmailHistoryId"] = connection["gmailHistoryId"]
+                connection = validate_connection(current, environment_id)
+            record = {"connection": connection, "credential": secret}
+            state["google"] = google
+            for duplicate in matches:
+                del records[duplicate["connection"]["id"]]
+            records[connection["id"]] = record
+            return public_connection(record)
