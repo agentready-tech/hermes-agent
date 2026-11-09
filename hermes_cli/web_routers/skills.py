@@ -99,6 +99,43 @@ async def system_skill_library_content(request: Request):
     return await _personal_library_read(request, content=True, system=True)
 
 
+@router.get('/api/skills/library/builtin')
+async def builtin_skill_library(request: Request):
+    from hermes_runtime.builtin_skills import builtin_inventory
+    from hermes_runtime.skill_inventory import SkillReadError
+    home = _personal_library_home(request)
+    if request.query_params or await request.body():
+        raise HTTPException(status_code=400, detail='INVALID_SKILLS_REQUEST')
+    try:
+        return await asyncio.to_thread(builtin_inventory, home)
+    except SkillReadError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+
+
+@router.post('/api/skills/library/builtin/selection')
+async def builtin_skill_library_select(request: Request):
+    import json
+    from hermes_runtime.builtin_skills import CONFLICT, builtin_select
+    from hermes_runtime.skill_inventory import SkillReadError
+    home = _personal_library_home(request)
+    if request.query_params:
+        raise HTTPException(status_code=400, detail='INVALID_SKILLS_REQUEST')
+    raw = bytearray()
+    async for chunk in request.stream():
+        if len(raw) + len(chunk) > 16384:
+            raise HTTPException(status_code=413, detail='INVALID_SKILLS_REQUEST_TOO_LARGE')
+        raw.extend(chunk)
+    try:
+        value = json.loads(raw)
+        def update():
+            with config_write_scope(None):
+                return builtin_select(home, value)
+        return await asyncio.to_thread(update)
+    except (ValueError, UnicodeError) as error:
+        code = str(error) if isinstance(error, SkillReadError) else 'INVALID_SKILLS_REQUEST'
+        raise HTTPException(status_code=409 if code == CONFLICT else 400, detail=code) from None
+
+
 _config_profile_scope = late("_config_profile_scope", "hermes_cli.web_server_profiles")
 load_config = late("load_config", "hermes_cli.config")
 # Labels per hub source id (matches `hermes skills search` provenance); keep in

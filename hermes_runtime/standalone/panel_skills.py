@@ -31,6 +31,15 @@ class SkillsRead:
         except (OSError, ValueError):
             return False
 
+    def builtin_available(self):
+        from hermes_runtime.builtin_skills import LIST_METHOD
+        try:
+            self.auth.endpoint()
+            self._project(self.auth.authenticated_request('/api/skills/library/builtin', method='GET'), LIST_METHOD)
+            return True
+        except (HTTPError, OSError, ValueError):
+            return False
+
     @staticmethod
     def _native_error(error):
         try:
@@ -38,7 +47,7 @@ class SkillsRead:
         except (ValueError, UnicodeError, AttributeError):
             detail = None
         return detail if isinstance(detail, str) and re.fullmatch(
-            r"INVALID_SKILLS_[A-Z_]+|CONFLICT_SKILL_CHANGED|FORBIDDEN|NOT_FOUND", detail) else None
+            r"INVALID_SKILLS_[A-Z_]+|CONFLICT_SKILL_CHANGED|CONFLICT_BUILTIN_SKILLS_CHANGED|FORBIDDEN|NOT_FOUND", detail) else None
 
     @staticmethod
     def _row(value, *, system=False):
@@ -58,6 +67,9 @@ class SkillsRead:
 
     @classmethod
     def _project(cls, result, method):
+        from hermes_runtime.builtin_skills import LIST_METHOD, SELECT_METHOD, project_inventory
+        if method in {LIST_METHOD, SELECT_METHOD}:
+            return project_inventory(result)
         capability = EDIT_CAPABILITY if method == UPDATE_METHOD else CAPABILITY
         if not isinstance(result, dict) or result.get("capability") != capability:
             raise SkillReadError("INVALID_SKILLS_UNAVAILABLE")
@@ -81,6 +93,9 @@ class SkillsRead:
             raise SkillReadError("INVALID_SKILLS_REQUEST")
         if method.startswith("skills.system.") and can_read_system is not True:
             raise SkillReadError("FORBIDDEN")
+        from hermes_runtime.builtin_skills import LIST_METHOD, SELECT_METHOD
+        if method in {LIST_METHOD, SELECT_METHOD}:
+            return await self._builtin(method, params, can_edit_personal)
         if method == UPDATE_METHOD:
             return await self._update(params, can_edit_personal=can_edit_personal)
         sources = {"skills.library.list": ("personal", False), "skills.library.read": ("personal", True),
@@ -102,6 +117,25 @@ class SkillsRead:
         if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > MAX_RESPONSE_BYTES - 1024:
             raise SkillReadError("INVALID_SKILLS_RESPONSE_TOO_LARGE")
         return result
+
+    async def _builtin(self, method, params, can_edit):
+        from hermes_runtime.builtin_skills import SELECT_METHOD, validate_select
+        select = method == SELECT_METHOD
+        if select and can_edit is not True:
+            raise SkillReadError('FORBIDDEN')
+        if select:
+            validate_select(params)
+        elif params:
+            raise SkillReadError('INVALID_SKILLS_REQUEST')
+        try:
+            result = await asyncio.to_thread(self.auth.authenticated_request,
+                '/api/skills/library/builtin/selection' if select else '/api/skills/library/builtin',
+                params if select else None, method='POST' if select else 'GET')
+        except HTTPError as error:
+            raise SkillReadError(self._native_error(error) or 'INVALID_SKILLS_BUILTIN_UNAVAILABLE') from None
+        except (OSError, ValueError):
+            raise SkillReadError('INVALID_SKILLS_BUILTIN_UNAVAILABLE') from None
+        return self._project(result, method)
 
     async def _update(self, params, *, can_edit_personal=False):
         if can_edit_personal is not True:
@@ -142,7 +176,7 @@ class SkillsRead:
                     response = {"jsonrpc": "2.0", "id": identity, "result": result}
                 except SkillReadError as error:
                     response = {"jsonrpc": "2.0", "id": identity, "error": {
-                        "code": 409 if str(error) == "CONFLICT_SKILL_CHANGED" else 400, "message": str(error)}}
+                        "code": 409 if str(error) in {"CONFLICT_SKILL_CHANGED", "CONFLICT_BUILTIN_SKILLS_CHANGED"} else 400, "message": str(error)}}
                 except Exception:  # health: allow BLE001 -- only a stable code crosses this boundary; upstream ticket URLs/body are private
                     response = {"jsonrpc": "2.0", "id": identity, "error": {"code": 503, "message": "INVALID_SKILLS_UNAVAILABLE"}}
                 await remote.send(json.dumps(response, ensure_ascii=False))

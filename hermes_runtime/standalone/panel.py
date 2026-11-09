@@ -240,7 +240,8 @@ async def connection(config, port, credential, auth, subscriptions=None, google_
                 pass  # No intent capability until the existing own gateway is ready.
         await control.send(json.dumps({"type": "hello", "capabilities": ["screen", "chat", *(["subscriptions"] if subscriptions else []),
             *(["google-browser-window-v1"] if google_ready else []),
-            *(["skills-library-read-v1", "skills-personal-edit-v1"] if skills and await asyncio.to_thread(skills.available) else [])]}))
+            *(["skills-library-read-v1", "skills-personal-edit-v1"] if skills and await asyncio.to_thread(skills.available) else []),
+            *(["skills-builtin-selection-v1"] if skills and await asyncio.to_thread(skills.builtin_available) else [])]}))
         async def open_channel(command):
             try:
                 await bridge(command, config, port, credential, auth, subscriptions, google_auth, skills)

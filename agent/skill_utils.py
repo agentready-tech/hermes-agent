@@ -390,6 +390,7 @@ def display_skill_create_dir() -> str:
 # never guessed (59da8ec4e) — while identical copies under one root resolve to the shallowest.
 TIER_SYSTEM = -1
 TIER_OPTIONAL = 4
+TIER_BUILTIN = 5
 TIER_PROJECT, TIER_LOCAL, TIER_CREATE_DIR, TIER_EXTERNAL = range(4)
 # Leading words of every same-tier refusal (skill_view error, preload/cron label) — one spelling.
 AMBIGUOUS_SKILL_PREFIX = "Ambiguous skill name "
@@ -412,8 +413,9 @@ def get_system_skill_roots() -> list[Path]:
 def is_protected_system_skill_path(path: Path) -> bool:
     """Protect source assets and the full central custody tree, including unknown destinations."""
     try:
+        from agent.builtin_skills import is_builtin_path
         target = Path(os.path.abspath(path))
-        return any(target.is_relative_to(root) or target.resolve().is_relative_to(root.resolve())
+        return is_builtin_path(target) or any(target.is_relative_to(root) or target.resolve().is_relative_to(root.resolve())
                    for root in (get_system_skills_dir(), custody_root()))
     except (OSError, RuntimeError, ValueError):
         return True
@@ -452,6 +454,8 @@ def get_skill_search_roots(local: Optional[Path] = None, *, include_project: boo
         roots.append((TIER_CREATE_DIR, create_dir))
     roots += [(TIER_EXTERNAL, d) for d in get_external_skills_dirs()]
     roots += [(TIER_OPTIONAL, root) for root in current_library().optional_roots()]
+    from agent.builtin_skills import selected_roots
+    roots += [(TIER_BUILTIN, root) for root in selected_roots()]
     seen: set[Path] = set()
     return [(t, d) for t, d in roots if not (d in seen or seen.add(d))]
 
@@ -463,7 +467,8 @@ def is_visible_skill_path(path: Path) -> bool:
     target = Path(path).resolve()
     installed = Path(__file__).resolve().parent.parent
     if any(target.is_relative_to(installed / name) for name in ("skills", "optional-skills")):
-        return False
+        from agent.builtin_skills import is_selected_path
+        return is_selected_path(target)
     if not target.is_relative_to(get_skills_dir().resolve()):
         return True
     from tools.skills_sync import _matches_origin_hash, _read_manifest
