@@ -155,12 +155,17 @@ class SecretPrompts:
         thread = self.adapter._effective_message_thread_id(message)
         thread = str(thread) if thread is not None else None
         # A mistaken unthreaded reply during entry must not become a model message.
-        waiting = any((r.chat, r.user, r.thread) == (chat, user, thread) for r in self.pending.values())
+        waiting = any((r.chat, r.user, r.thread) == (chat, user, thread) and not r.future.done()
+                      for r in self.pending.values())
         if token is None and not waiting:
             return False
         if token is None and message.text in ("/stop", "/new"):
             self._settle_lane(chat, user, thread)
             return False
+        if token is None:
+            # Dismissing ForceReply sends no cancellation. Quarantine this possible secret once,
+            # but release the abandoned request before any await so follow-ups reach normal chat.
+            self._settle_lane(chat, user, thread)
         item = self.pending.get(token)
         valid = (item is not None and not item.future.done() and message.chat.type == "private"
                  and (item.chat, item.user, item.thread) == (chat, user, thread)
@@ -178,7 +183,10 @@ class SecretPrompts:
             await self._notice(chat, "Telegram не подтвердил удаление ответа. Удалите его вручную.", thread)
         if valid and value and not item.future.done():
             item.future.set_result(value)
-        elif token is None or not valid:
+        elif token is None:
+            await self._notice(chat, "Запрос секрета закрыт. Это сообщение не передано агенту. "
+                               "Для обычного чата отправьте сообщение ещё раз.", thread)
+        elif not valid:
             await self._notice(chat, "Ответ не передан агенту. Используйте ответ на действующий запрос секрета.", thread)
         return True
 

@@ -7,7 +7,7 @@ banner. Synthetic events never reply-anchor (#52694); an explicit redirect overr
 """
 
 from gateway.config import Platform
-from gateway.platforms.base import _reply_anchor_for_event
+from gateway.platforms.helpers import _reply_anchor_for_event
 from gateway.platforms.event import MessageEvent
 from gateway.session import SessionSource
 

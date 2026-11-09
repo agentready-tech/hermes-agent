@@ -217,7 +217,8 @@ async def execute_admission(authority, ref, row):
     else:
         from gateway.session_ingress_media import restore_attachments
         event = MessageEvent(text=row['payload']['text'], source=live.source,
-                             message_id=row['admission_id'], **restore_attachments(row['payload']))
+                             message_id=row['admission_id'], reply_anchor_override='',
+                             **restore_attachments(row['payload']))
         if 'local_automation_v1' in row['payload']:
             from gateway.session_automation import restore_local_automation
             event = restore_local_automation(authority, ref, row)
@@ -353,7 +354,8 @@ async def deliver_settled(authority, admission_id):
 
 
 async def deliver_response(adapter, event, session_key, response):
-    from gateway.platforms.base import _thread_metadata_for_event, _mark_notify_metadata
+    from gateway.platforms.base import _mark_notify_metadata
+    from gateway.platforms.helpers import _thread_metadata_for_event
     text, ttl = adapter._unwrap_ephemeral(response)
     if not text:
         return

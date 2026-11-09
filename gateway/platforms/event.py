@@ -64,7 +64,8 @@ class MessageEvent:
     # Reply anchor for the final send when the answer is to a DIFFERENT message than the one that
     # opened the turn: a successful busy redirect turns the running turn onto the redirecting
     # message, so its reply must quote that message (#115001). ``_reply_anchor_for_event``
-    # honours this over ``message_id``; None = derive from the event as usual.
+    # honours this over ``message_id``; None = derive from the event as usual;
+    # an empty string explicitly suppresses a platform anchor for a local admission ID.
     reply_anchor_override: Optional[str] = None
     # Platform update id (Telegram ``update_id``): ``/restart`` records it so the new gateway
     # advances past it even if PTB's shutdown ACK times out.

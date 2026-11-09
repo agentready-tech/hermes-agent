@@ -2207,9 +2207,9 @@ from gateway.run_profile_reconcile import GatewayProfileReconcileMixin
 from gateway.run_plugin_rewire import GatewayPluginRewireMixin
 from gateway.platforms.base import (
     BasePlatformAdapter,
-    _reply_anchor_for_event,
     _terminal_sentinel_start,
 )
+from gateway.platforms.helpers import _reply_anchor_for_event
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.restart import (
     DEFAULT_GATEWAY_CRON_DRAIN_TIMEOUT,

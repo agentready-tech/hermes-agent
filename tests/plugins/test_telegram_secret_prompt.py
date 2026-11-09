@@ -18,7 +18,7 @@ from gateway.config import Platform
 from gateway.session import SessionSource
 from gateway.session_vault_prompt import vault_prompt_scope
 from plugins.platforms.telegram.secret_prompt import MARKER, SecretPrompts
-from tests.plugins.test_telegram_update_admission import connected
+from tests.plugins.test_telegram_update_admission import connected, update
 
 
 def source(**kwargs):
@@ -150,14 +150,10 @@ async def test_text_document_keeps_multiline_and_whitespace_without_disk_cache(m
 
 
 @pytest.mark.asyncio
-async def test_cancel_deletion_failure_and_nonreply_are_not_model_messages(monkeypatch, caplog):
+async def test_cancel_and_deletion_failure_do_not_expose_secret(monkeypatch, caplog):
     async with secret_transport(monkeypatch) as (adapter, app, delivered, prompts, notices, _deleted):
         task = asyncio.create_task(adapter.request_secret(source(), label="Секрет", site="test"))
         prompt = await asyncio.wait_for(prompts.get(), 5)
-        payload = reply(app.bot, prompt).to_dict()
-        del payload["message"]["reply_to_message"]
-        await app.process_update(Update.de_json(payload, app.bot))
-        assert not task.done() and not delivered
         token = prompt.text.split("\n")[0].removeprefix(MARKER)
         cancel = Update.de_json({"update_id": 70, "callback_query": {
             "id": "cancel", "from": {"id": 88, "is_bot": False, "first_name": "Human"},
@@ -170,6 +166,27 @@ async def test_cancel_deletion_failure_and_nonreply_are_not_model_messages(monke
         assert "do-not-log-this-secret" not in caplog.text
         assert any("вручную" in text for text in notices)
         assert not delivered
+
+
+@pytest.mark.asyncio
+async def test_unthreaded_input_ends_secret_wait_and_followups_reach_chat(monkeypatch):
+    async with secret_transport(monkeypatch) as (adapter, app, delivered, prompts, notices, deleted):
+        task = asyncio.create_task(adapter.request_secret(source(), label="Секрет", site="test"))
+        prompt = await asyncio.wait_for(prompts.get(), 5)
+        # Closing Telegram's ForceReply locally sends no cancellation update. The first
+        # unthreaded value remains quarantined, but must end the abandoned request.
+        first = update(app.bot, uid=81, text="ordinary-fixture-message")
+        await app.process_update(first)
+        assert await asyncio.wait_for(task, 5) == ""
+        assert first.message.message_id in deleted and not delivered
+        assert any("закрыт" in text.lower() for text in notices)
+
+        await app.process_update(update(app.bot, uid=82, text="followup-fixture-message"))
+        await asyncio.gather(*adapter._pending_text_batch_tasks.values())
+        assert [event.text for event in delivered] == ["followup-fixture-message"]
+        # An explicitly addressed late secret must still never enter ordinary history.
+        await app.process_update(reply(app.bot, prompt, "late-fixture-secret", uid=83))
+        assert [event.text for event in delivered] == ["followup-fixture-message"]
 
 
 @pytest.mark.asyncio
