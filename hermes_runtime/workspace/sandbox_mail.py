@@ -130,7 +130,9 @@ def mailbox_unicode(value):
             return base64.b64decode(token + "=" * (-len(token) % 4), validate=True).decode("utf-16-be") if token else "&"
         if "&" in re.sub(r"&[A-Za-z0-9+,]*-", "", source):
             raise ValueError()
-        return folder_name(re.sub(r"&([A-Za-z0-9+,]*)-", decoded, source))
+        name = re.sub(r"&([A-Za-z0-9+,]*)-", decoded, source)
+        folder_name(name)
+        return name
     except (ValueError, UnicodeError):
         raise MailError("INVALID_MAIL_IMAP_PROTOCOL_FAILED") from None
 
@@ -153,25 +155,47 @@ def list_mailbox(row):
         if not re.fullmatch(rb'"(?:[^"\\]|\\.)*"', name):
             raise MailError("INVALID_MAIL_IMAP_PROTOCOL_FAILED")
         name = re.sub(rb"\\(.)", rb"\1", name[1:-1])
-    separator = "" if delimiter == b"NIL" else mailbox_unicode(re.sub(rb"\\(.)", rb"\1", delimiter[1:-1]))
-    if delimiter != b"NIL" and len(separator) != 1:
+    try:
+        # The hierarchy delimiter is one ASCII character, not a modified UTF-7 name.
+        separator = "" if delimiter == b"NIL" else re.sub(rb"\\(.)", rb"\1", delimiter[1:-1]).decode("ascii")
+    except UnicodeError:
+        raise MailError("INVALID_MAIL_IMAP_PROTOCOL_FAILED") from None
+    if delimiter != b"NIL" and (len(separator) != 1 or not 32 <= ord(separator) < 127):
         raise MailError("INVALID_MAIL_IMAP_PROTOCOL_FAILED")
     return {"name": mailbox_unicode(name), "flags": flags.lower().split(), "delimiter": separator}
 
 
-def resolve_folder(client, requested):
-    requested = folder_name(requested)
-    if requested == "INBOX":
-        return requested
-    status, values = client.list('""', '*')
+def list_mailboxes(client):
+    try:
+        status, values = client.list('""', '*')
+    except (OSError, imaplib.IMAP4.error) as error:
+        raise MailError(error_code("imap", "list", error)) from None
     if status != "OK" or not isinstance(values, list) or len(values) > 10000:
         raise MailError("INVALID_MAIL_FOLDER_LIST_FAILED")
     # imaplib follows a LIST literal tuple with its empty framing trailer.
-    folders = [list_mailbox(row) for row in values if row not in (None, b"")]
+    return [list_mailbox(row) for row in values if row not in (None, b"")]
+
+
+def folder_listing(client):
+    roles = {b"\\sent": "sent", b"\\drafts": "drafts", b"\\archive": "archive",
+             b"\\trash": "trash", b"\\junk": "junk", b"\\all": "all", b"\\flagged": "flagged"}
+    return {"folders": [{"name": row["name"],
+        "role": "inbox" if row["name"].upper() == "INBOX" else next((role for flag, role in roles.items() if flag in row["flags"]), None),
+        "selectable": not any(flag in row["flags"] for flag in (b"\\noselect", b"\\nonexistent")),
+        "delimiter": row["delimiter"] or None} for row in list_mailboxes(client)]}
+
+
+def resolve_folder(client, requested, exact=False):
+    if type(exact) is not bool:
+        raise MailError("INVALID_MAIL_FOLDER")
+    requested = folder_name(requested)
+    if requested == "INBOX":
+        return requested
+    folders = list_mailboxes(client)
     folders = [row for row in folders if b"\\noselect" not in row["flags"]]
     aliases = {"sent": (b"\\sent", {"sent", "sent items", "sent messages"}),
                "drafts": (b"\\drafts", {"drafts", "draft"}), "archive": (b"\\archive", {"archive", "archives"})}
-    alias = aliases.get(requested.lower())
+    alias = aliases.get(requested.lower()) if not exact else None
     if alias:
         candidates = {row["name"] for row in folders if alias[0] in row["flags"]}
         if not candidates:
@@ -226,10 +250,12 @@ def imap_connect(request):
         client.login(client._quote(request["credential"]["username"]), request["credential"]["password"])
         phase = "select"
         operation = request.get("operation")
+        if operation == "folders":
+            return client  # LIST requires authentication, never selecting or inspecting messages.
         if operation == "read":
             selected = imap_identity(request.get("messageId"))[0]
         else:
-            selected = resolve_folder(client, request.get("folder", "INBOX")) if operation == "search" else "INBOX"
+            selected = resolve_folder(client, request.get("folder", "INBOX"), request.get("folderExact", False)) if operation == "search" else "INBOX"
         wire = mailbox_utf7(selected).replace(b"\\", b"\\\\").replace(b'"', b'\\"')
         status, _ = client.select(b'"' + wire + b'"', readonly=True)
         if status != "OK":
@@ -697,8 +723,10 @@ def search_mail(client, request, current):
 def imap_operation(request):
     client = imap_connect(request)
     try:
-        current = validity(client)
         operation = request["operation"]
+        if operation == "folders":
+            return folder_listing(client)
+        current = validity(client)
         if operation == "verify":
             return {"verified": True}
         if operation == "search":
@@ -759,7 +787,7 @@ def execute(request):
         if "mailSend" in request.get("services", []):
             smtp_connect(request).close()  # AUTH only. Never MAIL/RCPT/DATA.
         return {"verified": True}
-    if request.get("operation") in {"read", "search", "incoming"}:
+    if request.get("operation") in {"read", "search", "incoming", "folders"}:
         if "mailRead" not in request.get("services", []):
             raise MailError("FORBIDDEN")
         return imap_operation(request)

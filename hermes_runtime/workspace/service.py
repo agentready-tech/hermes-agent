@@ -17,6 +17,8 @@ def search_options(args):
         raise WorkspaceError("INVALID_MAIL_FOLDER")
     if "hasAttachment" in args and type(args["hasAttachment"]) is not bool:
         raise WorkspaceError("INVALID_MAIL_QUERY")
+    if "folderExact" in args and type(args["folderExact"]) is not bool:
+        raise WorkspaceError("INVALID_MAIL_FOLDER")
     return folder, args.get("hasAttachment")
 
 
@@ -40,18 +42,35 @@ class Workspace:
         return self.runner(self.home, "sandbox_google", {"operation": "request", "services": record["connection"]["services"],
             "credential": record["credential"], "google": self.store.read()["google"], "service": service, "method": method, "path": path, "body": body})
 
+    def folders(self, args):
+        record = self.store.get(args.get("connectionId"), "mailRead")
+        if record["connection"]["provider"] == "imap_smtp":
+            return self.mail(record, "folders")
+        labels = self.google(record, "gmail", "GET", "labels").get("labels", [])
+        if not isinstance(labels, list) or len(labels) > 10000:
+            raise WorkspaceError("INVALID_MAIL_FOLDER_LIST_FAILED")
+        roles = {"INBOX": "inbox", "SENT": "sent", "DRAFT": "drafts", "TRASH": "trash",
+                 "SPAM": "junk", "STARRED": "flagged", "IMPORTANT": "important"}
+        folders = []
+        for row in labels:
+            if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+                raise WorkspaceError("INVALID_MAIL_FOLDER_LIST_FAILED")
+            name, _ = search_options({"folder": row.get("name")})
+            folders.append({"name": name, "role": roles.get(row["id"]), "selectable": True, "delimiter": None})
+        return {"folders": folders}
+
     def search(self, args):
         record = self.store.get(args.get("connectionId"), "mailRead")
         folder, has_attachment = search_options(args)
         if record["connection"]["provider"] == "imap_smtp":
-            return self.mail(record, "search", **{key: args[key] for key in ("query", "since", "before", "cursor", "limit", "folder", "hasAttachment") if key in args})
+            return self.mail(record, "search", **{key: args[key] for key in ("query", "since", "before", "cursor", "limit", "folder", "folderExact", "hasAttachment") if key in args})
         query = str(args.get("query", ""))[:500]
         if args.get("since"):
             query += " after:" + str(args["since"])
         if args.get("before"):
             query += " before:" + str(args["before"])
         params = {"maxResults": min(50, max(1, int(args.get("limit", 50)))), "q": query}
-        self.gmail_search_folder(record, params, folder)
+        self.gmail_search_folder(record, params, folder, args.get("folderExact", False))
         if has_attachment is not None:
             params["q"] = "(" + params["q"] + ") " + ("has:attachment" if has_attachment else "-has:attachment") if params["q"] else ("has:attachment" if has_attachment else "-has:attachment")
         if args.get("cursor"):
@@ -63,9 +82,9 @@ class Workspace:
             messages.append(gmail_headers(message))
         return {"messages": messages, "folder": folder, "nextCursor": listing.get("nextPageToken"), "hasMore": bool(listing.get("nextPageToken")), "totalMatches": listing.get("resultSizeEstimate")}
 
-    def gmail_search_folder(self, record, params, folder):
-        label = {"inbox": "INBOX", "sent": "SENT", "drafts": "DRAFT"}.get(folder.lower())
-        if folder.lower() == "archive":
+    def gmail_search_folder(self, record, params, folder, exact=False):
+        label = {"inbox": "INBOX", "sent": "SENT", "drafts": "DRAFT"}.get(folder.lower()) if not exact else None
+        if not exact and folder.lower() == "archive":
             # Gmail has no Archive label: this is its non-INBOX view, including
             # sent mail with no INBOX label, but excluding Spam and Trash.
             params["q"] = ("(" + params["q"] + ") " if params["q"] else "") + "-in:inbox -in:spam -in:trash"
@@ -116,7 +135,7 @@ class Workspace:
         return {"messageId": str(message["Message-ID"]), "accepted": result.get("accepted") is True}
 
     def tool(self, name, args):
-        handlers = {"workspace_connections": lambda: self.store.list(), "mail_search": lambda: self.search(args),
+        handlers = {"workspace_connections": lambda: self.store.list(), "mail_folders": lambda: self.folders(args), "mail_search": lambda: self.search(args),
             "mail_read": lambda: self.read(args), "mail_attachment": lambda: self.attachment(args), "mail_send": lambda: self.send(args),
             "google_workspace": lambda: self.google(self.store.get(args.get("connectionId"), args.get("service")), args.get("service"), args.get("method"), args.get("path"), args.get("body")),
             "google_schema": lambda: self.runner(self.home, "sandbox_google", {**args, "operation": "schema"}),

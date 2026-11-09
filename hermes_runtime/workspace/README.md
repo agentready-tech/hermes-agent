@@ -19,6 +19,19 @@ returns headers with cursor pagination in `folder` (default `INBOX`). `Sent`,
 are exact, including Unicode and hierarchy delimiters. A missing or ambiguous
 alias fails explicitly. Gmail uses its system labels or an exact custom label;
 its `Archive` view means non-INBOX mail outside Spam/Trash, including sent mail.
+Use `mail_folders(connectionId)` before searching an unfamiliar folder. Copy a
+returned selectable `name` to `mail_search.folder` with `folderExact=true`. It returns
+the server's exact Unicode `name`, server-derived `role` (or null), `selectable`
+and hierarchy `delimiter` (or null). Nonselectable IMAP rows are hierarchy
+placeholders; Gmail rows are existing labels, without an invented Archive label.
+IMAP discovery performs one authenticated LIST, without selecting a mailbox,
+reading UIDVALIDITY, searching or fetching messages. Empty lists stay empty;
+failures return safe codes and are not retried. The existing `mailRead` grant,
+own-profile vault and bounded sandbox transport apply to this tool too.
+`folderExact` defaults to false, retaining `Sent`, `Drafts` and `Archive` alias
+behavior. True selects a literal mailbox/label even when its name collides with
+an alias. IMAP cursors and opaque message IDs retain the resolved mailbox, so
+subsequent reads and attachments select it directly, without reinterpreting aliases.
 Optional boolean `hasAttachment` filters attachment metadata without downloading
 payloads. IMAP filtering can produce an empty page with `hasMore=true`;
 `totalMatches` is unknown for that filtered view. Keep folder/query/filters fixed
