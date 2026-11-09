@@ -1161,9 +1161,8 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
             max_iterations = room.max_iterations
             ctx.enabled_toolsets = list(room.enabled_toolsets)
         try:
-            model, runtime_kwargs = runner._resolve_session_agent_runtime(
-                source=ctx.source, session_key=ctx.session_key, user_config=ctx.user_config,
-            )
+            from hermes_runtime.adapters.main_model import resolve_turn_runtime
+            model, runtime_kwargs = resolve_turn_runtime(runner, ctx.source, ctx.session_key, ctx.user_config)
             # Stashed by _resolve_session_agent_runtime when the primary's credentials failed and a
             # fallback was resolved before any agent exists (#74349); one-shot per turn.
             pending_fallback_notice = getattr(runner, "_pre_agent_fallback_notice", None)

@@ -144,12 +144,16 @@ class Subscriptions:
         return {"status": "cancelled"}
 
     def models(self, provider):
-        payload = self._request("/api/model/options")
-        rows = payload.get("providers", [])
-        row = next((row for row in rows if row.get("slug") == PROVIDERS[provider]), {})
-        models = row.get("models", [])
-        return {"models": [{"id": row if isinstance(row, str) else row.get("id", ""),
-            "label": row if isinstance(row, str) else row.get("label", row.get("id", ""))} for row in models][:200]}
+        from hermes_cli.models import cached_provider_model_ids
+        from hermes_runtime.workspace.transport import profile_scope
+        with profile_scope(self.home):
+            status = next(row for row in self.status()["providers"] if row["id"] == provider)
+            if not status["available"] or not status["connected"]:
+                raise SubscriptionError("Сначала подключите выбранную подписку.")
+            # Inventory reads are cache-only and warm a later open. An explicit subscription
+            # load must discover this account's current IDs now, retaining native offline fallback.
+            models = cached_provider_model_ids(PROVIDERS[provider], force_refresh=True)
+        return {"models": [{"id": model, "label": model} for model in models[:200]]}
 
     async def select(self, provider, model, managed_fallback):
         status = await asyncio.to_thread(self.status) if provider != "managed" else None
@@ -165,9 +169,15 @@ class Subscriptions:
             else:
                 route = managed
             config.setdefault("autonomous", {}).setdefault("panel", {})["managed_inference"] = managed
+            if self.auth.gateway_owned:
+                config["autonomous"]["panel"]["model_selection_revision"] = secrets.token_hex(16)
             config["model"] = route
             config["fallback_providers"] = [{**{k: v for k, v in managed.items() if k != "default"}, "model": managed["default"]}] if managed_fallback and provider != "managed" else []
             self._write(config)
+        if self.auth.gateway_owned:
+            # Main has no frozen local-session policy. Its owner consumes this selection
+            # at the next turn boundary, preserving the answer already in progress.
+            return {"saved": True, "deferred": True}
         # Use the native session model switch, not a chat prompt or a second agent. Busy
         # sessions defer it until the next turn. Credentials are resolved by Hermes itself.
         from websockets.asyncio.client import connect

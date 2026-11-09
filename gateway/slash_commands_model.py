@@ -79,6 +79,7 @@ class _ModelSwitchContext:
     one_turn: bool = False
     reasoning_effort: str = ""  # `--reasoning <level>` riding with the pick (typed path only)
     restore_snapshot: Optional[dict] = None
+    panel_selection_revision: Optional[str] = None
     current_model: str = ""
     current_provider: str = "openrouter"
     # The provider actually configured/overridden (None = unset): ``current_provider`` defaults to
@@ -97,6 +98,8 @@ class _ModelSwitchContext:
             cfg = _load_gateway_config(config_path=self.config_path)
             if not cfg:
                 return
+            from hermes_runtime.adapters.main_model import selection_revision
+            self.panel_selection_revision = selection_revision(cfg)
             model_cfg = cfg.get("model", {})
             if isinstance(model_cfg, dict):
                 self.current_model = model_cfg.get("default", "")
@@ -413,6 +416,11 @@ class GatewayModelCommandsMixin:
 
     async def _commit_model_switch_locked(self, result, ctx: _ModelSwitchContext, *, source, picker: bool) -> str:
         one_turn = False if picker else ctx.one_turn
+        from hermes_runtime.adapters.main_model import apply_selection
+        # A newer explicit /model wins over the Panel selection it observed. A
+        # Panel save made after this command read config remains pending instead.
+        if apply_selection(self, source, ctx.session_key, ctx.panel_selection_revision):
+            ctx.restore_snapshot = {"had_override": False, "override": None}
         error = self._switch_cached_agent_model(result, ctx, picker)
         if error is not None:
             return error

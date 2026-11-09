@@ -40,8 +40,6 @@ def service(tmp_path, monkeypatch):
                 return {"session_id": "own-session", "verification_url": "https://auth.openai.com/codex/device", "user_code": "fixture-code", "access_token": "must-not-leave-hermes"}
             if "/poll/" in path:
                 return {"status": "approved", "error_message": "private", "account_email": "private"}
-            if path == "/api/model/options":
-                return {"providers": [{"slug": "openai-codex", "models": ["model-live"]}]}
             return {"ok": True}
 
     value = Subscriptions(home, Auth())
@@ -54,6 +52,7 @@ def service(tmp_path, monkeypatch):
     monkeypatch.setattr(value, "_config", lambda: copy.deepcopy(config))
     monkeypatch.setattr(value, "_write", persist)
     monkeypatch.setattr(value, "_claude", lambda: {"available": True, "logged_in": True, "plan": "private-plan"})
+    monkeypatch.setattr("hermes_cli.models.cached_provider_model_ids", lambda *_args, **_kwargs: ["model-live"])
     return value, config, calls
 
 
@@ -101,11 +100,15 @@ def test_subscription_switch_and_return_use_native_home_without_a_prompt(service
         for key in ("terminal", "agent", "stt"):
             assert config[key] == before[key]
         assert config["fallback_providers"] == []
-        assert {row["method"] for row in received} == {"session.resume", "config.set"}
-        assert all(row["params"]["session_id"] in {"agentready_home", "native-home"} for row in received)
-        assert received[-1]["params"]["value"] == "managed-model --provider custom"
-        resumes = [row['params'] for row in received if row['method'] == 'session.resume']
-        assert all(('source' not in params and 'close_on_disconnect' not in params) == gateway_owned for params in resumes)
+        if gateway_owned:
+            assert received == []
+            assert config["autonomous"]["panel"]["model_selection_revision"]
+        else:
+            assert {row["method"] for row in received} == {"session.resume", "config.set"}
+            assert all(row["params"]["session_id"] in {"agentready_home", "native-home"} for row in received)
+            assert received[-1]["params"]["value"] == "managed-model --provider custom"
+            resumes = [row['params'] for row in received if row['method'] == 'session.resume']
+            assert all('source' in params and 'close_on_disconnect' in params for params in resumes)
 
     asyncio.run(exercise())
 
