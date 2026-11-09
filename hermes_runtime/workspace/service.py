@@ -10,6 +10,22 @@ from hermes_runtime.workspace.store import ConnectionStore, WorkspaceError, now
 from hermes_runtime.workspace.transport import sandbox_request
 
 
+def search_options(args):
+    folder = args.get("folder", "INBOX")
+    if (not isinstance(folder, str) or not folder or len(folder) > 256
+            or any(ord(c) < 32 or ord(c) == 127 for c in folder)):
+        raise WorkspaceError("INVALID_MAIL_FOLDER")
+    if "hasAttachment" in args and type(args["hasAttachment"]) is not bool:
+        raise WorkspaceError("INVALID_MAIL_QUERY")
+    return folder, args.get("hasAttachment")
+
+
+def imap_message_id(value):
+    if not re.fullmatch(r"(?:\d{1,10}:\d{1,10}|imap-v1:[A-Za-z0-9_-]{1,1400}:\d{1,10}:\d{1,10})", value):
+        raise WorkspaceError("INVALID_MESSAGE_ID")
+    return value
+
+
 class Workspace:
     def __init__(self, home, *, runner=None):
         self.home, self.store = home, ConnectionStore(home)
@@ -26,14 +42,18 @@ class Workspace:
 
     def search(self, args):
         record = self.store.get(args.get("connectionId"), "mailRead")
+        folder, has_attachment = search_options(args)
         if record["connection"]["provider"] == "imap_smtp":
-            return self.mail(record, "search", **{key: args[key] for key in ("query", "since", "before", "cursor", "limit") if key in args})
+            return self.mail(record, "search", **{key: args[key] for key in ("query", "since", "before", "cursor", "limit", "folder", "hasAttachment") if key in args})
         query = str(args.get("query", ""))[:500]
         if args.get("since"):
             query += " after:" + str(args["since"])
         if args.get("before"):
             query += " before:" + str(args["before"])
         params = {"maxResults": min(50, max(1, int(args.get("limit", 50)))), "q": query}
+        self.gmail_search_folder(record, params, folder)
+        if has_attachment is not None:
+            params["q"] = "(" + params["q"] + ") " + ("has:attachment" if has_attachment else "-has:attachment") if params["q"] else ("has:attachment" if has_attachment else "-has:attachment")
         if args.get("cursor"):
             params["pageToken"] = str(args["cursor"])
         listing = self.google(record, "gmail", "GET", "messages?" + urlencode(params))
@@ -41,15 +61,29 @@ class Workspace:
         for reference in listing.get("messages", []):
             message = self.google(record, "gmail", "GET", "messages/" + quote(reference["id"], safe="") + "?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=Message-ID")
             messages.append(gmail_headers(message))
-        return {"messages": messages, "nextCursor": listing.get("nextPageToken"), "hasMore": bool(listing.get("nextPageToken")), "totalMatches": listing.get("resultSizeEstimate")}
+        return {"messages": messages, "folder": folder, "nextCursor": listing.get("nextPageToken"), "hasMore": bool(listing.get("nextPageToken")), "totalMatches": listing.get("resultSizeEstimate")}
+
+    def gmail_search_folder(self, record, params, folder):
+        label = {"inbox": "INBOX", "sent": "SENT", "drafts": "DRAFT"}.get(folder.lower())
+        if folder.lower() == "archive":
+            # Gmail has no Archive label: this is its non-INBOX view, including
+            # sent mail with no INBOX label, but excluding Spam and Trash.
+            params["q"] = ("(" + params["q"] + ") " if params["q"] else "") + "-in:inbox -in:spam -in:trash"
+        elif label:
+            params["labelIds"] = label
+        else:
+            labels = self.google(record, "gmail", "GET", "labels").get("labels", [])
+            matches = {row["id"] for row in labels if row.get("name") == folder and isinstance(row.get("id"), str)}
+            if len(matches) != 1:
+                raise WorkspaceError("INVALID_MAIL_FOLDER_AMBIGUOUS" if matches else "INVALID_MAIL_FOLDER_NOT_FOUND")
+            params["labelIds"] = matches.pop()
 
     def read(self, args):
         record = self.store.get(args.get("connectionId"), "mailRead")
         identity = str(args.get("messageId", ""))
         if record["connection"]["provider"] == "google":
             return gmail_text(self.google(record, "gmail", "GET", "messages/" + quote(identity, safe="") + "?format=full"))
-        if not re.fullmatch(r"\d+:\d+", identity):
-            raise WorkspaceError("INVALID_MESSAGE_ID")
+        imap_message_id(identity)
         message = self.mail(record, "read", messageId=identity, format="text-v1")
         if message.get("format") != "text-v1":
             raise WorkspaceError("INVALID_MAIL_CONTENT")
@@ -64,7 +98,8 @@ class Workspace:
             if not isinstance(data, str) or len(data) > 14_000_000 or len(base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))) > 10 * 1024 * 1024:
                 raise WorkspaceError("INVALID_MAIL_TOO_LARGE")
             return {"data": data, "encoding": "base64url"}
-        if not re.fullmatch(r"\d+:\d+", identity) or not re.fullmatch(r"\d+", attachment):
+        imap_message_id(identity)
+        if not re.fullmatch(r"\d+", attachment):
             raise WorkspaceError("INVALID_MESSAGE_ID")
         return self.mail(record, "read", messageId=identity, attachmentId=attachment, format="attachment-v1")
 

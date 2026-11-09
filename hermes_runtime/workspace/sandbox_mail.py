@@ -104,6 +104,113 @@ def error_code(protocol, phase, error):
     return prefix + "PROTOCOL_FAILED"
 
 
+def folder_name(value):
+    if not isinstance(value, str) or not value or len(value) > 256 or any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise MailError("INVALID_MAIL_FOLDER")
+    try:
+        if len(value.encode("utf8")) > 1024:
+            raise MailError("INVALID_MAIL_FOLDER")
+    except UnicodeError:
+        raise MailError("INVALID_MAIL_FOLDER") from None
+    return "INBOX" if value.upper() == "INBOX" else value
+
+
+def mailbox_utf7(value):
+    """IMAP4rev1 uses modified UTF-7, independently of SEARCH's charset."""
+    def encoded(match):
+        return "&" + base64.b64encode(match[0].encode("utf-16-be")).decode().rstrip("=").replace("/", ",") + "-"
+    return re.sub(r"[^ -~]+", encoded, folder_name(value).replace("&", "&-")).encode("ascii")
+
+
+def mailbox_unicode(value):
+    try:
+        source = value.decode("ascii")
+        def decoded(match):
+            token = match[1].replace(",", "/")
+            return base64.b64decode(token + "=" * (-len(token) % 4), validate=True).decode("utf-16-be") if token else "&"
+        if "&" in re.sub(r"&[A-Za-z0-9+,]*-", "", source):
+            raise ValueError()
+        return folder_name(re.sub(r"&([A-Za-z0-9+,]*)-", decoded, source))
+    except (ValueError, UnicodeError):
+        raise MailError("INVALID_MAIL_IMAP_PROTOCOL_FAILED") from None
+
+
+def list_mailbox(row):
+    literal = None
+    if isinstance(row, tuple) and len(row) == 2:
+        row, literal = row
+    if not isinstance(row, bytes) or len(row) > 8192:
+        raise MailError("INVALID_MAIL_IMAP_PROTOCOL_FAILED")
+    parsed = re.fullmatch(rb'\(([^)]*)\)\s+(NIL|"(?:[^"\\]|\\.)*")\s+(.+)', row)
+    if not parsed:
+        raise MailError("INVALID_MAIL_IMAP_PROTOCOL_FAILED")
+    flags, delimiter, name = parsed.groups()
+    if literal is not None:
+        if not isinstance(literal, bytes) or name != b"{" + str(len(literal)).encode() + b"}":
+            raise MailError("INVALID_MAIL_IMAP_PROTOCOL_FAILED")
+        name = literal
+    elif name.startswith(b'"'):
+        if not re.fullmatch(rb'"(?:[^"\\]|\\.)*"', name):
+            raise MailError("INVALID_MAIL_IMAP_PROTOCOL_FAILED")
+        name = re.sub(rb"\\(.)", rb"\1", name[1:-1])
+    separator = "" if delimiter == b"NIL" else mailbox_unicode(re.sub(rb"\\(.)", rb"\1", delimiter[1:-1]))
+    if delimiter != b"NIL" and len(separator) != 1:
+        raise MailError("INVALID_MAIL_IMAP_PROTOCOL_FAILED")
+    return {"name": mailbox_unicode(name), "flags": flags.lower().split(), "delimiter": separator}
+
+
+def resolve_folder(client, requested):
+    requested = folder_name(requested)
+    if requested == "INBOX":
+        return requested
+    status, values = client.list('""', '*')
+    if status != "OK" or not isinstance(values, list) or len(values) > 10000:
+        raise MailError("INVALID_MAIL_FOLDER_LIST_FAILED")
+    # imaplib follows a LIST literal tuple with its empty framing trailer.
+    folders = [list_mailbox(row) for row in values if row not in (None, b"")]
+    folders = [row for row in folders if b"\\noselect" not in row["flags"]]
+    aliases = {"sent": (b"\\sent", {"sent", "sent items", "sent messages"}),
+               "drafts": (b"\\drafts", {"drafts", "draft"}), "archive": (b"\\archive", {"archive", "archives"})}
+    alias = aliases.get(requested.lower())
+    if alias:
+        candidates = {row["name"] for row in folders if alias[0] in row["flags"]}
+        if not candidates:
+            candidates = {row["name"] for row in folders
+                          if (row["name"].rsplit(row["delimiter"], 1)[-1] if row["delimiter"] else row["name"]).lower() in alias[1]}
+    else:
+        candidates = {row["name"] for row in folders if row["name"] == requested}
+    if len(candidates) != 1:
+        raise MailError("INVALID_MAIL_FOLDER_AMBIGUOUS" if candidates else "INVALID_MAIL_FOLDER_NOT_FOUND")
+    return candidates.pop()
+
+
+def imap_identity(value):
+    if not isinstance(value, str):
+        raise MailError("INVALID_MESSAGE_ID")
+    if re.fullmatch(r"\d{1,10}:\d{1,10}", value):
+        current, uid = value.split(":")
+        folder = "INBOX"
+    else:
+        match = re.fullmatch(r"imap-v1:([A-Za-z0-9_-]{1,1400}):(\d{1,10}):(\d{1,10})", value)
+        if not match:
+            raise MailError("INVALID_MESSAGE_ID")
+        token, current, uid = match.groups()
+        try:
+            folder = folder_name(base64.b64decode(token + "=" * (-len(token) % 4), altchars=b"-_", validate=True).decode("utf8"))
+        except (ValueError, UnicodeError):
+            raise MailError("INVALID_MESSAGE_ID") from None
+    if not all(0 < int(number) <= 4294967295 for number in (current, uid)):
+        raise MailError("INVALID_MESSAGE_ID")
+    return folder, current, int(uid)
+
+
+def scoped_message_id(folder, current, uid):
+    if folder == "INBOX":
+        return f"{current}:{uid}"
+    token = base64.urlsafe_b64encode(folder.encode("utf8")).decode().rstrip("=")
+    return f"imap-v1:{token}:{current}:{uid}"
+
+
 def imap_connect(request):
     client = None
     phase = "connect"
@@ -118,9 +225,16 @@ def imap_connect(request):
         phase = "auth"
         client.login(client._quote(request["credential"]["username"]), request["credential"]["password"])
         phase = "select"
-        status, _ = client.select("INBOX", readonly=True)
+        operation = request.get("operation")
+        if operation == "read":
+            selected = imap_identity(request.get("messageId"))[0]
+        else:
+            selected = resolve_folder(client, request.get("folder", "INBOX")) if operation == "search" else "INBOX"
+        wire = mailbox_utf7(selected).replace(b"\\", b"\\\\").replace(b'"', b'\\"')
+        status, _ = client.select(b'"' + wire + b'"', readonly=True)
         if status != "OK":
-            raise MailError("INVALID_MAIL_IMAP_PROTOCOL_FAILED")
+            raise MailError("INVALID_MAIL_FOLDER_NOT_FOUND")
+        client.workspace_folder = selected
         return client
     except (OSError, imaplib.IMAP4.error, MailError) as error:
         if client:
@@ -310,10 +424,11 @@ def header_bytes(record):
     return values[0]
 
 
-def fetch_summary(client, uids, current):
+def fetch_summary(client, uids, current, folder="INBOX", has_attachment=None):
     if not uids:
         return []
-    records = fetch_records(client, uids, f"(UID FLAGS BODY.PEEK[HEADER.FIELDS ({HEADER_FIELDS})])")
+    structure = " BODYSTRUCTURE" if has_attachment is not None else ""
+    records = fetch_records(client, uids, f"(UID FLAGS{structure} BODY.PEEK[HEADER.FIELDS ({HEADER_FIELDS})])")
     wanted = set(uids); messages = {}
     for record in records:
         uid = record.get("uid")
@@ -321,7 +436,12 @@ def fetch_summary(client, uids, current):
             raise MailError("INVALID_MAIL_INCOMPLETE")
         headers = BytesHeaderParser(policy=policy.default).parsebytes(header_bytes(record))
         flags = [v.decode("ascii") for v in record.get("flags", []) if isinstance(v, bytes)]
-        messages[uid] = {"id": f"{current}:{uid}", **{name: str(headers.get(name, ""))[:8192] for name in ("from", "to", "cc", "subject", "date")},
+        present = bool(message_parts(record.get("bodystructure"))[1]) if has_attachment is not None else None
+        if has_attachment is not None and present != has_attachment:
+            continue
+        messages[uid] = {"id": scoped_message_id(folder, current, uid), "folder": folder,
+                         **{name: str(headers.get(name, ""))[:8192] for name in ("from", "to", "cc", "subject", "date")},
+                         **({"hasAttachment": present} if has_attachment is not None else {}),
                          "flags": flags, "read": "\\seen" in [v.lower() for v in flags], "replied": "\\answered" in [v.lower() for v in flags]}
     # A concurrent delete may remove a selected UID; do not manufacture a row.
     return [messages[uid] for uid in uids if uid in messages]
@@ -509,18 +629,26 @@ def search_mail(client, request, current):
     limit = request.get("limit", 50)
     if type(limit) is not int or not 1 <= limit <= 50:
         raise MailError("INVALID_MAIL_QUERY")
+    has_attachment = request.get("hasAttachment")
+    if "hasAttachment" in request and type(has_attachment) is not bool:
+        raise MailError("INVALID_MAIL_QUERY")
+    folder = getattr(client, "workspace_folder", folder_name(request.get("folder", "INBOX")))
     criteria = search_dates(options)
-    fingerprint = hashlib.sha256(json.dumps([query, options['since'], options['before']], ensure_ascii=False).encode()).hexdigest()
+    terms = [query, options['since'], options['before']]
+    fingerprint = hashlib.sha256(json.dumps([*terms, folder, has_attachment], ensure_ascii=False).encode()).hexdigest()
     cursor = options['cursor']
     original_count = None
     if cursor is not None:
-        if not isinstance(cursor, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,1024}", cursor):
+        if not isinstance(cursor, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,8192}", cursor):
             raise MailError("INVALID_MAIL_QUERY")
         try:
             page = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
         except (ValueError, UnicodeError):
             raise MailError("INVALID_MAIL_QUERY") from None
-        if not isinstance(page, dict) or page.get('v') != 1 or page.get('hash') != fingerprint:
+        legacy = isinstance(page, dict) and page.get('v') == 1 and folder == "INBOX" and has_attachment is None
+        expected = hashlib.sha256(json.dumps(terms, ensure_ascii=False).encode()).hexdigest() if legacy else fingerprint
+        if (not isinstance(page, dict) or page.get('v') not in {1, 2} or page.get('hash') != expected
+                or (not legacy and (page.get('v') != 2 or page.get('folder') != folder))):
             raise MailError("INVALID_MAIL_QUERY")
         if page.get('validity') != current:
             raise MailError("INVALID_MAILBOX_CHANGED")
@@ -551,16 +679,16 @@ def search_mail(client, request, current):
     if original_count is None:
         original_count = len(ids)
     chosen = ids[:limit]
-    messages = fetch_summary(client, chosen, current)
+    messages = fetch_summary(client, chosen, current, folder, has_attachment)
     if fallback:
         term = unicodedata.normalize('NFKC', query).casefold()
         messages = [message for message in messages if term in unicodedata.normalize('NFKC', ' '.join(str(message.get(k, '')) for k in ('from', 'to', 'cc', 'subject'))).casefold()]
     more = len(ids) > len(chosen)
-    next_cursor = base64.urlsafe_b64encode(json.dumps({'v': 1, 'validity': current, 'beforeUid': min(chosen), 'hash': fingerprint, 'count': original_count}, separators=(',', ':')).encode()).decode().rstrip('=') if more else None
+    next_cursor = base64.urlsafe_b64encode(json.dumps({'v': 2, 'folder': folder, 'validity': current, 'beforeUid': min(chosen), 'hash': fingerprint, 'count': original_count}, separators=(',', ':')).encode()).decode().rstrip('=') if more else None
     legacy = ' '.join([*(f'{key}:{options[key]}' for key in ('since', 'before') if options[key]), query]).strip()
     next_query = f'cursor:{next_cursor} {legacy}'.strip() if next_cursor else None
     return {'messages': messages, 'nextCursor': next_cursor, 'nextQuery': next_query if next_query and len(next_query) <= 500 else None,
-            'hasMore': more, 'totalMatches': None if fallback else original_count, 'scannedMessages': len(chosen),
+            'hasMore': more, 'folder': folder, 'totalMatches': None if fallback or has_attachment is not None else original_count, 'scannedMessages': len(chosen),
             'searchScope': 'headers' if fallback else 'full-text',
             'bodySearchSupported': not fallback,
             **({'searchNotice': 'This server supports only US-ASCII search. Non-ASCII terms are matched against headers across cursor pages; bodies are not scanned. Continue while hasMore, including empty pages.'} if fallback else {})}
@@ -576,10 +704,9 @@ def imap_operation(request):
         if operation == "search":
             return search_mail(client, request, current)
         if operation == "read":
-            message_id = request.get("messageId", "")
-            if not isinstance(message_id, str) or not re.fullmatch(r"\d+:\d+", message_id):
+            folder, wanted, uid = imap_identity(request.get("messageId", ""))
+            if folder != getattr(client, "workspace_folder", folder):
                 raise MailError("INVALID_MESSAGE_ID")
-            wanted, uid = message_id.split(":")
             if wanted != current:
                 raise MailError("INVALID_MAILBOX_CHANGED")
             if request.get("format") == "text-v1":

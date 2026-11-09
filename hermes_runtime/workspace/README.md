@@ -14,11 +14,25 @@ The trusted `environmentId` must match `autonomous.workspace.environment_id`.
 The agent's existing terminal transport executes reviewed IMAP/SMTP, DNS/XML
 discovery and Google HTTPS programs in its own sandbox. An unavailable sandbox
 fails closed. MIME formatting and extraction run inside the Hermes Pod. Search
-returns headers with cursor pagination over the whole mailbox. When an Exchange
+returns headers with cursor pagination in `folder` (default `INBOX`). `Sent`,
+`Drafts` and `Archive` resolve IMAP special-use folders; arbitrary IMAP names
+are exact, including Unicode and hierarchy delimiters. A missing or ambiguous
+alias fails explicitly. Gmail uses its system labels or an exact custom label;
+its `Archive` view means non-INBOX mail outside Spam/Trash, including sent mail.
+Optional boolean `hasAttachment` filters attachment metadata without downloading
+payloads. IMAP filtering can produce an empty page with `hasMore=true`;
+`totalMatches` is unknown for that filtered view. Keep folder/query/filters fixed
+while following a cursor. When an Exchange
 server refuses UTF-8 search, results explicitly identify the header-only fallback;
 the caller must continue while `hasMore`, including empty pages. Reads and proactive
 collection fetch text sections and attachment metadata. Only `mail_attachment`
 retrieves an attachment payload. An uncertain SMTP or Google write is never retried.
+
+Pass the opaque ID returned by search unchanged to `mail_read` and
+`mail_attachment`: non-INBOX IMAP IDs retain the exact resolved mailbox, UIDVALIDITY
+and UID. They read the original Sent message, without needing a quoted reply.
+Legacy `UIDVALIDITY:UID` IDs and version-1 search cursors remain INBOX-only.
+Proactive delivery continues to collect INBOX only; folder search does not change it.
 
 `google_schema` and `google_gws` preserve the existing JSON resource/method/params/body
 interface using official Google discovery schemas. Five service origins are pinned;
