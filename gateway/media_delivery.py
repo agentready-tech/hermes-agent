@@ -95,6 +95,11 @@ def producing_environment(home, route, task_id=None):
                         getattr(environment, field, None) != config['kubernetes_' + field]
                         for field in ('namespace', 'pod', 'container')):
                     raise ValueError('Attachment backend ownership mismatch')
+                from gateway.media_policy import media_delivery_strict
+                if media_delivery_strict():
+                    from tools.environments.kubernetes import KubernetesEnvironment
+                    if config['env_type'] != 'kubernetes' or not isinstance(environment, KubernetesEnvironment):
+                        raise ValueError('Attachment source denied')
                 yield environment, str(environment.cwd)
     finally:
         _SESSION_PROFILE.reset(profile)
@@ -144,9 +149,38 @@ def native_artifact(path, home):
     return any(value == root or root in value.parents for root in native_artifact_roots(home))
 
 
+def _sandbox_scratch(path, home):
+    """Kubernetes scratch is private to the producer, unlike the shared native workspace."""
+    root = Path(home) / 'cache' / 'scratch'
+    if path != root and root not in path.parents:
+        return False
+    from tools.terminal_scope import install_and_reset_profile_terminal_scope
+    from tools.terminal_tool import _get_env_config
+    with own_home(home), install_and_reset_profile_terminal_scope(home):
+        return _get_env_config()['env_type'] == 'kubernetes'
+
+
+def _protected_source_identity(path):
+    from gateway.platforms.base import _ROOT_CREDENTIAL_PATHS
+    protected = {Path(item).name.lower() for item in _ROOT_CREDENTIAL_PATHS}
+    return any(part.lower() in protected for part in path.parts)
+
+
+def _remote_source_is_denied(path, home, environment):
+    """Only the already owner-bound Kubernetes scratch loses its host /root prefix."""
+    from gateway.media_fetch import remote_path_is_denied
+    from tools.environments.kubernetes import KubernetesEnvironment
+    scratch = Path(home) / 'cache' / 'scratch'
+    if isinstance(environment, KubernetesEnvironment) and (path == scratch or scratch in path.parents):
+        # Keep the conservative credential-component policy; do not trust an ambient remote HOME.
+        candidate = '/' + path.relative_to(home).as_posix()
+        return _protected_source_identity(path) or remote_path_is_denied(candidate, None)
+    return remote_path_is_denied(str(path), getattr(environment, '_remote_home', None))
+
+
 def _native_probe(path, max_file, *, authorized_namespace=False, owner_uid=None):
     from agent.file_safety import get_read_block_error
-    from gateway.platforms.base import validate_media_delivery_path, _ROOT_CREDENTIAL_PATHS
+    from gateway.platforms.base import validate_media_delivery_path
     from gateway.session_ingress_media import _open_regular
     if (not path.is_absolute() or path.resolve() != path or any(parent.is_symlink() for parent in path.parents)
             or path.name.lower().startswith('.env') or get_read_block_error(str(path))):
@@ -154,8 +188,7 @@ def _native_probe(path, max_file, *, authorized_namespace=False, owner_uid=None)
     # Explicitly authorized artifact inputs may be outside strict delivery roots.
     # Secret/history/config identities are screened BEFORE they can become retained artifacts.
     if authorized_namespace:
-        protected = {Path(item).name.lower() for item in _ROOT_CREDENTIAL_PATHS}
-        if any(part.lower() in protected for part in path.parts):
+        if _protected_source_identity(path):
             raise ValueError('Attachment source denied')
     else:
         safe = validate_media_delivery_path(str(path))
@@ -199,11 +232,10 @@ def _retained_reference(path, max_file):
 def prepare_files(paths, home, route, *, task_id=None, max_file=MAX_FILE, max_batch=MAX_BATCH, max_files=MAX_FILES):
     """One deterministic stager for native-channel senders and Panel's committed-row descriptors.
 
-    Explicit own-home artifact namespaces choose native bytes. Other paths choose only the
-    configured own terminal backend. Both use the existing capture/restore implementation.
+    Shared workspace/canonical artifact caches choose native bytes. Kubernetes scratch and
+    other paths choose the own terminal backend. Both use existing capture/restore semantics.
     """
     from contextlib import ExitStack
-    from gateway.media_fetch import remote_path_is_denied
     from gateway.session_ingress_media import capture_native_media, restore_native_media
     if not 1 <= len(paths) <= max_files:
         raise ValueError('Attachment limit exceeded')
@@ -225,7 +257,7 @@ def prepare_files(paths, home, route, *, task_id=None, max_file=MAX_FILE, max_ba
             if (not path.is_absolute() or '..' in path.parts or not path.name or len(path.name) > 180
                     or any(ord(char) < 32 or char in '/\\' for char in path.name)):
                 raise ValueError('Invalid attachment source')
-            if native_artifact(path, home):
+            if native_artifact(path, home) and not _sandbox_scratch(path, home):
                 before = _native_probe(path, max_file, authorized_namespace=True, owner_uid=owner_uid)
                 local.append(path)
                 expected.append((path, before, True))
@@ -242,10 +274,7 @@ def prepare_files(paths, home, route, *, task_id=None, max_file=MAX_FILE, max_ba
                     expected.append((path, before, False))
                     origins.append({'kind': 'terminal-backend', 'home': str(home), 'task_id': task_id or route, 'backend': 'local', 'path': str(path)})
                 else:
-                    from gateway.media_policy import media_delivery_strict
-                    if media_delivery_strict():
-                        raise ValueError('Attachment source denied')
-                    if remote_path_is_denied(str(path), getattr(environment, '_remote_home', None)):
+                    if _remote_source_is_denied(path, home, environment):
                         raise ValueError('Attachment source denied')
                     folder = directory / str(index)
                     folder.mkdir()

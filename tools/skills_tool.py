@@ -630,6 +630,8 @@ def skill_view(
         hermes_meta = (metadata.get("hermes", {}) or {}) if isinstance(metadata, dict) else {}
         tags, related_skills = (
             _parse_tags(hermes_meta.get(k) or frontmatter.get(k, "")) for k in ("tags", "related_skills"))
+        from agent.skill_library import resource_directory
+        execution_dir = resource_directory(skill_dir) if skill_dir is not None else None
         linked_files = _skill_linked_files(skill_dir)
         try:
             rel_path = str(skill_md.relative_to(active_skills_dir))
@@ -638,7 +640,7 @@ def skill_view(
         skill_name = frontmatter.get("name", skill_md.stem if not skill_dir else skill_dir.name)
         readiness, readiness_extras = _skill_readiness(frontmatter, skill_name)
         rendered_content = content if not preprocess else _preprocess_skill(
-            content, skill_dir, task_id, "Could not preprocess skill content for %s", skill_name)
+            content, execution_dir, task_id, "Could not preprocess skill content for %s", skill_name)
         # ── pm tool deps (`deps: [ffmpeg]` frontmatter) ──────────────
         # Loading the skill IS the activation moment: ensure each declared
         # pm package now so the skill's commands work when the model runs
@@ -669,7 +671,7 @@ def skill_view(
         result = {
             "success": True, "name": skill_name, "description": frontmatter.get("description", ""),
             "tags": tags, "related_skills": related_skills, "content": rendered_content,
-            "path": rel_path, "skill_dir": str(skill_dir) if skill_dir else None,
+            "path": rel_path, "skill_dir": str(execution_dir) if execution_dir else None,
             "linked_files": linked_files if linked_files else None,
             "usage_hint": "To view linked files, call skill_view(name, file_path) where file_path is e.g. 'references/api.md' or 'assets/config.yaml'" if linked_files else None,
             **readiness,

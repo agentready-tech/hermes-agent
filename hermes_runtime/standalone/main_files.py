@@ -13,7 +13,8 @@ from gateway.media_delivery import MAX_BATCH, MAX_FILE, MAX_FILES
 
 CAPABILITY = 'chat-files-v1'
 KEY = 'panel_files_v1'
-ERROR = 'Не удалось прикрепить файл. Проверьте файл в рабочей папке и повторите отправку.'
+ERROR = 'Не удалось прикрепить файл. Повторите отправку.'
+_ERRORS = (ERROR, 'Не удалось прикрепить файл. Проверьте файл в рабочей папке и повторите отправку.')
 HINT = (
     '## Panel file delivery\n'
     'This AgentReady main supports chat-files-v1. To send a generated file, include '
@@ -70,7 +71,7 @@ def project_row(row):
         if isinstance(result.get(key), str):
             result[key] = BasePlatformAdapter.strip_media_directives_for_display(result[key])
     result['attachments'] = public_files(marker, row.get('row_id'))
-    if isinstance(marker, dict) and marker.get('error') == ERROR:
+    if isinstance(marker, dict) and marker.get('error') in _ERRORS:
         result['attachment_error'] = ERROR
     return result
 
@@ -135,13 +136,13 @@ def settle_files(authority, live, ref, settled, captured, response=None):
         marker = {'files': [], 'error': ERROR}
     if marker is not None:
         result['panel_files'] = {'attachments': public_files(marker, row_id),
-            **({'attachment_error': ERROR} if marker.get('error') == ERROR else {})}
+            **({'attachment_error': ERROR} if marker.get('error') in _ERRORS else {})}
 
         # Delivery-only rewrite: TG and Panel use the same immutable references. The stored
         # assistant body/api_content and the model's historical prompt are never rewritten.
         from gateway.platforms.base import BasePlatformAdapter
         _paths, body = BasePlatformAdapter.extract_media(response or '')
-        if marker.get('error') == ERROR:
+        if marker.get('error') in _ERRORS:
             # Panel's 10/20 MiB limits must not suppress an otherwise valid native
             # platform send (Telegram's existing preparation still allows 50 MiB).
             return None

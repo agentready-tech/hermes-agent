@@ -79,6 +79,20 @@ class TestSkillsDirectoryMount:
         assert mounts[0]["container_path"] == "/root/.hermes/skills"
 
 
+    def test_managed_resource_namespace_mounts_and_syncs_without_duplicate_files(self, tmp_path, monkeypatch):
+        from agent.skill_library import RESOURCE_DIRECTORY
+        home = tmp_path / "profile"
+        root = home / "skills" / RESOURCE_DIRECTORY
+        script = root / "releases" / ("a" * 64) / "optional" / "finance-ledger" / "scripts" / "ledger.py"
+        script.parent.mkdir(parents=True)
+        script.write_text("print('fixture')")
+        monkeypatch.setenv("HERMES_HOME", str(home))
+        mounts = get_skills_directory_mount()
+        assert any(row["host_path"] == str(root.resolve()) and row["container_path"] == f"/root/.hermes/skills/{RESOURCE_DIRECTORY}" for row in mounts)
+        synced = [row for row in iter_skills_files() if row["host_path"] == str(script)]
+        assert len(synced) == 1
+        assert synced[0]["container_path"] == f"/root/.hermes/skills/{script.relative_to(home / 'skills').as_posix()}"
+
     def test_custom_container_base(self, tmp_path):
         hermes_home = tmp_path / ".hermes"
         (hermes_home / "skills").mkdir(parents=True)

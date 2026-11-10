@@ -10,7 +10,7 @@ import sys
 from pathlib import Path, PurePath
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from agent.skill_library import current_library, custody_root, pin_library
+from agent.skill_library import RESOURCE_DIRECTORY, current_library, custody_root, pin_library, resource_projection_root
 
 from hermes_constants import (
     get_config_path,
@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 PLATFORM_MAP = {"macos": "darwin", "linux": "linux", "windows": "win32"}
 
 EXCLUDED_SKILL_DIRS = frozenset((
+    RESOURCE_DIRECTORY,
     ".git", ".github", ".hub", ".archive", ".curator_backups", ".locks",
     ".venv", "venv", "node_modules", "site-packages", "__pycache__",
     ".tox", ".nox", ".pytest_cache", ".mypy_cache", ".ruff_cache",
@@ -416,7 +417,7 @@ def is_protected_system_skill_path(path: Path) -> bool:
         from agent.builtin_skills import is_builtin_path
         target = Path(os.path.abspath(path))
         return is_builtin_path(target) or any(target.is_relative_to(root) or target.resolve().is_relative_to(root.resolve())
-                   for root in (get_system_skills_dir(), custody_root()))
+                   for root in (get_system_skills_dir(), custody_root(), resource_projection_root()))
     except (OSError, RuntimeError, ValueError):
         return True
 

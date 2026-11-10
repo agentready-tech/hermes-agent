@@ -174,6 +174,10 @@ def _skill_dir_roots(container_base: str) -> Iterator[tuple[Path, str]]:
     skills_dir = get_hermes_home() / "skills"
     if skills_dir.is_dir():
         yield skills_dir, f"{base}/skills"
+    from agent.skill_library import RESOURCE_DIRECTORY, resource_projection_root
+    resources = resource_projection_root()
+    if resources.is_dir():
+        yield resources, f"{base}/skills/{RESOURCE_DIRECTORY}"
     try:
         from agent.skill_utils import get_external_skills_dirs, get_project_skills_dirs
     except ImportError:

@@ -22,6 +22,7 @@ MAX_SNAPSHOT_BYTES = 1024 * 1024
 MAX_SKILLS = 50
 MAX_FILES = 16
 _CUSTODIAN_UID = 0
+RESOURCE_DIRECTORY = ".agentsee-library-resources"
 _DIGEST = re.compile(r"[a-f0-9]{64}")
 _SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _PIN = ContextVar("hermes_common_skills_release", default=None)
@@ -36,6 +37,12 @@ class SkillLibraryError(ValueError):
 def custody_root(home=None):
     from hermes_constants import get_hermes_home
     return Path(home or get_hermes_home()).resolve() / ".agentsee" / "skills-library"
+
+
+def resource_projection_root(home=None):
+    """Root-owned resource mirror inside the already shared, read-only personal skills mount."""
+    from hermes_constants import get_hermes_home
+    return Path(home or get_hermes_home()).resolve() / "skills" / RESOURCE_DIRECTORY
 
 
 def resource_path(value):
@@ -313,8 +320,9 @@ def _load_current(root):
 def is_library_path(path, home=None):
     """Custody namespace, including inactive releases: never native-agent writable or preprocessed."""
     try:
-        target, root = Path(path), custody_root(home)
-        return target.is_relative_to(root) or target.resolve().is_relative_to(root)
+        target = Path(path)
+        return any(target.is_relative_to(root) or target.resolve().is_relative_to(root)
+                   for root in (custody_root(home), resource_projection_root(home)))
     except (OSError, ValueError, RuntimeError):
         return True
 
@@ -331,6 +339,34 @@ def package_metadata(path, state=None):
             raw = json.dumps(row, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             return {"name": row["name"], "origin": row["kind"], "sha256": hashlib.sha256(raw).hexdigest()}
     return None
+
+
+def resource_directory(path, state=None):
+    """Return the physical sandbox-visible directory for one currently owned managed package."""
+    state = state or current_library()
+    metadata = package_metadata(path, state)
+    if metadata is None:
+        return Path(path)
+    packages = [row for row in state.packages if row["kind"] == "system" or row["name"] in state.selected_optional]
+    raw = json.dumps({"schema": 2, "skills": packages}, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()
+    root = resource_projection_root()
+    release = root / "releases" / digest
+    try:
+        _custodied(root.parent, directory=True, parent=True)
+        marker = _read(root / "projection.json", root, 1024)
+        if marker != b'{"purpose":"agentsee-managed-skill-resources","schema":1}':
+            raise SkillLibraryError("INVALID_SKILLS_RESOURCE_PROJECTION")
+        if _read(release / "release.json", root, MAX_SNAPSHOT_BYTES) != raw:
+            raise SkillLibraryError("INVALID_SKILLS_RESOURCE_PROJECTION")
+        _verify_tree(release, packages)
+        for row in packages:
+            for entry in row["files"]:
+                if _read(release / row["kind"] / row["name"] / entry["path"], root, MAX_FILE_BYTES) != entry["content"].encode("utf-8"):
+                    raise SkillLibraryError("INVALID_SKILLS_RESOURCE_PROJECTION")
+    except OSError:
+        raise SkillLibraryError("INVALID_SKILLS_RESOURCE_PROJECTION_UNAVAILABLE") from None
+    return release / metadata["origin"] / metadata["name"]
 
 
 def load_library(home=None):

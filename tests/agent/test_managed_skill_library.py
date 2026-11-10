@@ -53,6 +53,27 @@ def publish(home, skills, selected=(), revision=1):
                                      "selectedOptional": list(selected)}))
     temporary.chmod(0o444)
     temporary.replace(root / "current.json")
+    # Worker transport mirror shares the existing personal-skills mount without joining its index.
+    exposed = [row for row in skills if row["kind"] == "system" or row["name"] in selected]
+    _profile, resource_raw = library.canonical_snapshot(exposed)
+    resource_root = library.resource_projection_root(home)
+    resource_root.mkdir(parents=True, exist_ok=True)
+    if not (resource_root / "projection.json").exists():
+        (resource_root / "projection.json").write_bytes(b'{"purpose":"agentsee-managed-skill-resources","schema":1}')
+        (resource_root / "projection.json").chmod(0o444)
+    resource_target = resource_root / "releases" / hashlib.sha256(resource_raw).hexdigest()
+    if not resource_target.exists():
+        resource_target.mkdir(parents=True)
+        (resource_target / "release.json").write_bytes(resource_raw)
+        for row in exposed:
+            for item in row["files"]:
+                path = resource_target / row["kind"] / row["name"] / item["path"]
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(item["content"], encoding="utf-8", newline="")
+        for current, _dirs, files in os.walk(resource_target, topdown=False):
+            for name in files:
+                (Path(current) / name).chmod(0o444)
+            Path(current).chmod(0o555)
     return value, target
 
 

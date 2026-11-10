@@ -348,6 +348,164 @@ def test_native_missing_or_symlink_never_changes_to_another_source(files, monkey
     with pytest.raises(ValueError): media_delivery.prepare_files([str(source)], files.home, 'own-producing-route')
 
 
+def _own_kubernetes_source(files, monkeypatch, *, strict):
+    from gateway import media_delivery, media_policy
+    from hermes_runtime.adapters import hermes
+    from tools import terminal_tool, terminal_tool_lifecycle
+    from tools.environments.kubernetes import KubernetesEnvironment
+
+    class KubernetesFiles(RemoteFiles, KubernetesEnvironment):
+        """Actual backend type/owner checks, with only its exec transport kept synthetic."""
+        virtual_root = '/tmp/synthetic-reports'
+
+        def execute(self, command, **kwargs):
+            return super().execute(command.replace(self.virtual_root, self.cwd), **kwargs)
+
+    environment = KubernetesFiles(files.workspace)
+    environment.namespace, environment.pod, environment.container = 'own', 'own-sandbox', 'sandbox'
+    config = {'env_type': 'kubernetes', 'kubernetes_namespace': 'own',
+              'kubernetes_pod': 'own-sandbox', 'kubernetes_container': 'sandbox'}
+    monkeypatch.setattr(terminal_tool, '_get_env_config', lambda: config)
+    monkeypatch.setattr(terminal_tool_lifecycle, 'ensure_task_env', lambda task_id: environment)
+    monkeypatch.setattr(media_delivery, 'producing_environment', files.original_source)
+    monkeypatch.setattr(media_policy, 'media_delivery_strict', lambda: strict)
+    monkeypatch.setattr(hermes, 'managed_home', lambda: files.home)
+    return environment, config
+
+
+@pytest.mark.parametrize('strict', [False, True])
+@pytest.mark.parametrize('channel', ['panel', 'native-media'])
+@pytest.mark.parametrize('location', ['tmp', 'scratch'])
+def test_own_kubernetes_tmp_report_is_retained_without_manual_copy(files, monkeypatch, strict, channel, location):
+    from gateway.media_delivery import prepare_requested_media
+    from hermes_runtime.standalone.main_files import download, retain_row
+    environment, _config = _own_kubernetes_source(files, monkeypatch, strict=strict)
+    if location == 'scratch':
+        environment.virtual_root = str(files.home / 'cache/scratch')
+    payload = b'synthetic owned sandbox temporary report'
+    source = files.workspace / 'report.csv'; source.write_bytes(payload)
+    remote = environment.virtual_root + '/report.csv'
+    if channel == 'panel':
+        rid = files.db.append_message('own-main', 'assistant', 'Synthetic report\nMEDIA:' + remote)
+        marker = retain_row(files.db, 'own-main', rid, files.home, 'own-producing-route')
+        assert len(marker['files']) == 1, marker
+        source.unlink()  # Delivery uses its immutable snapshot even after temporary-file cleanup.
+        result = download(rows(files), marker['files'][0]['id'], files.home)
+        assert base64.b64decode(result['data_base64']) == payload
+    else:
+        retained = prepare_requested_media(remote, 'own-producing-route')
+        assert retained is not None
+        source.unlink()
+        assert Path(retained).read_bytes() == payload
+
+
+def test_kubernetes_scratch_collision_uses_only_producer_bytes(files, monkeypatch):
+    from hermes_runtime.standalone.main_files import download, retain_row
+    environment, _config = _own_kubernetes_source(files, monkeypatch, strict=True)
+    scratch = files.home / 'cache/scratch'; scratch.mkdir(parents=True)
+    native = scratch / 'report.csv'; native.write_bytes(b'SECRET-looking native collision must never leave')
+    payload = b'the explicitly requested own Sandbox report'
+    (files.workspace / 'report.csv').write_bytes(payload)
+    environment.virtual_root = str(scratch)
+    rid = files.db.append_message('own-main', 'assistant', 'MEDIA:' + str(native))
+    marker = retain_row(files.db, 'own-main', rid, files.home, 'own-producing-route')
+    assert marker['files'][0]['origin']['kind'] == 'terminal-backend'
+    result = download(rows(files), marker['files'][0]['id'], files.home)
+    assert base64.b64decode(result['data_base64']) == payload
+    assert native.read_bytes() == b'SECRET-looking native collision must never leave'
+
+
+@pytest.mark.parametrize('refusal', ['symlink', 'foreign-namespace', 'untrusted-backend', 'credential-root'])
+def test_strict_kubernetes_export_preserves_source_refusals(files, monkeypatch, refusal):
+    from hermes_runtime.standalone.main_files import retain_row
+    environment, config = _own_kubernetes_source(files, monkeypatch, strict=True)
+    source = files.workspace / 'report.csv'
+    remote = environment.virtual_root + '/report.csv'
+    if refusal == 'symlink':
+        secret = files.workspace / 'private.txt'; secret.write_bytes(b'synthetic private bytes')
+        source.symlink_to(secret)
+    elif refusal == 'foreign-namespace':
+        environment.namespace = 'foreign'
+    elif refusal == 'untrusted-backend':
+        config['env_type'] = 'ssh'
+    else:
+        remote = '/root/.hermes/config.yaml'
+    rid = files.db.append_message('own-main', 'assistant', 'MEDIA:' + remote)
+    marker = retain_row(files.db, 'own-main', rid, files.home, 'own-producing-route')
+    assert marker['files'] == [] and marker['error']
+    if refusal != 'symlink':
+        assert environment.calls == []
+
+
+def test_native_artifact_foreign_uid_is_still_refused(files):
+    from gateway.media_delivery import _native_probe, MAX_FILE
+    source = files.home / 'workspace' / 'report.csv'; source.parent.mkdir()
+    source.write_bytes(b'synthetic other owner')
+    with pytest.raises(ValueError):
+        _native_probe(source, MAX_FILE, authorized_namespace=True, owner_uid=source.stat().st_uid + 1)
+
+
+@pytest.mark.parametrize('folder', ['workspace', 'cache/images'])
+def test_own_kubernetes_still_delivers_native_workspace_and_canonical_cache(files, monkeypatch, folder):
+    from gateway.media_delivery import prepare_files
+    environment, _config = _own_kubernetes_source(files, monkeypatch, strict=True)
+    source = files.home / folder / 'native.txt'; source.parent.mkdir(parents=True)
+    source.write_bytes(b'synthetic first-party native artifact')
+    prepared = prepare_files([str(source)], files.home, 'own-producing-route')
+    assert prepared[0]['origin']['kind'] == 'native-artifact'
+    assert Path(prepared[0]['reference']['path']).read_bytes() == source.read_bytes()
+    assert environment.calls == []
+
+
+def test_legacy_attachment_error_stays_visible_without_manual_copy_advice(files):
+    from hermes_runtime.standalone.main_files import ERROR, project_row
+    row = {'role': 'assistant', 'row_id': 1, 'text': 'Synthetic report', 'display_metadata': {
+        'panel_files_v1': {'files': [], 'error': 'Не удалось прикрепить файл. Проверьте файл в рабочей папке и повторите отправку.'}}}
+    assert project_row(row)['attachment_error'] == ERROR
+    assert 'рабочей папке' not in ERROR
+
+
+@pytest.mark.parametrize(('source', 'denied'), [
+    ('/root/.hermes/cache/scratch/report.csv', False),
+    ('/root/.hermes/cache/scratch/.aws/credentials', True),
+    ('/root/.hermes/cache/scratch/auth.json', True),
+    ('/root/.hermes/cache/scratch/state.db-wal', True),
+    ('/root/.hermes/config.yaml', True),
+    ('/root/.hermes/profiles/foreign/cache/scratch/report.csv', True),
+    ('/proc/self/environ', True),
+    ('/root/private.csv', True),
+    ('/tmp/report.csv', False),
+])
+def test_production_root_namespace_authorizes_only_owned_scratch(files, monkeypatch, source, denied):
+    from gateway.media_delivery import _remote_source_is_denied
+    from gateway.media_fetch import remote_path_is_denied
+    environment, _config = _own_kubernetes_source(files, monkeypatch, strict=True)
+    # The generic unknown-home gate remains closed; only the own scratch edge qualifies it.
+    assert remote_path_is_denied('/root/.hermes/cache/scratch/report.csv', None)
+    assert _remote_source_is_denied(Path(source), Path('/root/.hermes'), environment) is denied
+
+
+@pytest.mark.parametrize('above_native_limit', [False, True])
+def test_tmp_staging_preserves_distinct_panel_and_native_platform_limits(files, monkeypatch, above_native_limit):
+    from gateway.media_delivery import MAX_FILE, prepare_requested_media
+    from gateway.media_fetch import _FETCH_MAX_BYTES
+    from hermes_runtime.standalone.main_files import retain_row
+    environment, _config = _own_kubernetes_source(files, monkeypatch, strict=True)
+    size = (_FETCH_MAX_BYTES if above_native_limit else MAX_FILE) + 1
+    source = files.workspace / 'report.csv'
+    with source.open('wb') as stream:
+        stream.truncate(size)
+    remote = environment.virtual_root + '/report.csv'
+    rid = files.db.append_message('own-main', 'assistant', 'MEDIA:' + remote)
+    marker = retain_row(files.db, 'own-main', rid, files.home, 'own-producing-route')
+    assert marker['files'] == [] and marker['error']
+    retained = prepare_requested_media(remote, 'own-producing-route')
+    if above_native_limit:
+        assert retained is None
+    else:
+        assert retained is not None and Path(retained).stat().st_size == size
+
+
 def test_foreign_home_and_generic_denied_path_are_never_read_from_the_host(files, tmp_path):
     from gateway.media_delivery import prepare_files
     foreign = tmp_path / 'foreign-home/workspace'; foreign.mkdir(parents=True)
