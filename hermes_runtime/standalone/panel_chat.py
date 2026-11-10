@@ -60,6 +60,10 @@ class MainChat:
             if params.get('session_id', HOME_SESSION_ID) != HOME_SESSION_ID:
                 raise ValueError('Only the main conversation is available')
             return await self.snapshot()
+        if method in {'panel.subagents.list', 'panel.subagents.history'}:
+            if not self.session_id:
+                raise ValueError('Resume the main conversation first')
+            return await self.client.rpc(method, **params)
         if not self.session_id or params.get('session_id') != self.session_id:
             raise ValueError('Resume the main conversation first')
         if method == 'prompt.submit':

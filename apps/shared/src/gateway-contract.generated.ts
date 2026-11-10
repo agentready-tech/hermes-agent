@@ -5238,6 +5238,60 @@ export interface CanonicalBotDeliverResult {
   error?: string | null
   reason?: string | null
 }
+export interface PanelSubagentListParams {
+  before?: string | null
+  limit?: number | null
+  tracked?: string[] | null
+}
+export interface PanelSubagentListResult {
+  subagents: PanelPersistentSubagent[]
+  tracked: PanelSubagentState[]
+  page: PanelSubagentListPage
+}
+export interface PanelPersistentSubagent {
+  subagent_id: string
+  name: string
+  goal: string
+  status: string
+  last_status: string | null
+  summary: string
+  updated_at: number
+}
+export interface PanelSubagentState {
+  subagent_id: string
+  status: string
+  last_status: string | null
+  updated_at: number
+}
+export interface PanelSubagentListPage {
+  before: string
+  has_more: boolean
+}
+export interface PanelSubagentHistoryParams {
+  before?: number | null
+  limit?: number | null
+  subagent_id: string
+}
+export interface PanelSubagentHistoryResult {
+  subagent_id: string
+  messages: PanelChildDisplayRow[]
+  page: PanelSubagentHistoryPage
+}
+export interface PanelChildDisplayRow {
+  row_id: number
+  display_id: string
+  role: 'tool' | 'assistant'
+  text: string
+  truncated: boolean
+  name?: string | null
+  tool_call_id?: string | null
+  status?: 'started' | 'returned' | null
+  timestamp?: number | null
+}
+export interface PanelSubagentHistoryPage {
+  before: number
+  has_more: boolean
+}
 /** ``answers`` rides only on a reconnect replay (locks the server already accepted; null = skipped). */
 export interface ClarifyRequestParams {
   session_id: string
@@ -5906,6 +5960,7 @@ export interface PetHatchProgressPayload {
 }
 /** ``change_watcher._CHANGE_WATCHES`` payload fn — ``{}`` for every watch except pet.changed. */
 export type ChangeSignalPayload = Record<string, unknown>
+export type PanelSubagentsChanged = Record<string, never>
 export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED_RUNTIME' | 'CONNECTOR_REQUEST_FAILED' | 'INVALID_CONNECTOR_RESPONSE' | 'UNKNOWN_TARGET' | 'LINK_STILL_VALID' | 'REISSUE_REFUSED' | 'UNKNOWN_OPERATION' | 'INVALID_ANSWER' | 'NEEDS_NOUS_AUTH' | 'CONNECTOR_NOT_FOUND' | 'TOOLS_UNAVAILABLE' | 'CONNECTORS_UNAVAILABLE' | 'CATALOG_UNAVAILABLE' | 'ACCOUNTS_UNAVAILABLE' | 'CONNECTION_NOT_FOUND' | 'POLICY_UNAVAILABLE' | 'POLICY_CONFLICT' | 'FORBIDDEN_SCOPE' | 'ORG_REQUIRED' | 'ORG_ACCESS_DENIED' | 'INVALID_POLICY' | 'ALIAS_TAKEN'
 
 // ── Client→server methods ──
@@ -6719,6 +6774,8 @@ export interface CanonicalRpcMethods {
   'image.attach_bytes': { params: ImageAttachBytesParams; result: CanonicalAttachedImageResult }
   /** Native-owner only: admit the dispatcher's current claim on a kanban task. */
   'kanban.run': { params: KanbanRunParams; result: KanbanRunResult }
+  'panel.subagents.history': { params: PanelSubagentHistoryParams; result: PanelSubagentHistoryResult }
+  'panel.subagents.list': { params: PanelSubagentListParams; result: PanelSubagentListResult }
   'profiles.list': { params: CanonicalProfilesParams; result: CanonicalProfilesResult }
   /** Retire a still-queued admission; a started one is unaffected. */
   'prompt.cancel': { params: PromptCancelParams; result: AdmissionStatus }
@@ -6779,6 +6836,8 @@ export const CANONICAL_RPC_METHODS = [
   'groups.retry',
   'image.attach_bytes',
   'kanban.run',
+  'panel.subagents.history',
+  'panel.subagents.list',
   'profiles.list',
   'prompt.cancel',
   'prompt.receipt',
@@ -6932,6 +6991,7 @@ export interface BackendGatewayEventMap {
   'pairing.changed': ChangeSignalPayload
   /** Focus / reveal a named desktop pane. */
   'pane.reveal': PaneRevealPayload
+  'panel.subagents.changed': PanelSubagentsChanged
   /** The active pet / its spritesheet changed (watcher). */
   'pet.changed': PetChangedPayload
   /** Pet base-draft generation progress. */
@@ -7056,6 +7116,7 @@ export const GATEWAY_EVENT_TYPES = [
   'onboarding.ended',
   'pairing.changed',
   'pane.reveal',
+  'panel.subagents.changed',
   'pet.changed',
   'pet.generate.progress',
   'pet.hatch.progress',

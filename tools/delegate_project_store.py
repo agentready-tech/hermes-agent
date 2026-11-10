@@ -26,6 +26,7 @@ class ProjectStore:
         if self.db_path.resolve() != (get_hermes_home() / "state.db").resolve():
             raise ValueError("Project scope must match the owning profile's state.db")
         self.parent_id = str(parent.session_id)
+        self._display_progress = getattr(parent, 'tool_progress_callback', None)
         from hermes_state_registry import acquire
         self.db = acquire(self.db_path)
 
@@ -153,7 +154,10 @@ class ProjectStore:
             if changed:
                 conn.execute("UPDATE delegated_projects SET session_id=?,updated_at=? WHERE subagent_id=?",
                              (result.get("session_id") or project["session_id"], time.time(), project["subagent_id"]))
-            return bool(changed)
+        if changed and self._display_progress:
+            from tools.delegate_tool_progress import _safe_progress
+            _safe_progress(self._display_progress, 'subagent.changed')
+        return bool(changed)
 
     def release(self, message):
         with _transaction() as conn:

@@ -516,4 +516,4 @@ canonical_method("groups.discard", params=GroupsDiscardParams, result=GroupsDisc
 
 
 # Shared-name overrides load after the authority-only value shapes above.
-from . import canonical_sessions, canonical_projections
+from . import canonical_sessions, canonical_projections, canonical_subagents

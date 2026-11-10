@@ -24838,6 +24838,366 @@
         "title": "PaneRevealPayload",
         "type": "object"
       },
+      "PanelChildDisplayRow": {
+        "additionalProperties": false,
+        "properties": {
+          "row_id": {
+            "title": "Row Id",
+            "type": "integer"
+          },
+          "display_id": {
+            "title": "Display Id",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "tool",
+              "assistant"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Name"
+          },
+          "tool_call_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tool Call Id"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "started",
+                  "returned"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Status"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timestamp"
+          }
+        },
+        "required": [
+          "row_id",
+          "display_id",
+          "role",
+          "text",
+          "truncated"
+        ],
+        "title": "PanelChildDisplayRow",
+        "type": "object"
+      },
+      "PanelPersistentSubagent": {
+        "additionalProperties": false,
+        "properties": {
+          "subagent_id": {
+            "title": "Subagent Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "goal": {
+            "title": "Goal",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "last_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Status"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "number"
+          }
+        },
+        "required": [
+          "subagent_id",
+          "name",
+          "goal",
+          "status",
+          "last_status",
+          "summary",
+          "updated_at"
+        ],
+        "title": "PanelPersistentSubagent",
+        "type": "object"
+      },
+      "PanelSubagentHistoryPage": {
+        "additionalProperties": false,
+        "properties": {
+          "before": {
+            "title": "Before",
+            "type": "integer"
+          },
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "before",
+          "has_more"
+        ],
+        "title": "PanelSubagentHistoryPage",
+        "type": "object"
+      },
+      "PanelSubagentHistoryParams": {
+        "additionalProperties": false,
+        "properties": {
+          "before": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Before"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          },
+          "subagent_id": {
+            "title": "Subagent Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subagent_id"
+        ],
+        "title": "PanelSubagentHistoryParams",
+        "type": "object"
+      },
+      "PanelSubagentHistoryResult": {
+        "additionalProperties": false,
+        "properties": {
+          "subagent_id": {
+            "title": "Subagent Id",
+            "type": "string"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/PanelChildDisplayRow"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PanelSubagentHistoryPage"
+          }
+        },
+        "required": [
+          "subagent_id",
+          "messages",
+          "page"
+        ],
+        "title": "PanelSubagentHistoryResult",
+        "type": "object"
+      },
+      "PanelSubagentListPage": {
+        "additionalProperties": false,
+        "properties": {
+          "before": {
+            "title": "Before",
+            "type": "string"
+          },
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "before",
+          "has_more"
+        ],
+        "title": "PanelSubagentListPage",
+        "type": "object"
+      },
+      "PanelSubagentListParams": {
+        "additionalProperties": false,
+        "properties": {
+          "before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Before"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          },
+          "tracked": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tracked"
+          }
+        },
+        "title": "PanelSubagentListParams",
+        "type": "object"
+      },
+      "PanelSubagentListResult": {
+        "additionalProperties": false,
+        "properties": {
+          "subagents": {
+            "items": {
+              "$ref": "#/components/schemas/PanelPersistentSubagent"
+            },
+            "title": "Subagents",
+            "type": "array"
+          },
+          "tracked": {
+            "items": {
+              "$ref": "#/components/schemas/PanelSubagentState"
+            },
+            "title": "Tracked",
+            "type": "array"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PanelSubagentListPage"
+          }
+        },
+        "required": [
+          "subagents",
+          "tracked",
+          "page"
+        ],
+        "title": "PanelSubagentListResult",
+        "type": "object"
+      },
+      "PanelSubagentState": {
+        "additionalProperties": false,
+        "properties": {
+          "subagent_id": {
+            "title": "Subagent Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "last_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Status"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "number"
+          }
+        },
+        "required": [
+          "subagent_id",
+          "status",
+          "last_status",
+          "updated_at"
+        ],
+        "title": "PanelSubagentState",
+        "type": "object"
+      },
+      "PanelSubagentsChanged": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "PanelSubagentsChanged",
+        "type": "object"
+      },
       "Params": {
         "additionalProperties": false,
         "description": "Client\u2192server method params / server\u2192client request params. Unknown keys are rejected.",
@@ -46920,6 +47280,42 @@
       }
     },
     {
+      "name": "panel.subagents.history",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PanelSubagentHistoryParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PanelSubagentHistoryResult"
+        }
+      }
+    },
+    {
+      "name": "panel.subagents.list",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PanelSubagentListParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PanelSubagentListResult"
+        }
+      }
+    },
+    {
       "name": "profiles.list",
       "summary": "",
       "params": [
@@ -48059,6 +48455,18 @@
           "name": "payload",
           "schema": {
             "$ref": "#/components/schemas/PaneRevealPayload"
+          }
+        }
+      ]
+    },
+    {
+      "name": "panel.subagents.changed",
+      "summary": "",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/PanelSubagentsChanged"
           }
         }
       ]

@@ -180,6 +180,9 @@ class AuthorityConnection:
         handlers['message.react'] = partial(react, self)
         from gateway.session_control_actions import control
         handlers['session.control'] = partial(control, self)
+        from hermes_runtime.adapters.main_subagents import rpc as subagent_read
+        handlers['panel.subagents.list'] = partial(subagent_read, self)
+        handlers['panel.subagents.history'] = partial(subagent_read, self, history=True)
         return handlers
 
     async def dispatch(self, request):
