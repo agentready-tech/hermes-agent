@@ -97,3 +97,18 @@ def test_actual_named_driver_shutdown_removes_its_startup_tab_and_preserves_sibl
     remaining = 0 if close_user_tabs else (2 if runtime_restarted else 1)
     wait_until(lambda: len(tabs) == remaining, what="child driver's native shutdown")
     assert ('human' in tabs) is not close_user_tabs
+
+
+@pytest.mark.platforms("posix")
+def test_completed_driver_cleanup_does_not_depend_on_wall_clock(native_drivers, monkeypatch):
+    """Linux process birth time can precede time.time() even for a newly spawned driver."""
+    import time
+    from hermes_cli import config
+    monkeypatch.setattr(config, 'read_raw_config', lambda: {'browser': {'close_idle_user_tabs': False}})
+    original_time = time.time
+    monkeypatch.setattr(time, 'time', lambda: original_time() + 1)
+    result = json.loads(cli.browser_exec('pass', task_id='clock-offset'))
+    assert result['success'], result
+    assert len(native_drivers) == 3
+    runtime.finish_native_tabs(object(), 'clock-offset', completed=True, interrupted=False, failed=False)
+    wait_until(lambda: set(native_drivers) == {'human'}, what='completed driver startup tab removal')

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import threading
-import time
 
 from hermes_constants import get_hermes_home
 from tools.browser_tab_harness import wrap_code
@@ -11,6 +10,12 @@ from tools.browser_tab_harness import wrap_code
 _contexts: dict[tuple[str, str], dict[str, tuple]] = {}
 _completed_tasks: set[tuple[str, str]] = set()
 _lock = threading.RLock()
+
+
+def _driver_process_snapshot():
+    import psutil
+    return {process.pid: process.info['create_time']
+            for process in psutil.process_iter(['create_time'], ad_value=None)}
 
 
 def _close_idle_user_tabs(home, task):
@@ -48,8 +53,8 @@ def prepare_native_tabs(code: str, task: str, cmd: list, env: dict) -> str:
         contexts = _contexts.setdefault((home, task), {})
         previous = contexts.get(name)
         # A later call after human takeover must not re-own the driver's startup tab.
-        epoch, started_after = previous[3:] if previous else (lease.get(home).epoch, time.time())
-        contexts[name] = (list(cmd), dict(env), browser, epoch, started_after)
+        epoch, driver_before = previous[3:] if previous else (lease.get(home).epoch, _driver_process_snapshot())
+        contexts[name] = (list(cmd), dict(env), browser, epoch, driver_before)
     return wrap_code(code, home=home, endpoint=browser, task=task)
 
 
@@ -72,9 +77,9 @@ def finish_native_tabs(agent, task: str, *, completed: bool, interrupted: bool, 
     if not contexts:
         return
     close_user_tabs = _close_idle_user_tabs(home, task)
-    for name, (cmd, env, browser, epoch, started_after) in contexts.items():
+    for name, (cmd, env, browser, epoch, driver_before) in contexts.items():
         code = wrap_code("pass", home=home, endpoint=browser, task=task, cleanup=True,
-                         driver_epoch=epoch, driver_started_after=started_after, close_user_tabs=close_user_tabs)
+                         driver_epoch=epoch, driver_before=driver_before, close_user_tabs=close_user_tabs)
         result = run_fenced({"features": {"local": True}},
                             lambda: _run_cli_killing_process_group(cmd, code, env, 15))
         if getattr(result, "returncode", None) == 0:

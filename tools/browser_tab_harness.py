@@ -21,20 +21,25 @@ def _record_popups(resources, cdp):
             break
 
 
-def _driver_created_after(helpers, started_after):
+def _driver_started_since(helpers, before):
     import psutil
-    return (started_after is not None
-            and psutil.Process(helpers._send({"meta": "ping"})["pid"]).create_time() >= started_after)
+    if before is None:
+        return False
+    process = psutil.Process(helpers._send({"meta": "ping"})["pid"])
+    # Linux process birth uses kernel boot time, which can lag time.time().
+    # Compare process generations, never a wall-clock admission timestamp.
+    return process.pid not in before or (before[process.pid] is not None
+                                         and before[process.pid] != process.create_time())
 
 
-def _retire_driver(resources, helpers, epoch, started_after, close_user_tabs=False):
+def _retire_driver(resources, helpers, epoch, driver_before, close_user_tabs=False):
     from tools.bot_desktop import lease
     if any(row.get("task") == resources.task for row in resources.tabs.values()):
         return False
     # A daemon left by an earlier gateway has no current admission proof.
     if close_user_tabs and resources.retained_unowned:
         return False
-    if not close_user_tabs and not _driver_created_after(helpers, started_after):
+    if not close_user_tabs and not _driver_started_since(helpers, driver_before):
         return False
     current = lease.get(resources.home)
     expected_epoch = resources.admission_epoch if close_user_tabs else epoch
@@ -48,7 +53,7 @@ def _retire_driver(resources, helpers, epoch, started_after, close_user_tabs=Fal
 
 @contextlib.contextmanager
 def managed_tabs(namespace: dict, home: str, endpoint: str, task: str, *, cleanup=False,
-                 driver_epoch=None, driver_started_after=None, close_user_tabs=False):
+                 driver_epoch=None, driver_before=None, close_user_tabs=False):
     from browser_harness import helpers
     resources = TabResources(home, endpoint, task)
     original = helpers.cdp
@@ -92,7 +97,7 @@ def managed_tabs(namespace: dict, home: str, endpoint: str, task: str, *, cleanu
                     helpers.switch_tab(target)
             yield
             if cleanup:
-                retired = _retire_driver(resources, helpers, driver_epoch, driver_started_after, close_user_tabs)
+                retired = _retire_driver(resources, helpers, driver_epoch, driver_before, close_user_tabs)
         finally:
             # Popups created by an owned page share its owner; a concurrently
             # opened human tab has no owned opener and is never adopted.
@@ -111,14 +116,14 @@ def managed_tabs(namespace: dict, home: str, endpoint: str, task: str, *, cleanu
 
 
 def wrap_code(code: str, *, home: str, endpoint: str, task: str, cleanup=False,
-              driver_epoch=None, driver_started_after=None, close_user_tabs=False) -> str:
+              driver_epoch=None, driver_before=None, close_user_tabs=False) -> str:
     """Use the installed runtime, not the harness package's unrelated site path."""
     from pathlib import Path
     source = str(Path(__file__).resolve().parent.parent)
     prefix = (f"import sys as _hermes_sys\n_hermes_sys.path.insert(0, {source!r})\n"
               "from tools.browser_tab_harness import managed_tabs as _hermes_managed_tabs\n"
               f"with _hermes_managed_tabs(globals(), {home!r}, {endpoint!r}, {task!r}, "
-              f"cleanup={cleanup!r}, driver_epoch={driver_epoch!r}, driver_started_after={driver_started_after!r}, "
+              f"cleanup={cleanup!r}, driver_epoch={driver_epoch!r}, driver_before={driver_before!r}, "
               f"close_user_tabs={close_user_tabs!r}):\n")
     import textwrap
     return prefix + textwrap.indent(code or "pass", "    ") + "\n"

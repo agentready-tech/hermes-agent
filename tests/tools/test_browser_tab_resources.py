@@ -38,7 +38,7 @@ class Browser:
 
 @pytest.fixture
 def browser(monkeypatch):
-    monkeypatch.setattr("tools.browser_tab_harness._driver_created_after", lambda *args: True)
+    monkeypatch.setattr("tools.browser_tab_harness._driver_started_since", lambda *args: True)
     b = Browser()
     helpers = ModuleType("browser_harness.helpers")
     helpers.cdp = b.cdp
