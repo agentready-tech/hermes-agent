@@ -816,6 +816,10 @@ class SessionAuthority:
                 from gateway.session_local_recovery import reopen_local_session
                 from gateway.session_runtime_workers import tracked_write
                 await tracked_write(self, partial(reopen_local_session, self, ref))
+            if (first is not None and live.source.platform.value == 'agentready'
+                    and 'local_automation_v1' in first['payload']):
+                from gateway.session_automation import check_local_automation
+                check_local_automation(self, ref, first)
             if first is not None and 'native_text_v1' in first['payload']:
                 from gateway.session_envelope import check_native_route
                 from hermes_runtime.adapters.main_transport import native_head_source

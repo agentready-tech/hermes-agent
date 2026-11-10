@@ -43,6 +43,26 @@ def authorize_source(runner, source):
             and adapter.authorize_source(source))
 
 
+def automation_ref(authority, adapter, source, entry):
+    """Only the owning private main adapter can admit a producer without messaging provenance."""
+    from gateway.session_contract import SessionRef
+    from hermes_runtime.adapters.hermes import enabled, managed_home
+    from hermes_runtime.adapters.state import resolve_home
+    from hermes_runtime.sessions import HOME_SESSION_ID, HOME_SESSION_KEY
+
+    live = authority.sessions.get(HOME_SESSION_ID)
+    if (not enabled() or Path(authority.profile_id).resolve() != managed_home()
+            or not isinstance(adapter, MainAdapter) or adapter.authority is not authority
+            or live is None or live.route != HOME_SESSION_KEY
+            or live.source.to_dict() != source.to_dict()
+            or entry.origin is None or entry.origin.to_dict() != source.to_dict()
+            or entry.session_key != HOME_SESSION_KEY or resolve_home(entry.session_id) is None
+            or authority.runner._adapter_for_source(source) is not adapter
+            or authorize_source(authority.runner, source) is not True):
+        raise RuntimeStoreError('permission_denied')
+    return SessionRef(authority.profile_id, HOME_SESSION_ID)
+
+
 def bind_main(authority, entry):
     from gateway.session_local_recovery import local_adapter_map
     from hermes_runtime.adapters.state import resolve_home
@@ -141,7 +161,11 @@ def recover_panel_inputs(authority, sid, source, rows):
     ref = SessionRef(authority.profile_id, sid)
     for row in rows:
         if row['status'] == 'queued':
-            check_local_input(authority, ref, row, source=source)
+            if 'local_automation_v1' in row['payload']:
+                from gateway.session_automation import check_local_automation
+                check_local_automation(authority, ref, row)
+            else:
+                check_local_input(authority, ref, row, source=source)
     if any(row['status'] == 'unknown' for row in rows):
         raise RuntimeStoreError('unknown_execution')
     authority._schedule(ref)

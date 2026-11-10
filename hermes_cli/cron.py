@@ -210,6 +210,9 @@ def cron_list(show_all: bool = False):
 
 def _last_run_display(job: dict[str, Any]) -> str:
     last_status = job["last_status"]
+    from hermes_runtime.standalone.events import is_main_schedule
+    if last_status == "admitted" or (last_status == "ok" and is_main_schedule(job)):
+        return color("Queued for main; see main history for task outcome", Colors.CYAN)
     if last_status == "ok":
         return color("ok", Colors.GREEN)
     if last_status == "delivery_queued":
@@ -302,7 +305,7 @@ def _job_warnings(job: dict[str, Any]) -> list[str]:
     # only job-level trace left.
     last_failure = job.get("last_failure")
     if isinstance(last_failure, dict) and last_failure.get("detail"):
-        recovered = str(job.get("last_status") or "") in {"ok", "delivery_queued"}
+        recovered = str(job.get("last_status") or "") in {"ok", "delivery_queued", "admitted"}
         lines.append(color(
             f"⚠ Last failure at {last_failure.get('at', '?')}: "
             f"{_short_reason(last_failure['detail'])}" + (" — recovered since" if recovered else ""),
@@ -702,7 +705,7 @@ def _cron_doctor_issues_for_job(job: dict[str, Any]) -> list[str]:
     issues: list[str] = []
     last_status = str(job.get("last_status") or "").strip().lower()
     # "delivery_failed" = the agent run succeeded; the delivery issue below reports it.
-    if last_status and last_status not in {"ok", "delivery_failed", "delivery_queued"}:
+    if last_status and last_status not in {"ok", "delivery_failed", "delivery_queued", "admitted"}:
         issues.append(f"last run failed: {str(job.get('last_error') or 'unknown error').strip()}")
     if delivery_err := str(job.get("last_delivery_error") or "").strip():
         issues.append(f"last run finished but the result was not delivered ({_short_reason(delivery_err)}). "

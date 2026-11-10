@@ -258,6 +258,9 @@ def _cron_output_status_label(job: Optional[dict[str, Any]]) -> str:
     status = str(job.get("last_status") or "").strip()
     if not status:
         return ""
+    from hermes_runtime.standalone.events import is_main_schedule
+    if status == "admitted" or (status == "ok" and is_main_schedule(job)):
+        return "Queued for main; see main history for task outcome"
     return status.replace("_", " ").upper()
 
 
@@ -313,6 +316,7 @@ def _owner_profile_executions(canonical_job_id: str) -> list[dict[str, Any]]:
             "finished_at": _iso_to_epoch(row.get("finished_at")),
             "status": str(row.get("status") or ""),
             "error": str(row.get("error") or "").strip(),
+            "main_handoff": row.get("delivery_outcome") == "admitted",
         })
     terminal.sort(key=lambda r: r["claimed_at"], reverse=True)
     return terminal
@@ -339,7 +343,9 @@ def _execution_contains(
     return finish is None or started_at <= finish + grace_seconds
 
 
-def _execution_status_title(status: str, error: str, fallback: str) -> str:
+def _execution_status_title(status: str, error: str, fallback: str, *, main_handoff: bool = False) -> str:
+    if status == "completed" and main_handoff:
+        return "Queued for main; see main history for task outcome"
     label = (status or "").replace("_", " ").upper()
     if label == "UNKNOWN":
         return fallback
@@ -379,6 +385,11 @@ def _list_cron_output_runs(
         files = []
 
     attempts = _owner_profile_executions(canonical_job_id)
+    from hermes_runtime.standalone.events import is_main_schedule
+    if is_main_schedule(job or {}):
+        # Old timer records used completed/ok too; this is a view, not a history rewrite.
+        for attempt in attempts:
+            attempt["main_handoff"] = attempt["status"] == "completed"
     docs: list[dict[str, Any]] = []
     for path in files[:limit]:
         started_at = _cron_output_run_timestamp(path)
@@ -577,7 +588,8 @@ def _reconcile_cron_runs(
         represented.add(index)
         if attempt["id"] in by_execution or matches(doc_ts, legacy):
             continue
-        merged.append({**doc, "title": _execution_status_title(attempt["status"], attempt["error"], doc["title"])})
+        merged.append({**doc, "title": _execution_status_title(
+            attempt["status"], attempt["error"], doc["title"], main_handoff=attempt.get("main_handoff", False))})
 
     # Attempts with neither a session nor a surviving doc (pruned, or the run never wrote one,
     # e.g. a failed fire) are still real executions: each keeps its own ledger row instead of
@@ -592,7 +604,8 @@ def _reconcile_cron_runs(
         merged.append({
             "id": f"cron_output:{canonical_job_id}:exec:{index}",
             **_cron_output_run_row(
-                when, _execution_status_title(attempt["status"], error, "Script-only run"), error or None),
+                when, _execution_status_title(attempt["status"], error, "Script-only run",
+                    main_handoff=attempt.get("main_handoff", False)), error or None),
         })
     merged.sort(key=lambda r: float(r.get("started_at") or 0), reverse=True)
     return merged[:limit]

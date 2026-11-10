@@ -159,6 +159,23 @@ describe("cronJobFormFromJob", () => {
 });
 
 describe("cronLastResult", () => {
+  it("shows main admission as a neutral handoff, without asserting the task outcome", () => {
+    expect(cronLastResult({ last_status: "admitted" })).toEqual({
+      status: "Queued for main",
+      tone: "secondary",
+      detail: "Timer handoff saved; see main history for task outcome.",
+    });
+  });
+  it("projects a legacy main ok as a handoff without changing stored history", () => {
+    const job = { last_status: "ok", origin: { platform: "hermes-autonomous" } };
+    expect(cronLastResult(job)).toEqual({
+      status: "Queued for main",
+      tone: "secondary",
+      detail: "Timer handoff saved; see main history for task outcome.",
+    });
+    expect(job.last_status).toBe("ok");
+  });
+
   it("renders nothing for a job that never ran", () => {
     expect(cronLastResult({ last_status: null })).toBeNull();
     expect(cronLastResult({ last_status: "" })).toBeNull();

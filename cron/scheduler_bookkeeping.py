@@ -84,6 +84,11 @@ def finish_completed_run(d, fire_owner: Optional[str], execution_id: str, *, rec
         mark_kwargs["expected_fire_owner"] = fire_owner
     if d.blocked_config:
         mark_kwargs["status"] = "blocked_config"
+    from hermes_runtime.standalone.events import is_main_schedule
+    main_admitted = d.success and not d.delivery_error and not d.blocked_config and is_main_schedule(job)
+    if main_admitted:
+        # This fire saved the handoff; the main conversation owns the eventual task outcome.
+        mark_kwargs["status"] = "admitted"
     # A run that removed its own record has nothing left to mark; the delivery above is its result.
     marked = scheduler.self_removal_delivery_allowed(job["id"]) or scheduler.mark_job_run(
         job["id"], d.success, d.error, **mark_kwargs)
@@ -92,7 +97,7 @@ def finish_completed_run(d, fire_owner: Optional[str], execution_id: str, *, rec
             execution_id, success=False,
             error="Fire claim ownership lost before terminal completion.")
         return True
-    delivery_outcome = _classify_delivery_outcome(
+    delivery_outcome = "admitted" if main_admitted else _classify_delivery_outcome(
         delivery_error=d.delivery_error,
         delivery_queued=job.get("last_delivery_queued"),
         notification_suppressed=bool(job.get("_notification_all_targets_suppressed")),

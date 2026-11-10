@@ -369,3 +369,19 @@ class TestManualRunReportsDeliveryFailure:
         assert res["claimed"] is True
         assert res["success"] is False
         assert "502" in res["error"]
+
+
+def test_manual_main_handoff_is_successful_but_task_is_pending():
+    from tools.cronjob_tools import _manual_run_completion
+    job = {**_JOB, "origin": {"platform": "hermes-autonomous"}}
+    claimed = {**job, "fire_claim": {"by": "manual-owner"}}
+    stored = {**job, "last_status": "admitted", "last_error": None}
+    with patch("tools.cronjob_tools.claim_job_for_fire", return_value=claimed), \
+         patch("cron.scheduler.run_one_job", return_value=True), \
+         patch("tools.cronjob_tools.get_job", return_value=stored):
+        result = _execute_job_now(job)
+        assert result["success"] is True
+        assert result["task_pending"] is True
+        completion = _manual_run_completion(result, job["id"], job["name"], "local", time.time())
+    assert completion["status"] == "completed"  # The timer-handoff worker ended, not the main task.
+    assert "task execution is pending" in completion["summary"]

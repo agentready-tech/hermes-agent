@@ -119,7 +119,7 @@ def snapshot_automation(authority, adapter, event, identity):
         raise RuntimeStoreError('invalid_params')
     notification = automation_notification_metadata(event.metadata) | automation_display_metadata(event.metadata)
     entry = _owner(runner, event, authority)
-    if event.source.platform == Platform.LOCAL:
+    if event.source.platform == Platform.LOCAL or event.source.platform.value == 'agentready':
         return snapshot_local_automation(authority, adapter, event, identity, entry)
     from gateway.session_envelope import restore_native
     from hermes_state_runtime import list_session_admissions
@@ -177,12 +177,16 @@ def check_automation_route(runner, payload, session_id, available_source, adapte
 
 
 def snapshot_local_automation(authority, adapter, event, identity, entry):
-    from gateway.session_local_recovery import restore_local_session
-    ref = restore_local_session(authority, event.source.chat_id)
-    live = authority.sessions[ref.session_id]
-    if (live.source is not event.source or not adapter.authorize_source(event.source)
-            or authority.runner._adapter_for_source(live.source) is not adapter):
-        raise RuntimeStoreError('permission_denied')
+    if event.source.platform.value == 'agentready':
+        from hermes_runtime.adapters.main_transport import automation_ref
+        ref = automation_ref(authority, adapter, event.source, entry)
+    else:
+        from gateway.session_local_recovery import restore_local_session
+        ref = restore_local_session(authority, event.source.chat_id)
+        live = authority.sessions[ref.session_id]
+        if (live.source is not event.source or not adapter.authorize_source(event.source)
+                or authority.runner._adapter_for_source(live.source) is not adapter):
+            raise RuntimeStoreError('permission_denied')
     descriptor = {'identity': identity, 'owner': ref.session_id,
                   'route': entry.session_key, 'target': entry.session_id}
     descriptor.update(automation_notification_metadata(event.metadata))
@@ -213,6 +217,11 @@ def check_local_automation(authority, ref, row, *, route=None):
     if (entry is None or entry.suspended or (entry.session_id != descriptor['target']
             and authority.db.get_compression_tip(descriptor['target']) != entry.session_id)):
         raise RuntimeStoreError('admission_conflict')
+    if live is not None and live.source.platform.value == 'agentready':
+        from hermes_runtime.adapters.main_transport import automation_ref
+        adapter = authority.runner._adapter_for_source(live.source)
+        if automation_ref(authority, adapter, live.source, entry) != ref:
+            raise RuntimeStoreError('permission_denied')
 
 
 def restore_local_automation(authority, ref, row):

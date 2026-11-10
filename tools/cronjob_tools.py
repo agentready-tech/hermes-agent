@@ -399,11 +399,16 @@ def _run_claimed_job(job: dict[str, Any], extra_prompt: Optional[str] = None) ->
         # That is NOT a success for the caller — the calling agent relays this result — so report it as
         # failed and surface the delivery error, which lives in last_delivery_error (last_error is None for
         # these runs, and a bare success=False with error=None reads as an unexplained failure). See #83993.
-        ok = last_status in {"ok", "delivery_queued"}
+        from hermes_runtime.standalone.events import is_main_schedule
+        admitted = last_status == "admitted" and is_main_schedule(refreshed)
+        ok = last_status in {"ok", "delivery_queued"} or admitted
         if execution is not None and execution.get("status") != "completed":
             ok = False
             run_error = execution.get("error") or f"execution ended in {execution.get('status') or 'unknown'} state"
-        return {"claimed": True, "success": bool(processed and ok), "error": run_error}
+        result = {"claimed": True, "success": bool(processed and ok), "error": run_error}
+        if result["success"] and admitted:
+            result.update(handoff_status="admitted", task_pending=True)
+        return result
     except Exception as e:
         logger.error("Failed to execute cron job %s immediately: %s", job_id, e)
         with contextlib.suppress(Exception):
@@ -511,8 +516,8 @@ def _manual_run_completion(
     from hermes_runtime.standalone.events import is_main_schedule
     if is_main_schedule(refreshed):
         return {"status": "completed" if res.get("success") else "error",
-                "summary": ("The scheduled prompt was admitted into the main conversation; task execution "
-                            "and automatic delivery remain pending." if res.get("success") else
+                "summary": ("Queued for main; task execution is pending. This timer-handoff receipt "
+                            "does not confirm task completion." if res.get("success") else
                             "Main-session admission failed: " + str(res.get("error") or "unknown error")),
                 "error": res.get("error"), "api_calls": 0, "duration_seconds": duration}
     lines = [
@@ -735,6 +740,8 @@ def _action_create(a: dict[str, Any]) -> str:
 def _action_list(a: dict[str, Any]) -> str:
     jobs = [_format_job(job) for job in list_jobs(include_disabled=a["include_disabled"])]
     _result = {"success": True, "count": len(jobs), "jobs": jobs}
+    if any(job.get("execution_scope") == "main" for job in jobs):
+        _result["guidance"] = ["Main cron statuses describe timer handoffs; see the main history for task outcomes."]
     # Same inert-job class as create; an empty list has nothing inert.
     if jobs:
         # Same silent-inert-job class as create (#87033): an agent inspecting existing jobs in a
@@ -814,6 +821,8 @@ def _action_run(job: dict[str, Any], a: dict[str, Any]) -> str:
     result = _refreshed_job_view(job_id)
     result["executed"] = claimed
     result["execution_success"] = exec_result.get("success", False)
+    if exec_result.get("task_pending"):
+        result.update(handoff_status="admitted", task_pending=True)
     if not claimed:
         result["execution_skipped"] = exec_result.get("error") or (
             "Already being fired by the scheduler; not run again.")

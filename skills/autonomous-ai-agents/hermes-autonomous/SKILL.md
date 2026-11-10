@@ -52,8 +52,10 @@ lifecycle through the same tool, preserving its main-inbox routing:
 List jobs again after a change and verify `execution_scope="main"`. The tool runs
 in the owning Hermes process; the sandbox does not need the host CLI, an inbox
 mount or a separate scheduling service. The host CLI remains available to operators.
-The scheduling interface is retained: a messaging request receives its final
-answer through that chat/topic; a web/local request stays in the main interface.
+The creating interface does not select a delivery channel. The timer saves a
+handoff to the existing main conversation; its current bound messaging route
+owns proactive replies, and Panel-only main work stays in the native history.
+Successful timer handoff does not mean the task ran or its answer was delivered.
 Do not call `hermes send` in the Docker sandbox to deliver this final answer.
 
 ## Quick Reference

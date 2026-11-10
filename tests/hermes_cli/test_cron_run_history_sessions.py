@@ -220,3 +220,14 @@ async def test_an_overlapping_attempt_claimed_before_a_runs_doc_keeps_its_own_ro
     assert [r['source'] for r in runs] == ['cron_output', 'cron'], runs
     assert runs[0]['title'].startswith('FAILED') and runs[0]['preview'] == 'owner_unavailable', runs
     assert (runs[1]['id'], runs[1]['cron_execution_id']) == (session_id, fire)
+
+
+def test_main_timer_history_reports_handoff_not_task_completion():
+    for status in ("admitted", "ok"):
+        label = cron_routes._cron_output_status_label({"last_status": status, "origin": {"platform": "hermes-autonomous"}})
+        assert label == "Queued for main; see main history for task outcome"
+    assert cron_routes._cron_output_status_label({"last_status": "ok"}) == "OK"
+    attempt = {"id": "timer", "claimed_at": 1, "finished_at": 2, "status": "completed",
+               "error": "", "main_handoff": True}
+    rows = cron_routes._reconcile_cron_runs([], [], [attempt], "job", 20)
+    assert rows[0]["title"] == "Queued for main; see main history for task outcome"

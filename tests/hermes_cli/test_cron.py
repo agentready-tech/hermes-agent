@@ -683,3 +683,14 @@ class TestSlashCronRunSkipped:
         out = capsys.readouterr().out
         assert "Job is paused/disabled; resume it before running." in out
         assert "Triggered" not in out and "next scheduler tick" not in out
+
+
+def test_main_handoff_status_and_legacy_success_are_not_task_completion():
+    from hermes_cli.cron import _cron_doctor_issues_for_job, _job_warnings, _last_run_display
+    for status in ("admitted", "ok"):
+        job = {"last_status": status, "origin": {"platform": "hermes-autonomous"}, "enabled": False}
+        assert "Queued for main" in _last_run_display(job)
+        assert "main history" in _last_run_display(job)
+        assert not any("last run failed" in line for line in _cron_doctor_issues_for_job(job))
+    warnings = _job_warnings({"last_status": "admitted", "last_failure": {"at": "fixture", "detail": "prior handoff failure"}})
+    assert "recovered since" in warnings[0]

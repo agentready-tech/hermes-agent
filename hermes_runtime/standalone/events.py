@@ -117,7 +117,7 @@ def admit_cron(job, *, extra_prompt=None, cancel_event=None, execution_id=None):
     job["execution_id"] = request_id
     receipt = _admit_scheduled_prompt("\n\n".join(p for p in (job.get("prompt"), extra_prompt) if p),
                                      f"{job['id']}:{request_id}", {"job_id": job["id"], "execution_id": request_id})
-    response = f"Accepted into main-session inbox: {receipt['message_id']}. Task execution is pending in the main conversation."
+    response = f"Queued for main: {receipt['message_id']}. Timer handoff saved; see main history for task outcome."
     return True, response + "\n", response, None
 
 

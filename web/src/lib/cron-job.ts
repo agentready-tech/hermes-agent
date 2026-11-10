@@ -119,7 +119,7 @@ export function cronJobFormFromJob(job: CronJob): CronJobFormState {
  *  In particular `delivery_failed` (agent run succeeded, output never reached
  *  the target) is amber, not green and not the same red as a run error, and
  *  its detail lives in `last_delivery_error` (last_error is null for it). */
-export type CronLastResultTone = "success" | "warning" | "destructive";
+export type CronLastResultTone = "success" | "warning" | "destructive" | "secondary";
 
 export interface CronLastResult {
   status: string;
@@ -136,10 +136,19 @@ const CRON_LAST_RESULT_TONE: Record<string, CronLastResultTone> = {
 };
 
 export function cronLastResult(
-  job: Pick<CronJob, "last_status" | "last_error" | "last_delivery_error">,
+  job: Pick<CronJob, "last_status" | "last_error" | "last_delivery_error"> & {
+    origin?: { platform?: string } | null;
+  },
 ): CronLastResult | null {
   const status = asString(job.last_status).trim();
   if (!status) return null;
+  if (status === "admitted" || (status === "ok" && job.origin?.platform === "hermes-autonomous")) {
+    return {
+      status: "Queued for main",
+      tone: "secondary",
+      detail: "Timer handoff saved; see main history for task outcome.",
+    };
+  }
   const tone = CRON_LAST_RESULT_TONE[status] ?? "destructive";
   if (status === "ok") return { status, tone, detail: null };
   const detail =

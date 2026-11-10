@@ -65,7 +65,7 @@ def test_existing_tool_creates_and_manages_main_schedule_with_docker_terminal(ma
     pending = HomeInbox().pending()
     assert len(pending) == 1
     assert "Continue the existing project with new evidence" in pending[0][1]
-    assert get_job(identity)["last_status"] == "ok"
+    assert get_job(identity)["last_status"] == "admitted"
     # Admission is not a replacement conversation or a claim that the model completed the task.
     assert db.get_messages("agentready_home", include_inactive=True) == before
     with sqlite3.connect(main_home[0] / "state.db") as conn:
@@ -82,12 +82,14 @@ def test_cli_schedule_acceptance_survives_full_scheduler_bookkeeping(main_home, 
     job = schedule("Continue this conversation later", "every 1h", "CLI main follow-up")
     _fire(job, monkeypatch)
     stored = get_job(job["id"])
-    assert stored["last_status"] == "ok", stored.get("last_error")
+    assert stored["last_status"] == "admitted", stored.get("last_error")
     assert not stored.get("last_error")
     assert get_execution(job["execution_id"])["status"] == "completed"
+    assert get_execution(job["execution_id"])["delivery_outcome"] == "admitted"
     assert len(HomeInbox().pending()) == 1
     receipt = admit_cron(job, execution_id=job["execution_id"])
-    assert "Accepted into main-session inbox" in receipt[2]
+    assert "Queued for main" in receipt[2]
+    assert "see main history for task outcome" in receipt[2]
     assert len(HomeInbox().pending()) == 1
 
 
