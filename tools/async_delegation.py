@@ -380,6 +380,8 @@ def _replay_pending(conn, rows, target_queue, now: float) -> int:
                 # (process_registry.restore_completions) may both run: offer once.
                 continue
         if isinstance(evt, dict):
+            from tools.delegate_project_recovery import repair_legacy_completion_route
+            evt = repair_legacy_completion_route(conn, evt, payload)
             evt["restored"] = True
         target_queue.put(evt)
         with _orphan_lock:

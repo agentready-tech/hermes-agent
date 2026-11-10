@@ -8,6 +8,48 @@ from tools.async_delegation import _owner_liveness
 from tools.delegate_project_store import _transaction
 
 
+def repair_legacy_completion_route(conn, event, payload):
+    """Replay an old project's saved result through its unique persisted owner route.
+
+    The old project producer stamped a push owner as a raw API id. Never infer
+    an API route, borrow another profile's routing index, or execute the child.
+    Normal completion ownership/admission checks still run after this repair.
+    """
+    from hermes_constants import get_hermes_home
+    parent = event.get("parent_session_id")
+    if (event.get("type") != "async_delegation" or not parent
+            or event.get("session_key") != parent or event.get("origin_session_id") != parent):
+        return event
+    identity = event.get("delegation_id")
+    row = conn.execute("SELECT p.parent_session_id,m.origin_json FROM delegated_project_messages m "
+        "JOIN delegated_projects p USING(subagent_id) WHERE m.message_id=? "
+        "AND m.state NOT IN ('pending','running')", (identity,)).fetchone()
+    if row is None or row[0] != parent:
+        return event
+    origin = json.loads(row[1])
+    if not origin.get("wake") or origin.get("session_key") or "origin_session_id" in origin:
+        return event
+    scope = str((get_hermes_home() / "sessions").resolve())
+    routes = conn.execute("SELECT session_key,entry_json FROM gateway_routing WHERE scope=? "
+        "AND json_extract(entry_json,'$.session_id')=?", (scope, parent)).fetchall()
+    if len(routes) != 1:
+        return event
+    route, raw = routes[0]
+    entry = json.loads(raw)
+    platform = (entry.get("origin") or {}).get("platform")
+    if entry.get("suspended") or not platform or platform == "api_server":
+        return event
+    repaired = {**event, "session_key": route, "origin_session_id": ""}
+    changed = conn.execute("UPDATE async_delegations SET origin_session=?,origin_session_id='',event_json=? "
+        "WHERE delegation_id=? AND event_json=? AND delivery_state='pending'",
+        (route, json.dumps(repaired), identity, payload)).rowcount
+    if not changed:
+        return event
+    conn.execute("UPDATE delegated_project_messages SET origin_json=? WHERE message_id=? AND origin_json=?",
+        (json.dumps({**origin, "session_key": route, "origin_session_id": ""}), identity, row[1]))
+    return repaired
+
+
 def publish_recovery_wakeups():
     from tools.delegate_mail import publish_pending_mail
     mail_count = publish_pending_mail()
@@ -46,7 +88,7 @@ def publish_wakeup(identity, parent, origin, summary, *, agent_message=False, go
         now = time.time()
         event = {"type": "async_delegation", "delegation_id": identity, "parent_session_id": parent,
             "durable_recovery": True, "agent_message": agent_message,
-            "origin_session_id": parent, "status": "completed", "summary": summary,
+            "origin_session_id": origin.get("origin_session_id", ""), "status": "completed", "summary": summary,
             "goal": goal, "dispatched_at": now, "completed_at": now,
             **{k: v for k, v in origin.items() if k != "wake"}}
         event["session_key"] = event.get("session_key") or parent

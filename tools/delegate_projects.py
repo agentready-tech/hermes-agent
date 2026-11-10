@@ -15,16 +15,22 @@ def _origin():
     from tools.delegate_tool_dispatch import _capture_origin
     from tools.async_delegation import _capture_routing_origin
     wake, ui, _, _, delivery = _capture_origin()
-    return {"session_key": wake, "origin_ui_session_id": ui, "wake": delivery, **_capture_routing_origin()}
+    return {"session_key": wake, "origin_session_id": wake, "origin_ui_session_id": ui,
+            "wake": delivery, **_capture_routing_origin()}
 
 
 def _dispatch_origin(parent, background):
     origin = _origin()
+    from tools.delegate_tool_dispatch import _resolve_async_session_key
+    # Capture the owning route before child construction changes the task-local session id.
+    # A raw API id and a push Gateway route are different delivery contracts.
+    route, ui = _resolve_async_session_key(parent, origin.get("origin_ui_session_id", ""))
+    origin = {**origin, "session_key": route, "origin_ui_session_id": ui}
     if background is not None:
         from tools.delegate_tool_dispatch import _resolve_async_wake_sid
         # Persistent and ephemeral model spawns must use the same turn policy.
         # The captured history-consumer flag alone does not describe push delivery.
-        capable = _resolve_async_wake_sid(origin.get("session_key", ""), origin.get("wake", False))
+        capable = _resolve_async_wake_sid(origin.get("origin_session_id", ""), origin.get("wake", False))
         origin = {**origin, "wake": bool(background and capable is not None)}
     if getattr(parent, "_delegate_depth", 0) > 0:
         origin = {**origin, "wake": False}
@@ -49,7 +55,7 @@ def _publish_completed(store, project, message, result):
     if row and (alive is None or alive(row[1], row[2])):
         return
     event = {"type": "async_delegation", "delegation_id": message["message_id"],
-        "parent_session_id": store.parent_id, "origin_session_id": store.parent_id,
+        "parent_session_id": store.parent_id, "origin_session_id": origin.get("origin_session_id", ""),
         "goal": f"Project {project['project_key']} ({project['subagent_id']}): {project['goal']}",
         "status": result.get("status", "failed"), "summary": result.get("summary"),
         "error": result.get("error"), "dispatched_at": message["accepted_at"],
@@ -223,7 +229,8 @@ def _recover_project(parent, store, project):
             handle = dispatch_async_delegation(goal=f"Project {project['project_key']}: {project['goal']}",
                 context=project["context"], toolsets=None, role="leaf", model=child.model,
                 session_key=origin.get("session_key") or store.parent_id, parent_session_id=store.parent_id,
-                origin_ui_session_id=origin.get("origin_ui_session_id", ""), origin_session_id=store.parent_id,
+                origin_ui_session_id=origin.get("origin_ui_session_id", ""),
+                origin_session_id=origin.get("origin_session_id", ""),
                 delegation_id=message["message_id"], routing_origin=origin, runner=runner,
                 interrupt_fn=lambda sid=project["subagent_id"]: _pause_child(parent, sid),
                 max_async_children=_get_max_concurrent_children())

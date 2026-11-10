@@ -170,7 +170,10 @@ def test_synchronous_join_yields_for_child_question_and_then_continues(tmp_path,
     monkeypatch.setattr(AIAgent, "_interruptible_streaming_api_call", model)
     parent, db = _parent(tmp_path)
     try:
-        result = parent.run_conversation("Delegate and resolve the child's question before finishing")
+        from gateway.session_finite import finite_turn_scope
+        # This case exercises a synchronous owner, not an idle Gateway consumer.
+        with finite_turn_scope(True):
+            result = parent.run_conversation("Delegate and resolve the child's question before finishing")
         assert result["final_response"] == "ROOT_DONE", result
         with sqlite3.connect(tmp_path / "state.db") as conn:
             receipt = conn.execute("SELECT state,result_json FROM delegated_project_messages").fetchone()
