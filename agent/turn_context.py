@@ -15,7 +15,7 @@ import time
 import uuid
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Tuple
 
 from agent.conversation_compression import recover_rotated_compression_session
 from agent.iteration_budget import IterationBudget
@@ -33,6 +33,9 @@ from agent.model_metadata import (
 from agent.image_token_cost import bind_image_token_cost
 from agent.usage_anchor import anchored_context_tokens, restore_usage_anchor
 from agent.turn_author import parse_turn_author
+
+if TYPE_CHECKING:
+    from hermes_runtime.adapters.turn_instructions import SkillUpdates
 
 logger = logging.getLogger(__name__)
 
@@ -503,6 +506,7 @@ class TurnContext:
     plugin_user_context: str = ""  # ``pre_llm_call`` context (appended to user message)
     ext_prefetch_cache: str = ""  # external-memory prefetch, reused across iterations
     preflight_compression_blocked: bool = False  # immediate retry proved ineffective
+    skill_updates: SkillUpdates | None = None  # current skill text for replay only
 
 
 def _persist_under_lock(agent: Any, fn, failure_msg: str, pending_cli_message: Any) -> None:
@@ -1134,9 +1138,10 @@ def build_turn_context(
             f"{'...' if len(_preview_text) > 60 else ''}'"
         )
 
-    # System prompt is cached per session for prefix caching.
-    if agent._cached_system_prompt is None:
-        restore_or_build_system_prompt(agent, system_message, conversation_history)
+    # A managed home turn snapshots its own identity before restoring the saved prefix.
+    from hermes_runtime.adapters.turn_instructions import prepare_turn_prompt, snapshot_loaded_skills
+
+    prepare_turn_prompt(agent, system_message, conversation_history, restore_or_build_system_prompt)
     active_system_prompt = agent._cached_system_prompt
 
     # Bot Mode DM tool — injected ONLY into a bot's canonical "Bot Chat" session (same
@@ -1171,6 +1176,7 @@ def build_turn_context(
     active_system_prompt = compaction.active_system_prompt
     conversation_history = compaction.conversation_history
     current_turn_user_idx = compaction.current_turn_user_idx
+    skill_updates = snapshot_loaded_skills(agent, messages, effective_task_id)
 
     plugin_user_context = _collect_pre_llm_call_context(
         agent, effective_task_id=effective_task_id, turn_id=turn_id,
@@ -1213,7 +1219,7 @@ def build_turn_context(
         effective_task_id=effective_task_id, turn_id=turn_id,
         current_turn_user_idx=current_turn_user_idx, should_review_memory=should_review_memory,
         plugin_user_context=plugin_user_context, ext_prefetch_cache=ext_prefetch_cache,
-        preflight_compression_blocked=compaction.blocked,
+        preflight_compression_blocked=compaction.blocked, skill_updates=skill_updates,
     )
 
 
@@ -1239,6 +1245,7 @@ def _sanitize_model_for(agent: Any, moa_config: Any) -> Any:
 def build_api_messages(
     agent: Any, messages: list[dict[str, Any]], *, current_turn_user_idx: Any,
     ext_prefetch_cache: Any, plugin_user_context: Any, moa_config: Any, active_system_prompt: Any,
+    skill_updates: SkillUpdates | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     """Build the wire copy of ``messages`` for one API call plus the effective system
     message. Returns ``(api_messages, effective_system)``.
@@ -1253,6 +1260,7 @@ def build_api_messages(
     from agent.agent_runtime_helpers import fill_empty_non_final_wire_payload
     from agent.conversation_loop import _clone_message_for_send
     from agent.replay_cleanup import canonicalize_replay_history
+    from hermes_runtime.adapters.turn_instructions import refreshed_skill_content
 
     has_current = isinstance(current_turn_user_idx, int) and 0 <= current_turn_user_idx < len(messages)
     current_turn_message = messages[current_turn_user_idx] if has_current else None
@@ -1268,13 +1276,17 @@ def build_api_messages(
     # rather than silently un-freezing it.
     turn_now = agent._current_turn_timestamp
     split = current_turn_user_idx if has_current else 0
-    canonical_messages = canonicalize_replay_history(messages[:split], now=turn_now) + messages[split:]
+    canonical_prefix = canonicalize_replay_history(messages[:split], now=turn_now)
+    canonical_messages = canonical_prefix + messages[split:]
 
     api_messages = []
     for idx, msg in enumerate(canonical_messages):
         # Structural clone, NOT msg.copy(): in-place transforms below must not reach
         # persisted history via nested containers; see _clone_message_for_send.
         api_msg = _clone_message_for_send(msg)
+        if skill_updates and idx < len(canonical_prefix) and msg.get("role") == "tool":
+            if refreshed := refreshed_skill_content(skill_updates, msg):
+                api_msg["content"] = refreshed
         # api_content is bookkeeping (exact bytes sent), never a provider field — pop
         # it from EVERY outgoing copy. Persistence/display fields (display_*, _row_id,
         # timestamp) are local bookkeeping: strict OpenAI backends reject unknown keys

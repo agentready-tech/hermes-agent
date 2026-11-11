@@ -727,6 +727,11 @@ def _join_tier(parts: list[Optional[str]]) -> str:
     return "\n\n".join(p.strip() for p in parts if p and p.strip())
 
 
+def _context_window(agent: Any) -> int | None:
+    length = getattr(getattr(agent, "context_compressor", None), "context_length", None)
+    return length if isinstance(length, int) and length > 0 else None
+
+
 def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) -> dict[str, str]:
     """Assemble the system prompt as three ordered cache tiers: ``stable`` (identity,
     guidance and the coding brief), ``context`` (caller ``system_message``, project
@@ -734,12 +739,14 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     ``volatile`` (skills index, memory, user profile, external memory block,
     timestamp line, runtime environment hints).  Worktree-dependent blocks follow project context so a
     shared context file can remain in the longest common prefix across worktrees.
-    Never re-rendered mid-session."""
+    A managed home turn can rebuild the prompt when its identity changes."""
+    from hermes_runtime.adapters.turn_instructions import turn_soul
+
     # Model context window scales the context-file caps; stable per conversation.
-    _cc_len = getattr(getattr(agent, "context_compressor", None), "context_length", None)
-    _ctx_len = _cc_len if isinstance(_cc_len, int) and _cc_len > 0 else None
+    _ctx_len = _context_window(agent)
     # ── Stable tier ────────────────────────────────────────────────
-    stable_parts, _soul_loaded = _identity_parts(agent, _ctx_len)
+    soul = turn_soul(agent)
+    stable_parts, _soul_loaded = (list(soul.parts), soul.loaded) if soul else _identity_parts(agent, _ctx_len)
     # The skill_view() pointer dangles without skill tools OR without the
     # hermes-agent skill installed, so the variant is chosen after the skills
     # index is built; this slot holds its position.
@@ -766,7 +773,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # ephemeral_system_prompt is injected at API-call time only, never cached.
     if system_message is not None:
         context_parts.append(system_message)
-    context_parts.extend(_context_files_part(agent, _ctx_len, _soul_loaded))
+    context_parts.extend(_context_files_part(agent, _ctx_len, _soul_loaded or soul is not None))
     if coding_workspace_parts:
         context_parts.extend([*coding_workspace_parts, *coding_trailing_parts, *post_workspace_parts])
     else:
@@ -790,12 +797,14 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         # Embedder hints are prose too; reserve the delimiter for the renderer.
         environment_hints = environment_hints.replace(_pb.RUNTIME_ENVIRONMENT_HEADING, "> " + _pb.RUNTIME_ENVIRONMENT_HEADING)
         volatile_parts.append(f"{_pb.RUNTIME_ENVIRONMENT_HEADING}\n\n{environment_hints}\n\n{_pb.RUNTIME_ENVIRONMENT_END}")
+    if soul:
+        volatile_parts.append(soul.stamp)
     return {"stable": _join_tier(stable_parts), "context": _join_tier(context_parts), "volatile": _join_tier(volatile_parts)}
 
 
 def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str:
-    """Assemble the full prompt; cached on ``agent._cached_system_prompt`` and
-    only rebuilt after compression.  Tiers are ordered stable -> context ->
+    """Assemble the full prompt cached on ``agent._cached_system_prompt``.
+    Tiers are ordered stable -> context ->
     volatile so implicit longest-prefix caches keep the unchanged scaffold."""
     parts = build_system_prompt_parts(agent, system_message=system_message)
     agent._cached_system_prompt_static = parts["stable"]

@@ -5,6 +5,7 @@ file-serving helpers shared with the local-skill path. Helpers tests patch on th
 import json
 import logging
 from contextlib import suppress
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -120,9 +121,27 @@ def _preprocess_skill(content: str, skill_dir, session_id, debug_msg: str, *args
         return content
 
 
+def _skill_source_stamp(content: str, *, read_only: bool = False) -> dict[str, str]:
+    from hermes_runtime.adapters.hermes import enabled
+
+    return {"source_sha256": sha256(content.encode("utf-8")).hexdigest()} if read_only or enabled() else {}
+
+
+def _read_only_skill_result(content, skill_dir, session_id, fields, *, banner="") -> str:
+    from agent.skill_preprocessing import SkillRequiresExplicitLoad, preprocess_skill_content
+
+    stamp = _skill_source_stamp(content, read_only=True)
+    try:
+        rendered = preprocess_skill_content(content, skill_dir, session_id=session_id, read_only=True)
+    except SkillRequiresExplicitLoad:
+        return _fail("Skill content requires an explicit skill_view call to render inline shell.",
+                     reload_required=True, skill_dir=fields.get("skill_dir"), **stamp)
+    return _json({"success": True, **fields, "content": banner + rendered, **stamp})
+
+
 def _serve_plugin_skill(
     skill_md: Path, namespace: str, bare: str, file_path: str | None = None, *,
-    preprocess: bool = True, session_id: str | None = None) -> str:
+    preprocess: bool = True, session_id: str | None = None, read_only: bool = False) -> str:
     """Read a plugin-provided skill, apply guards, return JSON."""
     from hermes_cli.plugins import _get_disabled_plugins, get_plugin_manager
     from tools import skills_tool as _st
@@ -150,6 +169,13 @@ def _serve_plugin_skill(
         banner = f"[Bundle context: This skill is part of the '{namespace}' plugin." + (
             f"\nSibling skills: {', '.join(siblings)}.\nUse qualified form to invoke siblings "
             f"(e.g. {namespace}:{siblings[0]})." if siblings else "") + "]\n\n"
+    if read_only:
+        return _read_only_skill_result(content, skill_md.parent, session_id, {
+            "name": qualified_name,
+            "description": _truncate_description(str(parsed_frontmatter.get("description", ""))),
+            "linked_files": _plugin_skill_linked_files(skill_md.parent),
+            "skill_dir": str(skill_md.parent),
+        }, banner=banner)
     rendered_content = content if not preprocess else _preprocess_skill(
         content, skill_md.parent, session_id, "Could not preprocess plugin skill %s:%s",
         namespace, bare)
@@ -158,7 +184,7 @@ def _serve_plugin_skill(
         "description": _truncate_description(str(parsed_frontmatter.get("description", ""))),
         "linked_files": _plugin_skill_linked_files(skill_md.parent),
         "readiness_status": SkillReadinessStatus.AVAILABLE.value,
-        "skill_dir": str(skill_md.parent)})
+        "skill_dir": str(skill_md.parent), **_skill_source_stamp(content)})
 
 
 def _plugin_skill_linked_files(skill_root: Path) -> dict[str, list[str]] | None:

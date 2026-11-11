@@ -480,8 +480,8 @@ def wire_env():
     db = SessionDB(db_path=Path(test_home) / "state.db")
     sid = "sess-wire"
 
-    def make_agent():
-        agent = AIAgent(
+    def make_agent(**overrides):
+        options = dict(
             api_key="test-key", base_url=f"http://127.0.0.1:{port}/v1",
             provider="openai-compat", model="test-model",
             max_iterations=10, enabled_toolsets=[],
@@ -489,7 +489,9 @@ def wire_env():
             save_trajectories=False, platform="cli",
             session_db=db, session_id=sid,
         )
-        agent.valid_tool_names = {"read_file"}
+        agent = AIAgent(**(options | overrides))
+        if not overrides:
+            agent.valid_tool_names = {"read_file"}
         return agent
 
     try:
@@ -521,6 +523,77 @@ def _user_messages(req: dict) -> list:
 
 
 class TestWireInvariant:
+    def test_managed_home_refreshes_soul_and_loaded_skill_without_rewriting_history(self, wire_env, monkeypatch):
+        from pathlib import Path
+
+        import hermes_state
+        from hermes_runtime.adapters import hermes
+        from hermes_runtime.sessions import HOME_SESSION_ID
+        from hermes_runtime.standalone.panel_instructions import instructions_request
+
+        make_agent, handler, db, _ = wire_env
+        home = Path(db.db_path).parent.resolve()
+        monkeypatch.setenv("HERMES_HOME", str(home))
+        monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", Path(db.db_path))
+        monkeypatch.setattr(hermes, "_home", None)
+        soul = home / "SOUL.md"
+        soul.write_text("Identity alpha.\n", encoding="utf-8")
+        skill = home / "skills" / "fixture-skill" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        frontmatter = "---\nname: fixture-skill\ndescription: Local test.\n---\n\n"
+        skill.write_text(frontmatter + "Procedure alpha.\n", encoding="utf-8")
+        sid = HOME_SESSION_ID
+        db.create_session(sid, source="agentready")
+        options = dict(session_id=sid, load_soul_identity=True, enabled_toolsets=["skills"])
+        agent = make_agent(**options)
+        handler.response_queue.extend([
+            _tc_resp("skill_view", '{"name":"fixture-skill"}'), _text_resp("Loaded."),
+        ])
+        agent.run_conversation("Load the test skill.", conversation_history=[])
+        original = db.get_messages_as_conversation(sid)
+        assert "Identity alpha." in db.get_session(sid)["system_prompt"]
+        assert any("Procedure alpha." in row["content"] for row in original if row["role"] == "tool")
+
+        monkeypatch.setattr(hermes, "_home", home)
+        assert hermes.enabled()
+        instructions = instructions_request(home, "instructions.read", {})
+        instructions_request(home, "instructions.save", {
+            "content": "Identity beta.\n", "expectedRevision": instructions["revision"],
+        })
+        skill.write_text(frontmatter + "Procedure beta.\n", encoding="utf-8")
+        handler.captured_requests.clear()
+        handler.response_queue.append(_text_resp("Updated."))
+        agent.run_conversation("Continue in the same chat.", conversation_history=original.copy())
+        updated = _chat_requests(handler)[0]["messages"]
+        assert "Identity beta." in updated[0]["content"]
+        assert "Identity alpha." not in updated[0]["content"]
+        assert "Procedure beta." in next(row["content"] for row in updated if row["role"] == "tool")
+        assert db.get_messages_as_conversation(sid)[:len(original)] == original
+        assert agent.session_id == sid
+        persisted = db.get_session(sid)["system_prompt"]
+        assert updated[0]["content"].startswith(persisted + "\n\n")
+
+        fresh = make_agent(**options)
+        handler.captured_requests.clear()
+        handler.response_queue.append(_text_resp("Same instructions."))
+        with patch.object(fresh, "_build_system_prompt", side_effect=AssertionError("unchanged prompt rebuilt")):
+            fresh.run_conversation("Continue again.", conversation_history=db.get_messages_as_conversation(sid))
+        replayed = _chat_requests(handler)[0]["messages"]
+        assert replayed[0]["content"].startswith(persisted + "\n\n")
+        assert [row for row in updated if row["role"] == "tool"] == [row for row in replayed if row["role"] == "tool"]
+
+        soul.write_text("Identity gamma.\n", encoding="utf-8")
+        skill.unlink()
+        handler.captured_requests.clear()
+        handler.response_queue.append(_text_resp("Continued."))
+        fresh.run_conversation("Continue after removal.", conversation_history=db.get_messages_as_conversation(sid))
+        after_removal = _chat_requests(handler)[0]["messages"]
+        assert "Identity gamma." in after_removal[0]["content"]
+        assert "Identity beta." not in after_removal[0]["content"]
+        tool_result = json.loads(next(row["content"] for row in after_removal if row["role"] == "tool"))
+        assert not tool_result["success"] and "content" not in tool_result
+        assert db.get_messages_as_conversation(sid)[:len(original)] == original
+
     def test_injection_sent_stamped_and_stable_within_turn(self, wire_env):
         """The current turn's user message goes out with the injected context,
         the sidecar equals the sent bytes exactly, the field never reaches the

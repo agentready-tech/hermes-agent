@@ -139,11 +139,17 @@ def _is_community_hub_skill(skill_dir: Path | None) -> bool:
         return True
 
 
+class SkillRequiresExplicitLoad(Exception):
+    """Rendering the skill would execute inline shell."""
+
+
 def preprocess_skill_content(
     content: str,
     skill_dir: Path | None,
     session_id: str | None = None,
     skills_cfg: dict | None = None,
+    *,
+    read_only: bool = False,
 ) -> str:
     """Apply configured SKILL.md template and inline-shell preprocessing."""
     if not content:
@@ -154,6 +160,8 @@ def preprocess_skill_content(
     cfg = skills_cfg if isinstance(skills_cfg, dict) else load_skills_config()
     if cfg.get("template_vars", True):
         content = substitute_template_vars(content, skill_dir, session_id)
-    if cfg.get("inline_shell", False) and not _is_community_hub_skill(skill_dir):
+    if cfg.get("inline_shell", False) and _INLINE_SHELL_RE.search(content) and not _is_community_hub_skill(skill_dir):
+        if read_only:
+            raise SkillRequiresExplicitLoad
         content = expand_inline_shell(content, skill_dir, int(cfg.get("inline_shell_timeout", 10) or 10))
     return content

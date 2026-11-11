@@ -149,3 +149,29 @@ def _build_setup_note(
         return None
     note = f"Setup needed before using this skill: missing {', '.join(missing) if missing else 'required prerequisites'}."
     return f"{note} {setup_help}" if setup_help else note
+
+
+def _install_skill_dependencies(declared_deps: Any) -> str | None:
+    """Install declared pm packages at explicit skill load, reporting failed installs."""
+    if isinstance(declared_deps, str):
+        declared_deps = [declared_deps]
+    if not isinstance(declared_deps, list) or not declared_deps:
+        return None
+    failed_deps = []
+    for dep in [str(d).strip() for d in declared_deps if str(d).strip()]:
+        try:
+            import pm
+
+            pm.ensure(dep)
+        except Exception as exc:
+            logger.debug("Skill tool dependency installation failed", exc_info=True)
+            failed_deps.append(f"{dep}: {exc}")
+    if failed_deps:
+        return (
+            "Tool dependencies could not be installed — "
+            + "; ".join(failed_deps)
+            + ". Run `hermes pm install "
+            + " ".join(str(d) for d in declared_deps)
+            + "` and reload."
+        )
+    return None

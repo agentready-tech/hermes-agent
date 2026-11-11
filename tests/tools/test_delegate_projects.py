@@ -14,14 +14,14 @@ def _wait(predicate):
     wait_until(predicate, timeout=15, what="project inbox completion")
 
 
-def _parent(home):
+def _parent(home, *, toolsets=None):
     from hermes_state import SessionDB
     from run_agent import AIAgent
     db = SessionDB(db_path=home / "state.db")
     db.create_session("main", source="cli")
     parent = AIAgent(model="gpt-4.1", provider="custom", base_url="http://127.0.0.1:9/v1",
         api_key="test-only", api_mode="chat_completions", session_id="main", session_db=db,
-        enabled_toolsets=["delegation"], skip_context_files=True, load_soul_identity=False,
+        enabled_toolsets=toolsets or ["delegation"], skip_context_files=True, load_soul_identity=False,
         skip_memory=True, quiet_mode=True)
     return parent, db
 
@@ -103,6 +103,79 @@ def test_project_reuses_native_history_and_recovers_committed_answer(tmp_path, m
         parent.session_id = "other"
         assert json.loads(delegate_task(action="send", subagent_id=project_id,
             message="steal the conversation", parent_agent=parent)).get("error")
+    finally:
+        parent.close()
+        db.close()
+
+
+@pytest.mark.platforms("posix")
+def test_managed_project_refreshes_loaded_skill_on_next_native_turn(tmp_path, monkeypatch):
+    from openai.types.chat import ChatCompletion
+    from hermes_runtime.adapters import hermes
+    from run_agent import AIAgent
+    from tools.delegate_tool import delegate_task
+
+    home = tmp_path.resolve()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("TERMINAL_CWD", str(home))
+    monkeypatch.setattr(hermes, "_home", home)
+    (home / "SOUL.md").write_text("Parent identity fixture.", encoding="utf-8")
+    skill = home / "skills" / "project-refresh-fixture" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    header = "---\nname: project-refresh-fixture\ndescription: Project procedure fixture.\n---\n\n"
+    skill.write_text(header + "Old project procedure.", encoding="utf-8")
+    requests = []
+
+    def model(self, payload, *args, **kwargs):
+        assert self.platform == "subagent"
+        first = not requests
+        requests.append((self.session_id, payload["messages"]))
+        message = {"role": "assistant", "content": "Project turn finished."}
+        if first:
+            message = {"role": "assistant", "content": None, "tool_calls": [{
+                "id": "fixture-skill", "type": "function", "function": {
+                    "name": "skill_view", "arguments": '{"name":"project-refresh-fixture"}',
+                },
+            }]}
+        return ChatCompletion(id="project-refresh", object="chat.completion", created=1, model="gpt-4.1",
+            choices=[{"index": 0, "message": message, "finish_reason": "tool_calls" if first else "stop"}],
+            usage={"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110})
+
+    monkeypatch.setattr(AIAgent, "_interruptible_api_call", model)
+    monkeypatch.setattr(AIAgent, "_interruptible_streaming_api_call", model)
+    parent, db = _parent(home, toolsets=["delegation", "skills"])
+    try:
+        result = json.loads(delegate_task(tasks=[{"goal": "Read the procedure", "project": "skill-refresh",
+            "context": "Keep the project-specific instructions."}], parent_agent=parent))
+        assert not result.get("error"), result
+        assert len(requests) == 2
+        project = result["projects"][0]
+        sid = project["session_id"]
+        original = db.get_messages_as_conversation(sid)
+        old_tool = next(message for message in original if message["role"] == "tool")
+        assert "Old project procedure." in json.loads(old_tool["content"])["content"]
+
+        skill.write_text(header + "Current project procedure.", encoding="utf-8")
+        result = json.loads(delegate_task(action="send", subagent_id=project["subagent_id"],
+            message="Continue this project.", parent_agent=parent))
+        assert not result.get("error"), result
+        assert len(requests) == 3  # No explicit skill_view on the second turn.
+        assert requests[-1][0] == sid
+        replayed = requests[-1][1]
+        content = next(message["content"] for message in replayed if message["role"] == "tool")
+        assert "Current project procedure." in json.loads(content)["content"]
+        assert "Old project procedure." not in content
+        assert "Keep the project-specific instructions." in replayed[0]["content"]
+        assert "Parent identity fixture." not in replayed[0]["content"]
+        assert db.get_messages_as_conversation(sid)[:len(original)] == original
+
+        skill.unlink()
+        result = json.loads(delegate_task(action="send", subagent_id=project["subagent_id"],
+            message="Continue after removing the skill.", parent_agent=parent))
+        assert not result.get("error"), result
+        assert len(requests) == 4 and requests[-1][0] == sid
+        stale = next(message["content"] for message in requests[-1][1] if message["role"] == "tool")
+        assert not json.loads(stale)["success"] and "project procedure." not in stale
     finally:
         parent.close()
         db.close()

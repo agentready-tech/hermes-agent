@@ -163,6 +163,10 @@ def _check_sensitive_path(filepath: str, task_id: str = "default") -> str | None
         return (
             f"Refusing to write to sensitive system path: {filepath}\n"
             "Use the terminal tool with sudo if you need to modify system files.")
+    from hermes_runtime.adapters.hermes import enabled as managed, managed_home
+
+    if managed() and str(managed_home() / "SOUL.md") in candidates:
+        return "Agent instructions are managed in Panel. Propose your edit to the user."
     # approvals.mode and other security settings live in config.yaml; a
     # prompt-injected agent could silently disable exec approval by editing it.
     hermes_config = _get_hermes_config_resolved()

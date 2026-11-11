@@ -20,12 +20,12 @@ from hermes_cli.config import cfg_get
 from agent.skill_utils import (
     EXCLUDED_SKILL_DIRS as _EXCLUDED_SKILL_DIRS, is_skill_support_path as _is_skill_support_path)
 from tools.skills_tool_setup import (
-    SkillReadinessStatus, _build_setup_note, _capture_required_environment_variables,
+    SkillReadinessStatus, _build_setup_note, _install_skill_dependencies, _capture_required_environment_variables,
     _get_required_environment_variables, _is_env_var_persisted, _is_remote_env_backend)
 from tools.skills_tool_plugin import (
     MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, _INJECTION_PATTERNS, _fail, _json,
-    _mark_background_review_read, _preprocess_skill, _read_skill_text, _safe_frontmatter,
-    _serve_plugin_skill, _serve_skill_file, _truncate_description)
+    _mark_background_review_read, _preprocess_skill, _read_only_skill_result, _read_skill_text,
+    _safe_frontmatter, _serve_plugin_skill, _serve_skill_file, _skill_source_stamp, _truncate_description)
 from tools.skills_tool_dedup import dedup_skill_view, reset_skill_view_dedup
 from tools.skill_provenance import is_background_review
 
@@ -303,7 +303,7 @@ def skills_list(category: str | None = None, task_id: str | None = None) -> str:
         return tool_error(str(e), success=False)
 
 
-def _resolve_plugin_skill(name, file_path, task_id, preprocess):
+def _resolve_plugin_skill(name, file_path, task_id, preprocess, *, read_only=False):
     """``plugin:skill`` dispatch: ``(result_json, None)`` when answered, else ``(None,
     local_category_name)`` to fall through to the flat-tree scan — categorized local skills also use
     ``category:skill`` in config/gateway prompts, so the on-disk ``category/skill`` form returns."""
@@ -312,19 +312,21 @@ def _resolve_plugin_skill(name, file_path, task_id, preprocess):
     namespace, bare = parse_qualified_name(name)
     if not is_valid_namespace(namespace):
         return _fail(f"Invalid namespace '{namespace}' in '{name}'. Namespaces must match [a-zA-Z0-9_-]+."), None
-    discover_plugins()  # idempotent
+    if not read_only:
+        discover_plugins()  # idempotent
     pm = get_plugin_manager()
     active_memory_provider = None
     try:
         from plugins.memory import _get_active_memory_provider, _prune_inactive_memory_provider_skills
         active_memory_provider = _get_active_memory_provider()
-        _prune_inactive_memory_provider_skills(active_memory_provider)
+        if not read_only:
+            _prune_inactive_memory_provider_skills(active_memory_provider)
     except Exception as exc:
         logger.debug("Failed pruning inactive memory-provider skills: %s", exc)
     plugin_skill_md = pm.find_plugin_skill(name)
     # Memory providers load through plugins.memory, not the general PluginManager: load the
     # namespaced provider once so its collector can forward its skills into the registry.
-    if plugin_skill_md is None and namespace == active_memory_provider:
+    if plugin_skill_md is None and namespace == active_memory_provider and not read_only:
         try:
             from plugins.memory import load_memory_provider
             load_memory_provider(namespace)
@@ -332,13 +334,14 @@ def _resolve_plugin_skill(name, file_path, task_id, preprocess):
         except Exception as exc:
             logger.debug("Failed lazy memory-provider skill load for %s: %s", namespace, exc)
     if plugin_skill_md is not None and not plugin_skill_md.exists():
-        pm.remove_plugin_skill(name)  # stale registry entry — file deleted out of band
-        return _fail(
-            f"Skill '{name}' file no longer exists at {plugin_skill_md}. The registry entry "
-            f"has been cleaned up — try again after the plugin is reloaded."), None
+        if not read_only:
+            pm.remove_plugin_skill(name)  # stale registry entry — file deleted out of band
+        return _fail(f"Skill '{name}' file no longer exists at {plugin_skill_md}. "
+                     "Try again after the plugin is reloaded."), None
     if plugin_skill_md is not None:
         return _serve_plugin_skill(
-            plugin_skill_md, namespace, bare, file_path=file_path, preprocess=preprocess, session_id=task_id), None
+            plugin_skill_md, namespace, bare, file_path=file_path, preprocess=preprocess,
+            session_id=task_id, read_only=read_only), None
     if available := pm.list_plugin_skills(namespace):  # plugin exists but this specific skill is missing
         return _fail(
             f"Skill '{bare}' not found in plugin '{namespace}'.",
@@ -581,7 +584,9 @@ def _log_security_warnings(name: str, skill_md: Path, content: str, all_dirs, ac
 
 @pin_library
 def skill_view(
-    name: str, file_path: str | None = None, task_id: str | None = None, preprocess: bool = True) -> str:
+    name: str, file_path: str | None = None, task_id: str | None = None, preprocess: bool = True,
+    *, read_only: bool = False,
+) -> str:
     """View a skill (SKILL.md) or a file within its directory, as JSON. ``name`` is a skill name
     or path ("axolotl", "03-fine-tuning/axolotl"); "plugin:skill" resolves plugin-provided
     skills. ``preprocess`` applies the configured SKILL.md template / inline shell rendering;
@@ -593,7 +598,7 @@ def skill_view(
             return _fail(lookup_error, hint=_LOOKUP_HINT)
         local_category_name: str | None = None
         if ":" in name:  # plugin registry; bare names use the flat-tree scan below
-            served, local_category_name = _resolve_plugin_skill(name, file_path, task_id, preprocess)
+            served, local_category_name = _resolve_plugin_skill(name, file_path, task_id, preprocess, read_only=read_only)
             if served is not None:
                 return served
         # The fall-through form (namespace/bare) joins onto each search dir too; re-validate it
@@ -623,7 +628,7 @@ def skill_view(
             return _fail(f"Skill '{resolved_name}' is disabled. Enable it with `hermes skills` or inspect the files directly on disk.")
         if file_path and skill_dir:
             return _serve_skill_file(
-                skill_dir, file_path, name, list_available=True, mark_read=True,
+                skill_dir, file_path, name, list_available=True, mark_read=not read_only,
                 hint="Use a relative path within the skill directory")
         # tags/related_skills: metadata.hermes.* (agentskills.io) first, then top-level.
         metadata = frontmatter.get("metadata")
@@ -638,35 +643,16 @@ def skill_view(
         except ValueError:  # external skill — relative to its own parent dir
             rel_path = str(skill_md.relative_to(skill_md.parent.parent)) if skill_md.parent.parent else skill_md.name
         skill_name = frontmatter.get("name", skill_md.stem if not skill_dir else skill_dir.name)
+        if read_only:
+            return _read_only_skill_result(content, execution_dir, task_id, {
+                "name": skill_name, "description": frontmatter.get("description", ""), "path": rel_path,
+                "skill_dir": str(execution_dir) if execution_dir else None, "linked_files": linked_files or None,
+                "usage_hint": "Use skill_view explicitly for any required setup or dependencies.",
+            })
         readiness, readiness_extras = _skill_readiness(frontmatter, skill_name)
         rendered_content = content if not preprocess else _preprocess_skill(
             content, execution_dir, task_id, "Could not preprocess skill content for %s", skill_name)
-        # ── pm tool deps (`deps: [ffmpeg]` frontmatter) ──────────────
-        # Loading the skill IS the activation moment: ensure each declared
-        # pm package now so the skill's commands work when the model runs
-        # them. Failure never blocks the skill content — the note carries
-        # the remedy.
-        deps_note = None
-        declared_deps = frontmatter.get("deps") or []
-        if isinstance(declared_deps, str):
-            declared_deps = [declared_deps]
-        if isinstance(declared_deps, list) and declared_deps:
-            failed_deps = []
-            for dep in [str(d).strip() for d in declared_deps if str(d).strip()]:
-                try:
-                    import pm
-
-                    pm.ensure(dep)
-                except Exception as exc:
-                    failed_deps.append(f"{dep}: {exc}")
-            if failed_deps:
-                deps_note = (
-                    "Tool dependencies could not be installed — "
-                    + "; ".join(failed_deps)
-                    + ". Run `hermes pm install "
-                    + " ".join(str(d) for d in declared_deps)
-                    + "` and reload."
-                )
+        deps_note = _install_skill_dependencies(frontmatter.get("deps"))
 
         result = {
             "success": True, "name": skill_name, "description": frontmatter.get("description", ""),
@@ -675,7 +661,7 @@ def skill_view(
             "linked_files": linked_files if linked_files else None,
             "usage_hint": "To view linked files, call skill_view(name, file_path) where file_path is e.g. 'references/api.md' or 'assets/config.yaml'" if linked_files else None,
             **readiness,
-            **readiness_extras}
+            **readiness_extras, **_skill_source_stamp(content)}
         if deps_note:
             result["deps_note"] = deps_note
         _mark_background_review_read(skill_md)

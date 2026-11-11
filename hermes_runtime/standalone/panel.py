@@ -7,6 +7,8 @@ from contextlib import suppress
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
+from hermes_runtime.standalone.panel_instructions import CAPABILITY as INSTRUCTIONS_CAPABILITY
+
 logger = logging.getLogger(__name__)
 READ_METHODS = {"display.status", "display.observe"}
 CONTROL_METHODS = {"display.start", "display.lease.acquire", "display.lease.release"}
@@ -119,7 +121,7 @@ async def bridge(command, config, port, credential, auth, subscriptions=None, go
     from websockets.exceptions import ConnectionClosed, WebSocketException
 
     kind, identity = command.get("kind"), command.get("id")
-    if kind not in {"rpc", "rfb", "chat", "subscriptions", "skills"} or not isinstance(identity, str) or len(identity) > 100:
+    if kind not in {"rpc", "rfb", "chat", "subscriptions", "skills", "instructions"} or not isinstance(identity, str) or len(identity) > 100:
         raise ValueError("Invalid Panel channel")
     if command.get("googleLogin") is True:
         if (kind not in {"rpc", "rfb"} or command.get("canControl") is not True
@@ -128,6 +130,13 @@ async def bridge(command, config, port, credential, auth, subscriptions=None, go
             raise ValueError("Own Google browser authority is unavailable")
         await asyncio.to_thread(google_auth.endpoint)
         auth = google_auth
+    if kind == "instructions":
+        if command.get("canConfigure") is not True:
+            raise ValueError("Agent instructions require configuration access")
+        from hermes_runtime.standalone.panel_instructions import bridge_instructions
+        remote_url = socket_url(config["url"], config["environment_id"], "reverse", urlencode({"id": identity}))
+        await bridge_instructions(remote_url, credential)
+        return
     if kind == "skills":
         if skills is None:
             raise ValueError("Skills unavailable")
@@ -238,7 +247,7 @@ async def connection(config, port, credential, auth, subscriptions=None, google_
                 google_ready = await asyncio.to_thread(available)
             except (OSError, ValueError):
                 pass  # No intent capability until the existing own gateway is ready.
-        await control.send(json.dumps({"type": "hello", "capabilities": ["screen", "chat", *(["subscriptions"] if subscriptions else []),
+        await control.send(json.dumps({"type": "hello", "capabilities": ["screen", "chat", INSTRUCTIONS_CAPABILITY, *(["subscriptions"] if subscriptions else []),
             *(["google-browser-window-v1"] if google_ready else []),
             *(["skills-library-read-v1", "skills-personal-edit-v1", "skills-builtin-selection-v1"] if skills is not None else [])]}))
         async def open_channel(command):

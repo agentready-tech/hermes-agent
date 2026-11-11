@@ -115,6 +115,25 @@ def viewed(name):
     return json.loads(skill_view(name, preprocess=False))
 
 
+def test_skill_refresh_reads_text_without_shell_or_setup(home, monkeypatch):
+    from agent import skill_preprocessing
+    from tools import skills_tool
+
+    (home / "config.yaml").write_text("skills:\n  inline_shell: true\n", encoding="utf-8")
+    path = own_skill(home / "skills", "readonly-example", "Current procedure.")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("a read-only skill refresh ran a setup or inline-shell step")
+
+    monkeypatch.setattr(skill_preprocessing, "run_inline_shell", forbidden)
+    monkeypatch.setattr(skills_tool, "_skill_readiness", forbidden)
+    result = json.loads(skills_tool.skill_view("readonly-example", read_only=True))
+    assert result["success"] and "Current procedure." in result["content"]
+    path.write_text(path.read_text(encoding="utf-8") + "\n!`printf dynamic`\n", encoding="utf-8")
+    result = json.loads(skills_tool.skill_view("readonly-example", read_only=True))
+    assert not result["success"] and result["reload_required"]
+
+
 def test_backend_system_set_replaces_bootstrap_including_empty_and_retirement(home):
     from agent.skill_utils import get_system_skill_names
     assert get_system_skill_names() == {"image-bootstrap"}
