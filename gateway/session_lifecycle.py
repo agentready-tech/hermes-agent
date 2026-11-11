@@ -120,12 +120,16 @@ class SessionLifecycleMixin:
         """
         return self._update_entry(session_key, lambda e: setattr(e, "suspended", True))
 
-    def _set_turn_marker_locked(self, session_key: str, entry: SessionEntry, token, started_at) -> None:
+    def _set_turn_marker_locked(self, session_key: str, entry: SessionEntry, token, started_at, delivery=None) -> None:
         """Persist the active-turn pair BEFORE publishing it in memory, so a failed write can
         neither leak an unowned token nor drop a live one. Lock held."""
         candidate = entry.to_dict()
         candidate["active_turn_token"] = token
         candidate["active_turn_started_at"] = _iso(started_at)
+        if delivery is not None:
+            candidate["active_turn_delivery"] = delivery
+        else:
+            candidate.pop("active_turn_delivery", None)
         touched = _now() if started_at is not None else None
         if touched is not None:
             # Keeps the legacy 120s startup heuristic working for an older binary during a rolling
@@ -134,10 +138,11 @@ class SessionLifecycleMixin:
         self._save_entry(session_key, entry_data=candidate, lock_held=True)
         entry.active_turn_token = token
         entry.active_turn_started_at = started_at
+        entry.active_turn_delivery = delivery
         if touched is not None:
             entry.updated_at = touched
 
-    def mark_turn_active(self, session_key: str) -> Optional[str]:
+    def mark_turn_active(self, session_key: str, *, delivery=None) -> Optional[str]:
         """Persist exact ownership of the running agent turn; returns the opaque token for
         :meth:`clear_turn_active`. Re-marking replaces the previous token so a stale asynchronous
         unwind cannot clear a newer turn."""
@@ -148,7 +153,7 @@ class SessionLifecycleMixin:
                 return None
             # Aware UTC, unlike the local wall clock elsewhere: the next process compares it with
             # epoch transcript timestamps and may run in another zone (DST, container vs unit TZ).
-            self._set_turn_marker_locked(session_key, entry, token, datetime.now(UTC))
+            self._set_turn_marker_locked(session_key, entry, token, datetime.now(UTC), delivery)
         return token
 
     def clear_turn_active(self, session_key: str, token: str) -> bool:
@@ -189,6 +194,7 @@ class SessionLifecycleMixin:
                     promoted += 1
             entry.active_turn_token = None
             entry.active_turn_started_at = None
+            entry.active_turn_delivery = None
             return True
 
         self._update_all_entries_locked(_promote)
@@ -201,6 +207,7 @@ class SessionLifecycleMixin:
                 return False
             entry.active_turn_token = None
             entry.active_turn_started_at = None
+            entry.active_turn_delivery = None
             return True
         return self._update_all_entries_locked(_discard)
 

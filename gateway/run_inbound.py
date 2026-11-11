@@ -1198,6 +1198,7 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayPluginInjectionMixin)
         authority = active_authority(self)
         if authority is not None and not event.get_command() and not is_internal:
             from gateway.session_ingress import admit_message, executing_admission
+            from hermes_runtime.adapters.gateway import queue_native_telegram_reply
             if not executing_admission.get():
                 # The durable FIFO only orders turns; busy_input_mode still decides what a follow-up
                 # does to the RUNNING one (steer into it, redirect it, or end it so the FIFO advances).
@@ -1207,7 +1208,8 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayPluginInjectionMixin)
                 # never an interrupt (read as deny) nor a queued turn (auto-deny deadlock).
                 if self._is_session_running(_quick_key) and (
                         await self._route_plaintext_approval_while_busy(event, _quick_key)
-                        or await self._hm_busy_preempt(event, source, _quick_key)):
+                        or (not queue_native_telegram_reply(event, _quick_key)
+                            and await self._hm_busy_preempt(event, source, _quick_key))):
                     return True, None
                 _consumed, _consumer_reply = await self._hm_post_admission_consume(event, source, _quick_key)
                 if _consumed:
@@ -1688,21 +1690,6 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayPluginInjectionMixin)
         if paths:
             state.persistent.native_image_paths = []
         return paths
-
-    async def _mark_durable_active_turn(self, event: MessageEvent, session_key: str) -> bool:
-        """Persist the exact resolved routing key for this running turn."""
-        try:
-            token = await self.async_session_store.mark_turn_active(session_key)
-        except Exception as exc:
-            logger.warning("Could not persist active-turn marker for %s: %s", session_key, exc)
-            return False
-        if not token:
-            return False
-        # Private event attributes are process-local ownership state: keep the token out of public
-        # metadata, transcripts, and platform payloads.
-        event._gateway_active_turn_session_key = session_key
-        event._gateway_active_turn_token = token
-        return True
 
     async def _clear_durable_active_turn(self, event: MessageEvent) -> bool:
         """Best-effort CAS clear of the marker owned by *event* (3 attempts; never blocks agent/lease

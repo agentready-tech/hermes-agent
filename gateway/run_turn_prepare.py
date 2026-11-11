@@ -89,6 +89,33 @@ def _recover_or_remember_model(runner, skey, model):
 
 
 class GatewayTurnPrepareMixin:
+    async def _mark_durable_active_turn(self, event: MessageEvent, session_key: str) -> bool:
+        """Persist this running turn's key and, for managed Telegram, its own reply route."""
+        from hermes_runtime.adapters.gateway import queue_native_telegram_reply
+
+        try:
+            route = {}
+            if queue_native_telegram_reply(event, session_key) and not event.get_command():
+                source = event.source
+                adapter = self._delivery_adapter_for(source)
+                route['delivery'] = {
+                    'session_key': adapter._event_session_key(event) if adapter is not None else session_key,
+                    'chat_id': source.chat_id, 'thread_id': source.thread_id, 'chat_type': source.chat_type,
+                    'message_id': event.message_id, 'reply_to': self._reply_anchor_for_event(event),
+                    'adapter_profile': getattr(adapter, '_owner_profile', None),
+                }
+            token = await self.async_session_store.mark_turn_active(session_key, **route)
+        except Exception:
+            logger.warning("Could not persist active-turn marker for %s", session_key, exc_info=True)
+            return False
+        if not token:
+            return False
+        # Private event attributes are process-local ownership state: keep the token out of public
+        # metadata, transcripts, and platform payloads.
+        event._gateway_active_turn_session_key = session_key
+        event._gateway_active_turn_token = token
+        return True
+
     def _resolve_session_agent_runtime(
         self, *, source: Optional[SessionSource] = None, session_key: Optional[str] = None,
         user_config: Optional[dict] = None,

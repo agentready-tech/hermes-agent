@@ -544,6 +544,9 @@ class SessionEntry:
     # None means nobody toggled it (new, branched, reset, migrated, cron entries, and every conversation
     # boundary, ``_clear_session_boundary_security_state``), so the session's launch policy applies.
     yolo: Optional[bool] = None
+    # Delivery route of this active Telegram turn. The conversation's origin can belong to
+    # an older ingress, so it cannot identify the answer owed after a crash before ledgering.
+    active_turn_delivery: Optional[dict[str, Any]] = None
 
     # Fields (de)serialized verbatim, in wire order (``from_dict`` reads them with
     # ``data.get(name, <dataclass default>)``), split around the three ISO-datetime/token keys.
@@ -571,6 +574,8 @@ class SessionEntry:
         result["last_resume_marked_at"] = _iso(self.last_resume_marked_at)
         result["active_turn_token"] = self.active_turn_token
         result["active_turn_started_at"] = _iso(self.active_turn_started_at)
+        if self.active_turn_delivery is not None:
+            result["active_turn_delivery"] = self.active_turn_delivery
         result.update((name, getattr(self, name)) for name in self._RESET_FIELDS)
         if self.model_override:
             # Defence-in-depth against an unsanitized dict stored directly.
@@ -615,6 +620,7 @@ class SessionEntry:
         # toggled": only their ON is a real toggle; False follows the launch policy, as it did then.
         plain["yolo"] = data["yolo_toggle"] if "yolo_toggle" in data else (True if data.get("yolo") is True else None)
         transport_profile = data.get("transport_profile")
+        delivery = data.get("active_turn_delivery")
         return cls(
             session_key=session_key, session_id=session_id,
             created_at=datetime.fromisoformat(data["created_at"]),
@@ -623,6 +629,7 @@ class SessionEntry:
             chat_type=data.get("chat_type", "dm"), metadata=dict(data.get("metadata") or {}),
             last_resume_marked_at=_parse_iso(data.get("last_resume_marked_at")),
             active_turn_token=token, active_turn_started_at=started_at,
+            active_turn_delivery=delivery if token and isinstance(delivery, dict) else None,
             model_override=sanitize_model_override(data.get("model_override")),
             prompt_pin=sanitize_prompt_pin(data.get("prompt_pin")),
             transport_profile=transport_profile if isinstance(transport_profile, str) and transport_profile else None,

@@ -453,8 +453,14 @@ class GatewayStartupMixin:
             if row.get("needs_marker"):
                 content = row.get("marker", RECOVERED_MARKER) + content
             metadata = {"thread_id": row["thread_id"]} if row.get("thread_id") else None
+            reply_to = row.get("reply_to")
+            if row.get("telegram_dm_topic"):
+                from gateway.platforms.helpers import _thread_metadata_for_source
+                source = SessionSource(Platform.TELEGRAM, row["chat_id"], thread_id=row["thread_id"])
+                metadata = _thread_metadata_for_source(source, reply_to)
             try:
-                result = await adapter.send(chat_id=row["chat_id"], content=content, metadata=metadata)
+                routing = {"reply_to": reply_to} if reply_to is not None else {}
+                result = await adapter.send(chat_id=row["chat_id"], content=content, metadata=metadata, **routing)
             except Exception as send_err:
                 logger.warning("obligation %s: redelivery send raised: %s", row["obligation_id"], send_err)
                 result = None
@@ -755,15 +761,22 @@ class GatewayStartupMixin:
             self.session_store._ensure_loaded_locked()
             marked = [
                 (e.session_key, e.session_id, e.active_turn_token, e.active_turn_started_at, e.origin,
-                 e.transport_profile)
+                 e.transport_profile, e.active_turn_delivery)
                 for e in self.session_store._entries.values()
                 if e.active_turn_token and e.active_turn_started_at and e.origin and not e.suspended
             ]
         ledgered = 0
-        for key, session_id, token, started_at, origin, profile in marked:
+        for key, session_id, token, started_at, origin, profile, route in marked:
             started = started_at.timestamp()  # aware UTC marker; a pre-upgrade naive one reads as local
             if started < cutoff:
                 continue
+            delivery_key, message_ref, reply_to = key, f"crash:{token}", None
+            if route is not None:
+                origin = dataclasses.replace(origin, platform=Platform.TELEGRAM, chat_id=route["chat_id"],
+                                             thread_id=route["thread_id"], chat_type=route["chat_type"])
+                message_ref, reply_to = route["message_id"], route["reply_to"]
+                delivery_key = route["session_key"]
+                profile = route["adapter_profile"]
             text = self._crash_left_reply(await self.async_session_store.load_transcript(session_id),
                                           started, origin)
             if text is None or (text and not ledger_on):
@@ -771,9 +784,10 @@ class GatewayStartupMixin:
             if text:
                 await asyncio.to_thread(
                     record_crash_left_reply,
-                    obligation_id=compute_obligation_id(key, f"crash:{token}", text), session_key=key,
+                    obligation_id=compute_obligation_id(delivery_key, message_ref, text), session_key=delivery_key,
                     platform=str(getattr(origin.platform, "value", origin.platform)), chat_id=origin.chat_id,
-                    thread_id=origin.thread_id, content=text, since=started, adapter_profile=profile)
+                    thread_id=origin.thread_id, content=text, since=started, adapter_profile=profile,
+                    reply_to=reply_to, telegram_dm_topic=bool(route and origin.thread_id and origin.chat_type == "dm"))
             if await self.async_session_store.clear_turn_active(key, token) and text:
                 ledgered += 1
         return ledgered

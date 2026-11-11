@@ -75,6 +75,16 @@ async def busy_event(self, proceed, event, session_key):
     return await proceed(event, session_key) if accepted is None else accepted
 
 
+def queue_native_telegram_reply(event, session_key):
+    """A Telegram message keeps its own reply even while the managed main turn is busy."""
+    from gateway.config import Platform
+    from hermes_runtime.adapters.hermes import enabled
+
+    return (enabled() and session_key == HOME_SESSION_KEY and not event.internal
+            and event.source.platform == Platform.TELEGRAM and bool(event.message_id)
+            and event.reply_anchor_override != '')
+
+
 async def admit_busy_event(self, event, session_key):
     """Join the one managed inbox; ordinary events never redirect or cancel its writer.
 

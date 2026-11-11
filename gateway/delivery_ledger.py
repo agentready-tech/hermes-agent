@@ -12,6 +12,7 @@ best-effort: ledger failures must never block a send; callers wrap every call in
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -201,11 +202,18 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
             owner_pid INTEGER,
             owner_started_at INTEGER,
             last_error TEXT,
-            adapter_profile TEXT
+            adapter_profile TEXT,
+            reply_to TEXT,
+            telegram_dm_topic INTEGER NOT NULL DEFAULT 0
         )"""
     )
-    if "adapter_profile" not in {row[1] for row in conn.execute("PRAGMA table_info(delivery_obligations)")}:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(delivery_obligations)")}
+    if "adapter_profile" not in columns:
         add_column_if_missing(conn, "delivery_obligations", "adapter_profile", "adapter_profile TEXT")
+    if "reply_to" not in columns:
+        add_column_if_missing(conn, "delivery_obligations", "reply_to", "reply_to TEXT")
+    if "telegram_dm_topic" not in columns:
+        add_column_if_missing(conn, "delivery_obligations", "telegram_dm_topic", "telegram_dm_topic INTEGER NOT NULL DEFAULT 0")
 
 
 def _transaction():
@@ -267,8 +275,38 @@ def compute_obligation_id(session_key: str, message_ref: str, content: str) -> s
     return hashlib.sha256(f"{session_key}|{message_ref}|{content}".encode("utf-8", "replace")).hexdigest()[:24]
 
 
+async def begin_final_delivery(event, session_key, text, adapter, *, reply_to):
+    """Persist a gateway final before its first transport attempt."""
+    if not await asyncio.to_thread(ledger_enabled):
+        return None
+    from gateway.config import Platform
+    from hermes_runtime.adapters.gateway import queue_native_telegram_reply
+
+    source = event.source
+    if queue_native_telegram_reply(event, session_key):
+        # A recovered native FIFO turn has no adapter waiter and arrives with the logical home
+        # key. Use the same per-chat/topic key as the live Telegram send.
+        session_key = adapter._event_session_key(event)
+    # Queued chains may identify their final independently of the event that opened them.
+    message_id = getattr(event, "ledger_message_id", None)
+    if message_id is None:
+        message_id = getattr(event, "message_id", None)
+    obligation_id = compute_obligation_id(session_key, str(message_id or ""), text)
+    telegram = source.platform == Platform.TELEGRAM
+    thread_id = getattr(source, "thread_id", None)
+    await asyncio.to_thread(
+        record_obligation, obligation_id=obligation_id, session_key=session_key,
+        platform=str(getattr(source.platform, "value", source.platform)), chat_id=source.chat_id,
+        thread_id=thread_id, content=text, adapter_profile=getattr(adapter, "_owner_profile", None),
+        reply_to=reply_to if telegram else None,
+        telegram_dm_topic=telegram and getattr(source, "chat_type", None) == "dm" and bool(thread_id))
+    await asyncio.to_thread(mark_attempting, obligation_id)
+    return obligation_id
+
+
 def record_obligation(*, obligation_id: str, session_key: str, platform: str, chat_id: str,
-                      thread_id: Optional[str], content: str, adapter_profile: Optional[str] = None) -> None:
+                      thread_id: Optional[str], content: str, adapter_profile: Optional[str] = None,
+                      reply_to: Optional[str] = None, telegram_dm_topic: bool = False) -> None:
     """Record a final response as owed to the platform (state='pending')."""
     now, (pid, started) = time.time(), _owner_stamp()
     with _DB_LOCK, _transaction() as conn:
@@ -276,10 +314,11 @@ def record_obligation(*, obligation_id: str, session_key: str, platform: str, ch
             """INSERT OR REPLACE INTO delivery_obligations
                (obligation_id, session_key, platform, chat_id, thread_id,
                 content, state, attempts, created_at, updated_at,
-                owner_pid, owner_started_at, adapter_profile)
-               VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?)""",
+                owner_pid, owner_started_at, adapter_profile, reply_to, telegram_dm_topic)
+               VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?, ?)""",
             (obligation_id, session_key, platform, str(chat_id), str(thread_id) if thread_id else None,
-             content, now, now, pid, started, str(adapter_profile).strip() if adapter_profile else "default"))
+             content, now, now, pid, started, str(adapter_profile).strip() if adapter_profile else "default",
+             reply_to, telegram_dm_topic))
         # Same transaction, same connection: the cron ledgers prune this way too
         # (cron/delivery_queue._prune_terminal_unlocked, cron/executions._prune_unlocked).
         _prune_unlocked(conn, now)
@@ -287,7 +326,8 @@ def record_obligation(*, obligation_id: str, session_key: str, platform: str, ch
 
 def record_crash_left_reply(*, obligation_id: str, session_key: str, platform: str, chat_id: str,
                             thread_id: Optional[str], content: str, since: float,
-                            adapter_profile: Optional[str] = None) -> None:
+                            adapter_profile: Optional[str] = None, reply_to: Optional[str] = None,
+                            telegram_dm_topic: bool = False) -> None:
     """Adopt a reply a killed process persisted but never ledgered. Unowned, so this boot's sweep
     claims it, and 'attempting', because a streamed reply may already be on screen: it is
     redelivered once, with the recovered marker. A no-op when the same reply was already ledgered
@@ -298,13 +338,13 @@ def record_crash_left_reply(*, obligation_id: str, session_key: str, platform: s
             """INSERT OR IGNORE INTO delivery_obligations
                (obligation_id, session_key, platform, chat_id, thread_id,
                 content, state, attempts, created_at, updated_at,
-                owner_pid, owner_started_at, adapter_profile)
-               SELECT ?, ?, ?, ?, ?, ?, 'attempting', 0, ?, ?, NULL, NULL, ?
+                owner_pid, owner_started_at, adapter_profile, reply_to, telegram_dm_topic)
+               SELECT ?, ?, ?, ?, ?, ?, 'attempting', 0, ?, ?, NULL, NULL, ?, ?, ?
                WHERE NOT EXISTS (SELECT 1 FROM delivery_obligations
                                  WHERE session_key = ? AND content = ? AND created_at >= ?)""",
             (obligation_id, session_key, platform, str(chat_id), str(thread_id) if thread_id else None,
              content, now, now, str(adapter_profile).strip() if adapter_profile else "default",
-             session_key, content, since))
+             reply_to, telegram_dm_topic, session_key, content, since))
 
 
 def mark_attempting(obligation_id: str) -> None:
@@ -351,7 +391,8 @@ def _update_state(obligation_id: str, state: str, error: str = "") -> None:
 
 def _claimed_row(oid, session_key, platform, chat_id, thread_id, content, attempts, profile, *,
                  needs_marker: bool, runtime: bool = False, flood: bool = False,
-                 last_error: Optional[str] = None) -> dict[str, Any]:
+                 last_error: Optional[str] = None, reply_to: Optional[str] = None,
+                 telegram_dm_topic: bool = False) -> dict[str, Any]:
     """Claimed-row dict handed back for redelivery. A marked row names its own cause: ``flood`` (a reply
     the rate limit refused, possibly after accepting part of it) gets FLOOD_MARKER at boot or at runtime, a
     ``runtime`` reconnect replay gets RECONNECTED_MARKER, and a boot-recovered crash keeps the runner's
@@ -362,7 +403,8 @@ def _claimed_row(oid, session_key, platform, chat_id, thread_id, content, attemp
             "thread_id": thread_id, "content": content, "needs_marker": needs_marker,
             **({"marker": marker} if needs_marker and marker else {}), "profile": profile,
             **({"runtime_recovery": True} if runtime else {}),
-            **({"last_error": last_error} if last_error else {}), "attempts": attempts + 1}
+            **({"last_error": last_error} if last_error else {}), "attempts": attempts + 1,
+            "reply_to": reply_to, "telegram_dm_topic": telegram_dm_topic}
 
 
 def sweep_recoverable(now: Optional[float] = None, *, deliverable_platforms: Optional[set] = None,
@@ -391,12 +433,13 @@ def sweep_recoverable(now: Optional[float] = None, *, deliverable_platforms: Opt
         rows = conn.execute(
             """SELECT obligation_id, session_key, platform, chat_id, thread_id,
                       content, state, attempts, created_at,
-                      owner_pid, owner_started_at, adapter_profile, last_error, updated_at
+                      owner_pid, owner_started_at, adapter_profile, last_error, updated_at,
+                      reply_to, telegram_dm_topic
                FROM delivery_obligations
                WHERE state IN ('pending', 'attempting', 'failed')"""
         ).fetchall()
         for (oid, session_key, platform, chat_id, thread_id, content, state, attempts, created_at,
-             owner_pid, owner_started_at, adapter_profile, last_error, updated_at) in rows:
+             owner_pid, owner_started_at, adapter_profile, last_error, updated_at, reply_to, telegram_dm_topic) in rows:
             if _owner_alive(owner_pid, owner_started_at):
                 continue  # a live gateway still owns this row
             if attempts >= MAX_ATTEMPTS or (now - created_at) > STALE_AFTER_SECONDS:  # exhausted -> abandoned
@@ -442,7 +485,8 @@ def sweep_recoverable(now: Optional[float] = None, *, deliverable_platforms: Opt
                 # the marker.
                 claimed.append(_claimed_row(oid, session_key, platform, chat_id, thread_id, content, attempts,
                                             adapter_profile or "default",
-                                            needs_marker=state != "pending" or attempts > 0, flood=flood_row))
+                                            needs_marker=state != "pending" or attempts > 0, flood=flood_row,
+                                            reply_to=reply_to, telegram_dm_topic=bool(telegram_dm_topic)))
     return claimed
 
 
@@ -467,11 +511,11 @@ def sweep_failed_for_runtime(platform: str, now: Optional[float] = None, *,
         rows = conn.execute(
             """SELECT obligation_id, session_key, platform, chat_id, thread_id,
                       content, attempts, created_at, owner_pid,
-                      owner_started_at, last_error, adapter_profile, updated_at
+                      owner_started_at, last_error, adapter_profile, updated_at, reply_to, telegram_dm_topic
                FROM delivery_obligations
                WHERE state='failed' AND platform=?""", (platform,)).fetchall()
         for (oid, session_key, row_platform, chat_id, thread_id, content, attempts, created_at,
-             owner_pid, owner_started_at, last_error, adapter_profile, updated_at) in rows:
+             owner_pid, owner_started_at, last_error, adapter_profile, updated_at, reply_to, telegram_dm_topic) in rows:
             # Exact process-start matching prevents PID reuse from stealing work.
             if adapter_profile != expected_profile or owner_pid != pid or owner_started_at != started:
                 continue
@@ -501,7 +545,8 @@ def sweep_failed_for_runtime(platform: str, now: Optional[float] = None, *,
                 # claim released unsent keeps its flood retry eligibility.
                 claimed.append(_claimed_row(oid, session_key, row_platform, chat_id, thread_id, content,
                                             attempts, adapter_profile, needs_marker=True, runtime=True,
-                                            flood=is_flood_error(last_error), last_error=last_error))
+                                            flood=is_flood_error(last_error), last_error=last_error,
+                                            reply_to=reply_to, telegram_dm_topic=bool(telegram_dm_topic)))
     return claimed
 
 

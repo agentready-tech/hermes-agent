@@ -491,6 +491,41 @@ async def test_unclean_restart_delivers_a_persisted_unledgered_reply_instead_of_
     _close_store_db(store)
 
 
+@pytest.mark.asyncio
+async def test_unclean_restart_uses_the_saved_telegram_turn_route(tmp_path, monkeypatch):
+    from gateway import delivery_ledger
+    from gateway.platforms.base import SendResult
+
+    runner, store = _db_runner(tmp_path)
+    origin = SessionSource(Platform.TELEGRAM, '42', thread_id='1')
+    entry = store.get_or_create_session(origin)
+    route = {'session_key': 'agent:main:telegram:dm:42:9', 'chat_id': '42', 'chat_type': 'dm',
+             'thread_id': '9', 'message_id': '102', 'reply_to': '102', 'adapter_profile': 'default'}
+    token = store.mark_turn_active(entry.session_key, delivery=route)
+    assert token
+    store.append_to_transcript(entry.session_id, {'role': 'user', 'content': 'follow-up', 'message_id': '102'})
+    store.append_to_transcript(entry.session_id, {'role': 'assistant', 'content': 'second answer'})
+    _close_store_db(store)
+    runner, store = _db_runner(tmp_path)
+    adapter = SimpleNamespace(send=AsyncMock(return_value=SendResult(success=True)))
+    monkeypatch.setattr(runner, '_obligation_adapter', AsyncMock(return_value=adapter))
+    try:
+        assert _entry_for(store, origin).active_turn_delivery == route
+        assert await runner._recover_unclean_sessions() == (0, 1)
+        claimed = delivery_ledger.sweep_recoverable(deliverable_platforms={'telegram'})
+        expected_id = delivery_ledger.compute_obligation_id(route['session_key'], '102', 'second answer')
+        assert [row['obligation_id'] for row in claimed] == [expected_id]
+        assert await runner._redeliver_claimed_obligations(claimed) == 1
+        adapter.send.assert_awaited_once_with(chat_id='42', content=delivery_ledger.RECOVERED_MARKER + 'second answer',
+            reply_to='102', metadata={'thread_id': '9', 'direct_messages_topic_id': '9',
+                                      'telegram_dm_topic_reply_fallback': True, 'telegram_reply_to_message_id': '102'})
+        assert _entry_for(store, origin).active_turn_delivery is None
+        assert await runner._recover_unclean_sessions() == (0, 0)
+        assert delivery_ledger.sweep_recoverable(deliverable_platforms={'telegram'}) == []
+    finally:
+        _close_store_db(store)
+
+
 _WAKE = {"display_kind": "internal_notification"}
 
 
