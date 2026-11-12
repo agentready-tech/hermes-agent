@@ -13,6 +13,7 @@ _COMMON = r'''
 import json, os, sqlite3
 from pathlib import Path
 from openai.types.chat import ChatCompletion
+from gateway.session_finite import finite_turn_scope
 from run_agent import AIAgent
 from hermes_state import SessionDB
 from tools import delegate_projects
@@ -26,7 +27,6 @@ parent = AIAgent(model='gpt-4.1', provider='custom', base_url='http://127.0.0.1:
     api_key='test-only', api_mode='chat_completions', session_id='main', session_db=db,
     enabled_toolsets=['delegation'], skip_context_files=True, load_soul_identity=False,
     skip_memory=True, quiet_mode=True)
-delegate_projects._origin = lambda: {'wake': False}
 seen = []
 def model(self, payload, *args, **kwargs):
     seen.append((self.session_id,payload['messages']))
@@ -44,14 +44,21 @@ def test_pending_mail_survives_process_exit_and_is_admitted_once(tmp_path):
     repo = str(Path(__file__).resolve().parents[2])
     env = {**os.environ, "HERMES_HOME": str(home), "PYTHONPATH": repo}
     producer = _COMMON + r'''
-entry=json.loads(parent._dispatch_delegate_task({'tasks':[{'project':'order-42','goal':'Analyse the supplier terms'}]}))['projects'][0]
+# Enter the crash window after the first native child turn has finished.
+with finite_turn_scope(True):
+    entry=json.loads(parent._dispatch_delegate_task({'tasks':[{'project':'order-42','goal':'Analyse the supplier terms'}]}))['projects'][0]
+assert entry['status']=='completed' and len(seen)==1 and seen[0][0]==entry['session_id']
 mail=mail_action(parent,'message',entry['subagent_id'],'MONDAY_MAIL','mail-42')
 # Assignment before native admission is also recoverable; no in-process registry survives os._exit.
 from types import SimpleNamespace
 with MailStore(SimpleNamespace(session_id=entry['session_id'],_session_db=db)) as store:
-    store.delivery(set())
+    staged=store.delivery(set())
+    assert staged['display_metadata']['agent_message_ids']==[mail['message_id']]
 with sqlite3.connect(home/'state.db') as conn:
     before=conn.execute('SELECT id,session_id,role,content,tool_calls,platform_message_id FROM messages ORDER BY id').fetchall()
+    assert any(row[2]=='assistant' and row[3]=='SAVED_FINDING' for row in before)
+    assert conn.execute('SELECT delivered_at IS NULL FROM delegation_mail WHERE message_id=?',(mail['message_id'],)).fetchone()[0]
+    assert not conn.execute('SELECT 1 FROM messages WHERE platform_message_id=?',(staged['message_id'],)).fetchone()
 (home/'proof.json').write_text(json.dumps({'entry':entry,'mail':mail,'before':before}))
 os._exit(0)
 '''

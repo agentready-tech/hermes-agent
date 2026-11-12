@@ -9,13 +9,13 @@ from tests.tools.test_delegate_mail_live import _response
 
 
 def test_idle_recipient_resumes_with_mail_in_its_first_request(tmp_path, monkeypatch):
+    from gateway.session_finite import finite_turn_scope
     from run_agent import AIAgent
     from tools import delegate_projects
     from tools.delegate_mail import mail_action
 
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     (tmp_path / "config.yaml").write_text("compression:\n  enabled: false\ndelegation:\n  worktree_isolation: false\nauxiliary:\n  title_generation:\n    enabled: false\n")
-    monkeypatch.setattr(delegate_projects, "_origin", lambda: {"wake": False})
     seen = []
 
     def model(self, payload, *args, **kwargs):
@@ -26,15 +26,22 @@ def test_idle_recipient_resumes_with_mail_in_its_first_request(tmp_path, monkeyp
     monkeypatch.setattr(AIAgent, "_interruptible_streaming_api_call", model)
     parent, db = _parent(tmp_path)
     try:
-        entry = json.loads(parent._dispatch_delegate_task({"goal": "Analyse the supplier terms"}))["projects"][0]
+        # A finite admission settles the initial work before we address its idle child.
+        with finite_turn_scope(True):
+            entry = json.loads(parent._dispatch_delegate_task({"goal": "Analyse the supplier terms"}))["projects"][0]
+        assert entry["status"] == "completed"
+        assert [session_id for session_id, _ in seen] == [entry["session_id"]]
         receipt = mail_action(parent, "message", entry["subagent_id"], "NEW_MAIL_EVIDENCE_MONDAY", "mail-42")
         delegate_projects.recover_projects(parent)
-        assert seen[1][0] == entry["session_id"]
+        delegate_projects.recover_projects(parent)
+        assert [session_id for session_id, _ in seen] == [entry["session_id"]] * 2
         assert "NEW_MAIL_EVIDENCE_MONDAY" in json.dumps(seen[1][1])
         assert "Saved finding" in json.dumps(seen[1][1])
         with sqlite3.connect(tmp_path / "state.db") as conn:
             assert conn.execute("SELECT delivered_at IS NOT NULL FROM delegation_mail WHERE message_id=?", (receipt["message_id"],)).fetchone()[0]
             assert conn.execute("SELECT COUNT(*) FROM delegated_projects").fetchone()[0] == 1
+            assert conn.execute("SELECT COUNT(*) FROM messages WHERE session_id=? AND role='user' AND content LIKE '%NEW_MAIL_EVIDENCE_MONDAY%'",
+                                (entry["session_id"],)).fetchone()[0] == 1
     finally:
         parent.close()
         db.close()
