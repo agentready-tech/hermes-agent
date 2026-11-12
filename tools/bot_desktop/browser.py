@@ -138,12 +138,12 @@ def dock_exec_line(exe: str, user_data_dir: str, *, sandbox_bypass: Optional[boo
     return "Exec=" + " ".join(quote(arg) for arg in command)
 
 
-def ensure_instance_cdp_port(user_data_dir: str, *, exclude_session: Optional[str] = None) -> Optional[int]:
+def ensure_instance_endpoint(user_data_dir: str, *, exclude_session: Optional[str] = None):
     """Agent-first and human-first use the same native headed browser, then attach."""
     import json
     import subprocess
     import sys
-    from tools.bot_desktop.browser_instance import admitted_port
+    from tools.bot_desktop.browser_instance import admitted_endpoint
     from tools.environments.local import served_profile_child_env
     exe = executable()
     if not exe:
@@ -159,13 +159,18 @@ def ensure_instance_cdp_port(user_data_dir: str, *, exclude_session: Optional[st
         value = json.loads(result.stdout) if result.returncode == 0 else {}
     except (ValueError, TypeError):
         value = {}
-    return admitted_port(value if isinstance(value, dict) else {})
+    return admitted_endpoint(value if isinstance(value, dict) else {})
 
 
 def running_instance_cdp_port(user_data_dir: str, *, exclude_session: Optional[str] = None) -> Optional[int]:
     """Attach to a verified existing owner; never silently relaunch an occupied profile."""
     from tools.bot_desktop.browser_instance import admitted_port, inspect_profile
     return admitted_port(inspect_profile(user_data_dir, exclude_session=exclude_session))
+
+
+def running_instance_endpoint(user_data_dir: str, *, exclude_session: Optional[str] = None):
+    from tools.bot_desktop.browser_instance import admitted_endpoint, inspect_profile
+    return admitted_endpoint(inspect_profile(user_data_dir, exclude_session=exclude_session))
 
 
 def env_for_agent(env: dict) -> dict:

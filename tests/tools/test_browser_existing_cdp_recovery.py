@@ -38,7 +38,7 @@ def existing(monkeypatch,tmp_path):
 def test_existing_fixed_owned_listener_recovers_missing_discovery_without_relaunch(existing,port_args):
     item=existing;item.owner['argv']=item.owner['argv'][:2]+port_args
     assert instance.inspect_profile(item.profile)=={'state':'blocked'}
-    assert launch.ensure(['/own/guarded-chrome','--user-data-dir='+str(item.profile)])=={'state':'attachable','port':41111}
+    assert instance.admitted_endpoint(launch.ensure(['/own/guarded-chrome','--user-data-dir='+str(item.profile)])).port==41111
     target=item.profile/'DevToolsActivePort'
     assert target.read_text()=='41111\n/devtools/browser/synthetic\n'
     assert target.stat().st_mode&0o777==0o600

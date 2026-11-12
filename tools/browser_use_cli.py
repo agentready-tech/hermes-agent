@@ -36,6 +36,7 @@ _PRIVATE_BROWSER_SENTINEL = "_HERMES_BU_PRIVATE_BROWSER"
 # Internal route provenance: this exec resolved to a browser on the Bot Desktop display and must use
 # the same human-control lease fence as the built-in browser tools. Popped before launching the CLI.
 _BOT_DESKTOP_BROWSER_SENTINEL = "_HERMES_BU_BOT_DESKTOP_BROWSER"
+_NATIVE_BROWSER_GENERATION = "_HERMES_BU_NATIVE_BROWSER_GENERATION"
 # The note when the consented real profile could not load (the route fell back). Popped before launch.
 _REAL_PROFILE_FALLBACK_SENTINEL = "_HERMES_BU_REAL_PROFILE_FALLBACK"
 # local=True whose real profile could not load: run on the local sidecar browser. Popped before launch.
@@ -467,6 +468,8 @@ def _resolve_managed_chromium_cdp(env: dict, task_id: Optional[str], session_nam
     _set_cdp_env(env, cdp)
     env[_PRIVATE_BROWSER_SENTINEL] = "1"  # one Chromium per cache key: nothing to share a tab with
     env[_BOT_DESKTOP_BROWSER_SENTINEL] = "1"
+    if generation := res.get('native_browser_generation'):
+        env[_NATIVE_BROWSER_GENERATION] = generation
     _export_real_profile_note(env, _backend_cache_key(task_id, session_name, sidecar))
     return None
 
@@ -780,6 +783,7 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
         env["BU_NAME"] = _sidecar_daemon_name(session)
     _exec_route_is_sidecar[route_key] = local_sidecar
     bot_desktop_browser = bool(env.pop(_BOT_DESKTOP_BROWSER_SENTINEL, None))
+    generation = env.pop(_NATIVE_BROWSER_GENERATION, '')
 
     # SHARED browser (/browser connect CDP override): pin each named session to its own tab (see
     # _OWN_TAB_PREAMBLE). Private per-name browsers skip this — nothing to collide with.
@@ -803,7 +807,7 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
         nonlocal code
         if bot_desktop_browser:
             from tools.browser_tab_runtime import prepare_native_tabs
-            code = prepare_native_tabs(code, str(task_id or ""), cmd, env)
+            code = prepare_native_tabs(code, str(task_id or ""), cmd, env, generation=generation)
         _attach_vault_supervisor(env, task_id)
         with _driven_daemons_lock:
             _driven_daemons.add(env.get("BU_NAME", "default"))

@@ -5,12 +5,15 @@ DevTools file never turns a live or unverifiable profile owner into an absent on
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import socket
 import sys
+from typing import NamedTuple
 
 _BROWSERS = {'chrome', 'chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable',
              'Google Chrome', 'Google Chrome for Testing', 'Chromium', 'chrome-headless-shell'}
@@ -30,6 +33,21 @@ def admitted_port(result):
     if state in ('absent', 'stale', 'owned'):
         return None
     raise ProfileUnavailable(state or 'unknown')
+
+
+class BrowserEndpoint(NamedTuple):
+    port: int
+    generation: str
+
+
+def admitted_endpoint(result) -> BrowserEndpoint | None:
+    port = admitted_port(result)
+    if port is None:
+        return None
+    generation = result.get('generation')
+    if not isinstance(generation, str) or not re.fullmatch(r'[0-9a-f]{64}', generation):
+        raise ProfileUnavailable('unknown')
+    return BrowserEndpoint(port, generation)
 
 
 def _argv(raw):
@@ -216,8 +234,11 @@ def inspect_profile(profile, *, exclude_session=None):
                 state = {'state': 'attachable', 'port': _port(profile, owner)}
             except (OSError, ValueError, IndexError):
                 state = {'state': 'blocked'}
-        if _lock(profile) != lock or _generation(_process(lock['pid'])) != _generation(owner):
+        generation = _generation(owner)
+        if _lock(profile) != lock or _generation(_process(lock['pid'])) != generation:
             return {'state': 'unknown'}
+        if state['state'] == 'attachable':
+            state['generation'] = hashlib.sha256(json.dumps(generation).encode()).hexdigest()
         return state
     except (OSError, ValueError, IndexError):
         return {'state': 'unknown'}

@@ -5,6 +5,7 @@ Split out of ``tools/browser_tool.py``. Facade-owned state is read through ``_bt
 """
 
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -793,7 +794,8 @@ def _spawn_and_collect(
         proc.wait()
         stdout, stderr = _read_command_output_files(stdout_path, stderr_path)
         _unlink_command_output_files(stdout_path, stderr_path)
-        _handle_browser_command_timeout(task_id, session_info, task_socket_dir)
+        if not session_info.get('native_client_base'):
+            _handle_browser_command_timeout(task_id, session_info, task_socket_dir)
         if stderr and stderr.strip():
             _bt.logger.warning("browser '%s' stderr after timeout: %s", command, stderr.strip()[:500])
         _bt.logger.warning("browser '%s' timed out after %ds (task=%s, socket_dir=%s)",
@@ -855,30 +857,26 @@ def _shares_bot_desktop_browser(session_info: dict[str, Any]) -> bool:
     return bool(_bd_runtime.published_env().get("DISPLAY")) or _bd_lease.human_holds()
 
 
-def _bot_desktop_attach_port(session_info: dict[str, Any]) -> Optional[int]:
-    """DevTools port of a human-started Chromium on the Bot Desktop's shared profile, else ``None``."""
-    if not _shares_bot_desktop_browser(session_info):
-        return None
+def _bot_desktop_endpoint(session_info: dict[str, Any], *, launch: bool):
+    """Admit the owned Chrome, in the namespace where the shared profile and process live."""
+    name = session_info['session_name']
     if _browser_in_sandbox():
         from tools.bot_desktop import runtime, sandbox_host
-        env = runtime._sandbox_env(create=True)
-        return sandbox_host.ensure_browser_cdp_port(env, exclude_session=session_info["session_name"]) if env else None
-    from tools.bot_desktop import browser as _bd_browser
-    return _bd_browser.ensure_instance_cdp_port(str(_bd_browser.profile_dir()),
-                                                 exclude_session=session_info["session_name"])
+        env = runtime._sandbox_env(create=launch)
+        probe = sandbox_host.ensure_browser_endpoint if launch else sandbox_host.browser_instance_endpoint
+        return probe(env, exclude_session=name) if env else None
+    from tools.bot_desktop import browser
+    probe = browser.ensure_instance_endpoint if launch else browser.running_instance_endpoint
+    return probe(str(browser.profile_dir()), exclude_session=name)
 
 
-def _browser_backend_args(session_info: dict[str, Any], engine: str, *, attach=True) -> list[str]:
+def _browser_backend_args(session_info: dict[str, Any], engine: str, *, desktop_port=None) -> list[str]:
     backend_args = ["--session", session_info["session_name"]]
     if session_info.get("cdp_url"):
         backend_args += ["--cdp", session_info["cdp_url"]]
     else:
-        if attach and (bd_port := _bot_desktop_attach_port(session_info)) is not None:
-            # A Chromium already runs on the Bot Desktop's shared profile (the human clicked the dock's
-            # Browser first): a launch would be forwarded into it by Chromium's singleton and die without
-            # a DevTools endpoint, so the session's daemon attaches to the port it advertises instead.
-            # Same daemon (keyed by --session) either way, so snapshot refs stay valid across commands.
-            backend_args += ["--cdp", str(bd_port)]
+        if desktop_port is not None:
+            backend_args += ['--cdp', str(desktop_port)]
         if _cloud._is_headed_mode():
             backend_args.append("--headed")
         if engine != "auto" and not _bt._is_camofox_mode():
@@ -886,13 +884,40 @@ def _browser_backend_args(session_info: dict[str, Any], engine: str, *, attach=T
     return backend_args
 
 
-def _shared_browser_handshake(task_id, session_info, browser_cmd, command, args, engine, timeout):
+def _probe_native_client(task_id, session_info, browser_cmd, engine, timeout, endpoint):
+    """Bind only the task's client socket to the admitted Chrome generation, then probe it."""
+    if endpoint is not None:
+        # agent-browser reads --cdp only when its daemon starts. Keep a live generation's
+        # daemon (and snapshot refs), and leave superseded clients to the existing idle timer.
+        base = session_info.setdefault('native_client_base', session_info['session_name'])
+        key = hashlib.sha256(f'{base}\0{endpoint.generation}\0{endpoint.port}'.encode()).hexdigest()[:20]
+        session_info['session_name'] = 'h_' + key
+    bound = dict(session_info)
+    backend_args = _browser_backend_args(bound, engine, desktop_port=endpoint.port if endpoint else None)
+    parts = _agent_browser_argv(browser_cmd) + backend_args + ['--json', 'get', 'cdp-url']
+    result = _unwrap_batch_result(_spawn_and_collect(task_id, bound, parts, 'get', engine, timeout), 'get')
+    if endpoint is not None and result.get('success'):
+        from urllib.parse import urlsplit
+        try:
+            url = urlsplit((result.get('data') or {}).get('cdpUrl') or '')
+            matches = (url.hostname in ('localhost', '127.0.0.1') and url.port == endpoint.port
+                       and url.scheme in ('http', 'ws') and url.username is None and url.password is None)
+        except (TypeError, ValueError):
+            matches = False
+        if not matches:
+            result = {'success': False, 'error': 'Browser client returned a different CDP endpoint.'}
+        else:
+            result = {**result, 'native_browser_generation': endpoint.generation}
+    return bound, backend_args, result
+
+
+def _shared_browser_handshake(task_id, session_info, browser_cmd, command, engine, timeout):
     """Serialize only admission and daemon handshake, never a page action or wait."""
     from tools.bot_desktop import runtime
     shared = (not session_info.get('cdp_url') and engine != 'lightpanda' and command != 'close'
               and _shares_bot_desktop_browser(session_info))
     if not shared:
-        return _browser_backend_args(session_info, engine, attach=command != 'close' and engine != 'lightpanda'), None
+        return session_info, _browser_backend_args(session_info, engine), None
     directory = runtime.state_dir()
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     with runtime._flocked(directory / 'browser-launch.lock') as lock:
@@ -900,11 +925,14 @@ def _shared_browser_handshake(task_id, session_info, browser_cmd, command, args,
         # This explicit browser request must grant the existing headroom-gated
         # watchdog permit BEFORE native Chrome launch, including after a stop.
         runtime.ensure_started_for_tool()
-        backend_args = _browser_backend_args(session_info, engine)
-        parts = _agent_browser_argv(browser_cmd) + backend_args + ['--json', 'get', 'cdp-url']
         limit = min(timeout, _bt._get_open_command_timeout(first_open=True))
-        result = _spawn_and_collect(task_id, session_info, parts, 'get', engine, limit)
-    return backend_args, _unwrap_batch_result(result, 'get')
+        endpoint = _bot_desktop_endpoint(session_info, launch=True)
+        bound, args, result = _probe_native_client(task_id, session_info, browser_cmd, engine, limit, endpoint)
+        if endpoint is not None and not result.get('success'):
+            current = _bot_desktop_endpoint(bound, launch=False)
+            if current is not None and current != endpoint:
+                return _probe_native_client(task_id, session_info, browser_cmd, engine, limit, current)
+    return bound, args, result
 
 
 def _dispatch_browser_command(
@@ -917,8 +945,8 @@ def _dispatch_browser_command(
         _cdp._ensure_cdp_supervisor(task_id)
     engine = _engine_override or _cloud._get_browser_engine()
     try:
-        backend_args, handshake = _shared_browser_handshake(
-            task_id, session_info, browser_cmd, command, args, engine, timeout)
+        bound, backend_args, handshake = _shared_browser_handshake(
+            task_id, session_info, browser_cmd, command, engine, timeout)
     except ProfileUnavailable as error:
         return engine, {'success': False, 'code': 'browser_profile_unavailable',
                         'profileState': error.state, 'error': str(error)}
@@ -927,7 +955,7 @@ def _dispatch_browser_command(
             raise
         return engine, {'success': False, 'code': 'browser_memory_pressure', 'error': str(error)}
     if handshake is not None and (not handshake.get('success') or (command == 'get' and args == ['cdp-url'])):
-        return engine, handshake
+        return engine, {**handshake, '_shared_browser_command': True}
 
     argv = _agent_browser_argv(browser_cmd)
     spawn_command, spawn_args, stdin_payload = _shim_safe_args(argv[0], command, args)
@@ -935,10 +963,12 @@ def _dispatch_browser_command(
 
     try:
         result = _unwrap_batch_result(
-            _spawn_and_collect(task_id, session_info, cmd_parts, command, engine, timeout, stdin_payload), command)
+            _spawn_and_collect(task_id, bound, cmd_parts, command, engine, timeout, stdin_payload), command)
     except Exception as e:
         _bt.logger.warning("browser '%s' exception: %s", command, e, exc_info=True)
         result = {"success": False, "error": str(e)}
+    if handshake is not None:
+        result['_shared_browser_command'] = True
     return engine, result
 
 
@@ -976,7 +1006,8 @@ def _run_browser_command(
         # the same way and retry once on the replacement before handing the caller the error.
         # ``close`` is exempt: a dead daemon is already closed, and cleanup must never spawn
         # a fresh session just to close it.
-        if attempt == 0 and command != "close" and _is_recoverable_local_backend_failure(session_info, result):
+        shared = result.pop('_shared_browser_command', False)
+        if not shared and attempt == 0 and command != "close" and _is_recoverable_local_backend_failure(session_info, result):
             _bt.logger.warning("browser '%s' failed at the backend level (task=%s, rc=%s); recycling the session "
                                "and retrying once", command, task_id, result.get("returncode"))
             _recycle_local_session(task_id, session_info, _prepare_session_socket_dir(session_info["session_name"]),

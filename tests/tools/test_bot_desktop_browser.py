@@ -96,18 +96,21 @@ def test_agent_attaches_to_human_started_browser(monkeypatch):
 
     def spawn(task_id, session_info, cmd_parts, *rest):
         argvs.append(cmd_parts)
-        return {"success": True}
+        return {"success": True, 'data': {'cdpUrl': 'ws://localhost:41234/devtools/browser/fixture'}}
 
     monkeypatch.setattr(session, "_spawn_and_collect", spawn)
     monkeypatch.setattr(session._lp, "_lightpanda_fallback_reason", lambda *a: None)
     info = {"session_name": "h_abc", "cdp_url": None, "features": {"local": True}}
 
-    monkeypatch.setattr(browser, "ensure_instance_cdp_port", lambda d, **kw: 41234)
+    from tools.bot_desktop.browser_instance import BrowserEndpoint
+    monkeypatch.setattr(browser, 'ensure_instance_endpoint', lambda d, **kw: BrowserEndpoint(41234, 'a' * 64))
     session._dispatch_browser_command("t", info, "agent-browser", "open", ["https://x"], 10, None)
-    assert argvs[-1][:5] == ["agent-browser", "--session", "h_abc", "--cdp", "41234"]
+    assert argvs[-1][:5] == ["agent-browser", "--session", info['session_name'], "--cdp", "41234"]
+    assert info['session_name'] != 'h_abc'
 
-    monkeypatch.setattr(browser, "ensure_instance_cdp_port", lambda d, **kw: None)
-    session._dispatch_browser_command("t", info, "agent-browser", "open", ["https://x"], 10, None)
+    monkeypatch.setattr(browser, 'ensure_instance_endpoint', lambda d, **kw: None)
+    original = {"session_name": "h_abc", "cdp_url": None, "features": {"local": True}}
+    session._dispatch_browser_command("t", original, "agent-browser", "open", ["https://x"], 10, None)
     assert "--cdp" not in argvs[-1] and argvs[-1][:3] == ["agent-browser", "--session", "h_abc"]
 
 

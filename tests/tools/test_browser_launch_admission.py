@@ -55,13 +55,15 @@ def test_native_dead_generation_allows_native_recovery_without_touching_profile_
     profile = tmp_path / 'profile'
     with native_chrome(profile) as first:
         (profile / 'saved-login').write_text('fixture-profile-state')
+        previous = browser_instance.admitted_endpoint(browser_instance.inspect_profile(profile))
     lock = (profile / 'SingletonLock').lstat()
     assert browser_instance.inspect_profile(profile) == {'state': 'stale'}
     assert browser.running_instance_cdp_port(str(profile)) is None
     assert (profile / 'SingletonLock').lstat() == lock, 'Hermes does not unlink singleton files'
     with native_chrome(profile) as second:
         assert first != second
-        assert browser_instance.inspect_profile(profile)['state'] == 'attachable'
+        current = browser_instance.admitted_endpoint(browser_instance.inspect_profile(profile))
+        assert current.generation != previous.generation
         assert (profile / 'saved-login').read_text() == 'fixture-profile-state'
 
 
@@ -101,7 +103,7 @@ def test_pid_generation_change_during_admission_is_unknown(monkeypatch, tmp_path
 def test_launch_fence_ends_before_page_work_and_does_not_lock_other_profiles(monkeypatch, tmp_path):
     import fcntl
     info = _dispatch_setup(monkeypatch, tmp_path)
-    monkeypatch.setattr(browser, 'ensure_instance_cdp_port', lambda *args, **kw: None)
+    monkeypatch.setattr(browser, 'ensure_instance_endpoint', lambda *args, **kw: None)
     events = []
     other = tmp_path / 'other-profile'
     other.mkdir()
@@ -124,7 +126,7 @@ def test_launch_fence_ends_before_page_work_and_does_not_lock_other_profiles(mon
 
 def test_close_never_starts_or_adopts_a_siblings_browser(monkeypatch, tmp_path):
     info = _dispatch_setup(monkeypatch, tmp_path)
-    monkeypatch.setattr(browser, 'ensure_instance_cdp_port', lambda *args, **kw: pytest.fail('close must not adopt'))
+    monkeypatch.setattr(browser, 'ensure_instance_endpoint', lambda *args, **kw: pytest.fail('close must not adopt'))
     commands = []
     monkeypatch.setattr(session, '_spawn_and_collect', lambda *args: commands.append(args[3]) or {'success': True})
     assert session._dispatch_browser_command('task', info, 'agent-browser', 'close', [], 5, None)[1]['success']
@@ -148,4 +150,4 @@ def test_failed_sandbox_probe_never_becomes_permission_to_launch(monkeypatch, re
     monkeypatch.setattr(sandbox_host, '_user_for', lambda _: 'pn')
     monkeypatch.setattr(streams, 'run_in', lambda *a, **kw: SimpleNamespace(returncode=returncode, stdout=output))
     with pytest.raises(browser_instance.ProfileUnavailable):
-        sandbox_host.browser_instance_cdp_port(object())
+        sandbox_host.browser_instance_endpoint(object())

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tools.bot_desktop import browser, runtime
+from tools.bot_desktop import browser, browser_instance, runtime
 
 pytest_plugins = ('tests.tools.browser_instance_fixture',)
 
@@ -16,15 +16,20 @@ def test_dock_delegates_port_allocation_to_the_browser_namespace():
     assert '/own/profile' in line
 
 
-def test_agent_first_launch_attaches_to_native_chrome(monkeypatch):
+def test_agent_first_launch_attaches_to_native_chrome(monkeypatch, tmp_path):
     from tools import browser_tool_session as session
+    monkeypatch.setattr(runtime, 'state_dir', lambda: tmp_path)
     monkeypatch.setattr(runtime, 'published_env', lambda: {'DISPLAY': ':20'})
+    monkeypatch.setattr(runtime, 'ensure_started_for_tool', lambda: None)
     monkeypatch.setattr(session, '_browser_in_sandbox', lambda: False)
-    monkeypatch.setattr(browser, 'ensure_instance_cdp_port', lambda *a, **kw: 41327, raising=False)
-    monkeypatch.setattr(browser, 'running_instance_cdp_port', lambda *a, **kw: None)
+    monkeypatch.setattr(browser, 'ensure_instance_endpoint', lambda *a, **kw: browser_instance.BrowserEndpoint(41327, 'a' * 64))
     monkeypatch.setattr(session._cloud, '_is_headed_mode', lambda: False)
+    monkeypatch.setattr(session, '_spawn_and_collect', lambda *a, **kw:
+                        {'success': True, 'data': {'cdpUrl': 'ws://localhost:41327/devtools/browser/fixture'}})
     info = {'session_name': 'own', 'features': {'local': True}}
-    assert session._browser_backend_args(info, 'auto') == ['--session', 'own', '--cdp', '41327']
+    _, args, result = session._shared_browser_handshake('task', info, 'agent-browser', 'open', 'auto', 5)
+    assert args == ['--session', info['session_name'], '--cdp', '41327']
+    assert info['session_name'] != 'own' and result['native_browser_generation'] == 'a' * 64
 
 
 def test_explicit_browser_request_grants_pressure_permit_before_native_launch(monkeypatch, tmp_path):
@@ -40,9 +45,10 @@ def test_explicit_browser_request_grants_pressure_permit_before_native_launch(mo
     def launch(*a, **kw):
         assert actions == ['pressure-permit'], 'a blocked Chrome must receive its own explicit request first'
         actions.append('native-launch')
-        return 41327
-    monkeypatch.setattr(browser, 'ensure_instance_cdp_port', launch)
-    monkeypatch.setattr(session, '_spawn_and_collect', lambda *a, **kw: actions.append(a[3]) or {'success': True})
+        return browser_instance.BrowserEndpoint(41327, 'a' * 64)
+    monkeypatch.setattr(browser, 'ensure_instance_endpoint', launch)
+    monkeypatch.setattr(session, '_spawn_and_collect', lambda *a, **kw: actions.append(a[3]) or
+                        {'success': True, 'data': {'cdpUrl': 'ws://localhost:41327/devtools/browser/fixture'}})
     info = {'session_name': 'own', 'features': {'local': True}}
     result = session._dispatch_browser_command('own-task', info, 'agent-browser', 'open', ['about:blank'], 5, None)[1]
     assert result['success'] is True
@@ -57,7 +63,7 @@ def test_browser_request_under_continued_pressure_never_launches_or_dispatches(m
     def pressure():
         raise RuntimeError('BROWSER_MEMORY_PRESSURE: wait for memory headroom')
     monkeypatch.setattr(runtime, 'ensure_started_for_tool', pressure)
-    monkeypatch.setattr(browser, 'ensure_instance_cdp_port', lambda *a, **kw: pytest.fail('pressure must block Chrome'))
+    monkeypatch.setattr(browser, 'ensure_instance_endpoint', lambda *a, **kw: pytest.fail('pressure must block Chrome'))
     monkeypatch.setattr(session, '_spawn_and_collect', lambda *a, **kw: pytest.fail('pressure must block page work'))
     info = {'session_name': 'own', 'features': {'local': True}}
     result = session._dispatch_browser_command('own-task', info, 'agent-browser', 'open', ['about:blank'], 5, None)[1]
@@ -149,7 +155,9 @@ def test_positive_endpoint_published_only_for_native_profile_process(monkeypatch
         port = int(target.read_text().splitlines()[0])
         target.unlink()
         monkeypatch.setattr(launch, '_endpoint', lambda value: '/devtools/browser/native-fixture')
-        assert launch._publish(profile, pid, port) == {'state': 'attachable', 'port': port}
+        endpoint = browser_instance.admitted_endpoint(launch._publish(profile, pid, port))
+        assert endpoint.port == port
+        assert endpoint == browser_instance.admitted_endpoint(browser_instance.inspect_profile(profile))
         assert target.read_text() == f'{port}\n/devtools/browser/native-fixture\n'
         assert target.stat().st_mode & 0o777 == 0o600
         before = target.read_bytes()
@@ -274,8 +282,9 @@ def test_sandbox_allocation_runs_as_own_user_inside_remote_namespace(monkeypatch
     monkeypatch.setattr(runtime, 'published_env', lambda: {'DISPLAY': ':20', 'XAUTHORITY': '/own/Xauthority'})
     calls = []
     monkeypatch.setattr(streams, 'run_in', lambda e, argv, **kw: calls.append((e, argv, kw)) or
-                        SimpleNamespace(returncode=0, stdout=b'{"state":"attachable","port":41327}'))
-    assert sandbox_host.ensure_browser_cdp_port(env, exclude_session='own-child') == 41327
+                        SimpleNamespace(returncode=0, stdout=json.dumps({'state': 'attachable', 'port': 41327,
+                                                                        'generation': 'a' * 64}).encode()))
+    assert sandbox_host.ensure_browser_endpoint(env, exclude_session='own-child') == browser_instance.BrowserEndpoint(41327, 'a' * 64)
     target, command, options = calls[0]
     assert target is env and command == ['python3', '/own/launcher/browser_launch.py']
     assert options['user'] == 'pn'

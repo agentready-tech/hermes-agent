@@ -96,5 +96,5 @@ def test_browser_attaches_using_the_sandbox_profile_and_loopback(monkeypatch, tm
     with native_chrome(profile):
         port = int((profile / "DevToolsActivePort").read_text().splitlines()[0])
         session = {"session_name": "another-browser-client", "features": {"local": True}}
-        assert browser_tool_session._bot_desktop_attach_port(session) == port
+        assert browser_tool_session._bot_desktop_endpoint(session, launch=False).port == port
 

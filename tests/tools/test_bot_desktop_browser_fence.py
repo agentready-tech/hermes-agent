@@ -33,7 +33,7 @@ def _wire(monkeypatch, commands):
     monkeypatch.setattr(session._cloud, "_is_headed_mode", lambda: True)
     monkeypatch.setattr(runtime, 'ensure_started_for_tool', lambda: None)
     monkeypatch.setattr(session, '_browser_in_sandbox', lambda: False)
-    monkeypatch.setattr(desktop_browser, 'ensure_instance_cdp_port', lambda *a, **kw: None)
+    monkeypatch.setattr(desktop_browser, 'ensure_instance_endpoint', lambda *a, **kw: None)
 
     def spawn(*args):
         commands.append(args[2])

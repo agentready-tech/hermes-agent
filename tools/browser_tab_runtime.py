@@ -36,17 +36,20 @@ def _close_idle_user_tabs(home, task):
     return True
 
 
-def prepare_native_tabs(code: str, task: str, cmd: list, env: dict) -> str:
+def prepare_native_tabs(code: str, task: str, cmd: list, env: dict, *, generation: str = '') -> str:
     home = str(get_hermes_home())
     endpoint = env.get("BU_CDP_WS") or env.get("BU_CDP_URL") or ""
-    if not task or not endpoint:
+    if not endpoint or (not task and not generation):
         return code
     # Keep credentials in this process only; the durable ledger receives a hash.
-    browser = hashlib.sha256(endpoint.encode()).hexdigest()
+    identity = endpoint + '\0' + generation if generation else endpoint
+    browser = hashlib.sha256(identity.encode()).hexdigest()
     # The harness daemon name is global to the unix user. Scope it to both
     # profile and task so a sibling cannot switch its attachment mid-operation.
     name = "hermes-" + hashlib.sha256((home + "\0" + task + "\0" + env.get("BU_NAME", "default") + "\0" + browser).encode()).hexdigest()[:32]
     env["BU_NAME"] = name
+    if not task:
+        return code
     from tools.bot_desktop import lease
     with _lock:
         _completed_tasks.discard((home, task))

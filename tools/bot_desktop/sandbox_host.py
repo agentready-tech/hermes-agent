@@ -161,7 +161,7 @@ def desktop_config_dir(env: Any, profile: str) -> str:
     return f"{desktop_home(env).rstrip('/')}/.hermes/bot-desktop/config/{profile}"
 
 
-def browser_instance_cdp_port(env: Any, *, exclude_session: Optional[str] = None) -> Optional[int]:
+def browser_instance_endpoint(env: Any, *, exclude_session: Optional[str] = None):
     """Run the same admission probe where the profile and process namespace actually live."""
     from tools.bot_desktop import browser_instance
     program = Path(browser_instance.__file__).read_text(encoding='utf-8-sig')
@@ -171,7 +171,7 @@ def browser_instance_cdp_port(env: Any, *, exclude_session: Optional[str] = None
         result = json.loads(proc.stdout) if proc.returncode == 0 else {}
     except (ValueError, TypeError):
         result = {}
-    return browser_instance.admitted_port(result if isinstance(result, dict) else {})
+    return browser_instance.admitted_endpoint(result if isinstance(result, dict) else {})
 
 
 def browser_launch_path(env: Any) -> str:
@@ -192,7 +192,7 @@ def browser_launch_path(env: Any) -> str:
     return target + '/browser_launch.py'
 
 
-def ensure_browser_cdp_port(env: Any, *, exclude_session: Optional[str] = None) -> Optional[int]:
+def ensure_browser_endpoint(env: Any, *, exclude_session: Optional[str] = None):
     """Allocate and launch as the browser owner inside its actual sandbox namespace."""
     from tools.bot_desktop import browser, browser_instance, runtime
     from tools.bot_desktop.browser_memory_guard import executable as guarded_executable
@@ -208,7 +208,7 @@ def ensure_browser_cdp_port(env: Any, *, exclude_session: Optional[str] = None) 
         value = json.loads(result.stdout) if result.returncode == 0 else {}
     except (ValueError, TypeError):
         value = {}
-    return browser_instance.admitted_port(value if isinstance(value, dict) else {})
+    return browser_instance.admitted_endpoint(value if isinstance(value, dict) else {})
 
 
 def open_google(env: Any, *, launch_helper: Optional[str] = None) -> bool:
