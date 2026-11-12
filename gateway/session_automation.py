@@ -6,6 +6,7 @@ A producer ACK means committed input, not successful inference or outbound deliv
 from copy import deepcopy
 from datetime import UTC, datetime
 import json
+import re
 
 from gateway.config import Platform
 from gateway.platforms.event import MessageEvent, MessageType
@@ -63,6 +64,36 @@ def automation_notification_metadata(metadata):
     if category not in ('result', 'diagnostic'):
         raise RuntimeStoreError('invalid_params')
     return {'notification_category': category} if category == 'diagnostic' else {}
+
+
+def mailbox_wake_disposition(authority, ref, payload):
+    """Resolve a durable coordination wake against the addressed mailbox at execution time."""
+    descriptor = payload.get('local_automation_v1') or (payload.get('native_text_v1') or {}).get('automation')
+    if not descriptor or descriptor.get('owner') != ref.session_id:
+        return None
+    identities = (descriptor.get('identity'), *(descriptor.get('identities') or ()))
+    ids = set()
+    for identity in identities:
+        try:
+            kind, mail_id, qualifier = json.loads(identity)
+        except (TypeError, ValueError):
+            return None
+        if (kind != 'async_delegation' or qualifier != '' or not isinstance(mail_id, str)
+                or not re.fullmatch(r'agent-mail-[a-f0-9]{32}', mail_id)):
+            return None  # An older mixed admission may also contain a real child result.
+        ids.add(mail_id)
+    marks = ','.join('?' for _ in ids)
+    rows = authority.db._read_all(f"SELECT root_session_id, target_session_id, delivered_at FROM delegation_mail "
+                                  f"WHERE kind='message' AND message_id IN ({marks})", tuple(ids))
+    owner = ref.session_id
+    if len(rows) != len(ids) or any(authority.logical_owner(root) != owner for root, _, _ in rows):
+        return None
+    pending = [target for _, target, delivered in rows if delivered is None]
+    if not pending:
+        return 'consumed'
+    if all(authority.logical_owner(target) != owner for target in pending):
+        return 'coordination'
+    return None  # Addressed, unread mail for the parent can carry a substantive reply.
 
 
 _DISPLAY_TEXT_LIMIT = 2000

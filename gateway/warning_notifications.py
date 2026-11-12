@@ -26,13 +26,13 @@ def is_diagnostic_notice(notice) -> bool:
 
 
 def diagnostic_metadata(event) -> dict:
-    """``{"notification_category": "diagnostic"}`` for a trusted diagnostic-only wake, else ``{}``.
+    """Preserve a trusted internal wake's presentation category.
 
     Only internal wakes may classify a turn; human content never does.
     """
-    if getattr(event, "internal", False) and (getattr(event, "metadata", None) or {}).get(
-            "notification_category") == "diagnostic":
-        return {"notification_category": "diagnostic"}
+    category = (getattr(event, "metadata", None) or {}).get("notification_category")
+    if getattr(event, "internal", False) and category in ("diagnostic", "coordination"):
+        return {"notification_category": category}
     return {}
 
 
@@ -47,10 +47,10 @@ def effective_user_config() -> dict:
 
 
 def diagnostic_turn_muted(display_metadata, platform, user_config=None) -> bool:
-    """One admission rule for every surface: a diagnostic-category wake mutes its turn's
-    presentation only when the owning policy hides diagnostics. Human content never mutes."""
-    return ((display_metadata or {}).get("notification_category") == "diagnostic"
-            and not warning_notifications_enabled(platform, user_config))
+    """Coordination wakes are private, while diagnostic visibility follows profile policy."""
+    category = (display_metadata or {}).get("notification_category")
+    return (category == "coordination" or (category == "diagnostic"
+            and not warning_notifications_enabled(platform, user_config)))
 
 
 def diagnostic_wake_muted(event, user_config=None) -> bool:

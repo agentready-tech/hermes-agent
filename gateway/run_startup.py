@@ -811,6 +811,9 @@ class GatewayStartupMixin:
         if (last.get("role") != "assistant" or last.get("tool_calls") or not isinstance(last.get("content"), str)
                 or (coerce_epoch(last.get("timestamp")) or 0) < started):
             return None
+        if (last.get("display_kind") == "hidden"
+                and (last.get("display_metadata") or {}).get("notification_category") == "diagnostic"):
+            return ""  # Persistence already captured this turn's mute decision before the crash.
         prompt = next((m for m in reversed(visible) if m.get("role") == "user"), {})
         if is_machinery_display_kind(prompt.get("display_kind")):
             try:  # the owning profile's display policy, as the adapter reads it at delivery

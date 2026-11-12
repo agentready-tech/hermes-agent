@@ -247,6 +247,16 @@ async def execute_admission(authority, ref, row):
     handed = False
     try:
         with await _execution_scope(authority, home):
+            mailbox = None
+            if event.internal:
+                from gateway.session_automation import mailbox_wake_disposition
+                mailbox = await asyncio.to_thread(mailbox_wake_disposition, authority, ref, row['payload'])
+                if mailbox == 'consumed':
+                    authority.pending_results[row['admission_id']] = {
+                        'result': {'final_response': '', 'messages': []}, 'usage': {}}
+                    return None
+                if mailbox == 'coordination':
+                    event.metadata['notification_category'] = 'coordination'
             if is_api:
                 # Committed media resolves under the owning profile's home, like admission did.
                 prepared = prepare_api_execution(authority, ref, row['payload'])
@@ -259,6 +269,11 @@ async def execute_admission(authority, ref, row):
                 event.internal = True  # trust comes from the private binding and preclaim, never client JSON
             response = await authority.runner._handle_message(event)
             result = captured.get('terminal_result', captured.get('result'))
+            if mailbox == 'coordination':
+                from gateway.warning_notifications import diagnostic_wake_muted
+                if diagnostic_wake_muted(event):
+                    response = None
+                    result = {**(result or {}), 'final_response': '', '_notification_reply_muted': True}
             if result is None:
                 # No TurnRunner result means the handler answered without executing the turn.
                 # A turn that never ran because it failed (agent initialization raised, history

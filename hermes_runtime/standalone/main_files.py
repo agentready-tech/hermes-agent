@@ -126,6 +126,8 @@ def settle_files(authority, live, ref, settled, captured, response=None):
             or resolve_home(ref.session_id) is None or settled.get('outcome') != 'completed'):
         return
     result = (captured or {}).get('result') or {}
+    if result.get('_notification_reply_muted') is True:
+        return
     row_id = (result.get('persisted_turn') or {}).get('final_assistant_row_id')
     if type(row_id) is not int or row_id < 1:
         return
