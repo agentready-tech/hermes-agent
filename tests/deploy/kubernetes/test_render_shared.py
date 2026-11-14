@@ -1,10 +1,10 @@
 """The shared workload starts inactive and may access only enrolled sandboxes."""
 import pytest
 
-from deploy.kubernetes.render_shared import HOME, NAME, NAMESPACE, render_shared, sandbox_binding
+from deploy.kubernetes.render_shared import FIRECRACKER_SOCKETS, HOME, NAME, NAMESPACE, render_shared, sandbox_binding
 
 
-def test_shared_plan_mounts_only_the_operator_runtime_root():
+def test_shared_plan_mounts_only_the_operator_runtime_root_and_socket_directory():
     plan = render_shared(worker='hermes-vm', root='/srv/agentsee/shared-hermes',
                          image='fixture/runtime@sha256:' + '1' * 64, panel_ip='10.216.0.1', memory_limit='4Gi')
     workload, = (resource for resource in plan['items'] if resource['kind'] == 'StatefulSet')
@@ -12,8 +12,13 @@ def test_shared_plan_mounts_only_the_operator_runtime_root():
     spec = workload['spec']['template']['spec']
     assert spec['nodeSelector'] == {'agentsee.io/worker': 'hermes-vm'}
     assert spec['serviceAccountName'] == NAME
-    assert [volume['hostPath']['path'] for volume in spec['volumes'] if 'hostPath' in volume] == ['/srv/agentsee/shared-hermes']
+    assert [volume['hostPath']['path'] for volume in spec['volumes'] if 'hostPath' in volume] == [
+        '/srv/agentsee/shared-hermes', FIRECRACKER_SOCKETS,
+    ]
     assert spec['containers'][0]['volumeMounts'][0] == {'name': 'runtime', 'mountPath': HOME, 'mountPropagation': 'HostToContainer'}
+    assert spec['containers'][0]['volumeMounts'][1] == {
+        'name': 'firecracker-sockets', 'mountPath': FIRECRACKER_SOCKETS, 'readOnly': True,
+    }
     assert not any(resource['kind'] in ('PersistentVolume', 'PersistentVolumeClaim', 'ClusterRoleBinding') for resource in plan['items'])
 
 

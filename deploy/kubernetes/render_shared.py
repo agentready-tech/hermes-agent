@@ -8,6 +8,7 @@ from deploy.kubernetes.render import object_
 NAMESPACE = 'agentsee-runtime'
 NAME = 'hermes-shared'
 HOME = '/root/.hermes'
+FIRECRACKER_SOCKETS = '/run/agentsee-firecracker'
 
 
 def sandbox_binding(namespace):
@@ -37,11 +38,14 @@ def render_shared(*, worker, root, image, panel_ip, memory_limit):
            'HERMES_ALLOW_ROOT_GATEWAY': '1', 'XDG_RUNTIME_DIR': '/tmp/hermes-runtime',
            'KUBERNETES_SERVICE_HOST': address, 'KUBERNETES_SERVICE_PORT': '6443'}
     mounts = [{'name': 'runtime', 'mountPath': HOME, 'mountPropagation': 'HostToContainer'},
+              {'name': 'firecracker-sockets', 'mountPath': FIRECRACKER_SOCKETS, 'readOnly': True},
               {'name': 'tmp', 'mountPath': '/tmp'}, {'name': 'kubectl-cache', 'mountPath': '/root/.kube'},
               {'name': 'opt-data', 'mountPath': '/opt/data'}]
     pod = {'nodeSelector': {'agentsee.io/worker': worker}, 'serviceAccountName': NAME,
            'imagePullSecrets': [{'name': 'agentsee-ghcr-pull'}], 'terminationGracePeriodSeconds': 60,
            'volumes': [{'name': 'runtime', 'hostPath': {'path': str(path), 'type': 'Directory'}},
+                       {'name': 'firecracker-sockets', 'hostPath': {'path': FIRECRACKER_SOCKETS,
+                                                                  'type': 'DirectoryOrCreate'}},
                        {'name': 'tmp', 'emptyDir': {'sizeLimit': '512Mi'}},
                        {'name': 'kubectl-cache', 'emptyDir': {'sizeLimit': '64Mi'}},
                        {'name': 'opt-data', 'emptyDir': {'sizeLimit': '1Mi'}}],
