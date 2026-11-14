@@ -125,8 +125,9 @@ def _http_endpoint(server_name: str, config: dict) -> tuple[str, dict]:
 
 def _stdio_launch(config: dict) -> tuple:
     """(command, env, cwd) a stdio child is spawned with, resolved in the current profile's scope."""
-    from tools.mcp_sandbox_stdio import stdio_sandbox
-    env = _config._build_safe_env(config.get("env"))
+    from tools.mcp_sandbox_stdio import custody_broker, custody_environment, stdio_sandbox
+    configured_env = custody_environment(config) if custody_broker(config) else config.get("env")
+    env = _config._build_safe_env(configured_env)
     command = config["command"]
     if stdio_sandbox(config) is None:
         command, env = _config._resolve_stdio_command(command, env)

@@ -82,3 +82,23 @@ def test_unavailable_remote_stream_refuses_without_a_host_fallback(monkeypatch):
     monkeypatch.setattr(sandbox.streams, "remote_command", lambda *_args, **_kwargs: None)
     with pytest.raises(sandbox.SandboxTransportUnavailable):
         sandbox.remote_parameters(object(), {"command": "no-host-executable"}, {})
+
+
+def test_managed_workspace_legacy_mount_resolves_to_own_shared_profile(tmp_path, monkeypatch):
+    from gateway.run import _profile_runtime_scope
+    from hermes_runtime.adapters import hermes
+    from tools.mcp_tool_transport import _stdio_launch
+
+    profiles = tmp_path / '.hermes' / 'profiles'
+    homes = [profiles / 'alpha', profiles / 'bravo']
+    for home in homes:
+        home.mkdir(parents=True)
+    monkeypatch.setattr(hermes, '_hosted_homes', frozenset())
+    hermes.activate_profiles(homes)
+    config = {'command': sys.executable, 'args': ['-m', 'hermes_runtime.workspace.mcp'],
+              'cwd': str(Path(sandbox.__file__).resolve().parents[1]),
+              'env': {'HERMES_HOME': '/root/.hermes'}}
+    for home in homes:
+        with _profile_runtime_scope(home, {}):
+            assert sandbox.custody_broker(config)
+            assert _stdio_launch(config)[1]['HERMES_HOME'] == str(home)

@@ -46,7 +46,7 @@ def render_shared(*, worker, root, image, panel_ip, memory_limit):
                        {'name': 'kubectl-cache', 'emptyDir': {'sizeLimit': '64Mi'}},
                        {'name': 'opt-data', 'emptyDir': {'sizeLimit': '1Mi'}}],
            'containers': [{'name': 'hermes', 'image': image, 'imagePullPolicy': 'IfNotPresent',
-               'command': ['/opt/hermes/.venv/bin/python', '-m', 'hermes_runtime'],
+               'command': ['/usr/local/bin/agentsee-init', '-g', '--', '/opt/hermes/.venv/bin/python', '-m', 'hermes_runtime'],
                'args': ['--shared-profile-host', 'gateway', 'run', '--no-supervise', '--external-supervisor'],
                'workingDir': HOME, 'env': [{'name': key, 'value': val} for key, val in env.items()],
                'volumeMounts': mounts,

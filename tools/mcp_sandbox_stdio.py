@@ -52,6 +52,17 @@ finally:
 '''
 
 
+def custody_environment(config):
+    """Legacy managed Workspace recipes name the old standalone mount."""
+    env = config.get("env") or {}
+    if (env == {"HERMES_HOME": "/root/.hermes"}
+            and config.get("args") == ["-m", "hermes_runtime.workspace.mcp"]):
+        from hermes_runtime.adapters.hermes import enabled, shared_host
+        if shared_host() and enabled():
+            return {}
+    return env
+
+
 def custody_broker(config):
     """Recognize exact immutable first-party modules, never an arbitrary server name."""
     command = config.get("command")
@@ -61,13 +72,14 @@ def custody_broker(config):
     if not isinstance(args, list):
         return False
     from hermes_constants import get_hermes_home
-    configured_home = (config.get("env") or {}).get("HERMES_HOME")
+    env = custody_environment(config)
+    configured_home = env.get("HERMES_HOME")
     if configured_home is not None and Path(configured_home).resolve() != get_hermes_home().resolve():
         return False
     # -m must resolve reviewed installed code, never an arbitrary configured cwd/PYTHONPATH.
     if config.get("cwd") != str(Path(__file__).resolve().parents[1]):
         return False
-    if set(config.get("env") or {}) - {"HERMES_HOME"}:
+    if set(env) - {"HERMES_HOME"}:
         return False
     if args == ["-m", "hermes_runtime.workspace.mcp"]:
         return True
