@@ -160,6 +160,11 @@ async def test_panel_only_main_binds_each_profile_on_recovery(shared_homes, monk
             with _profile_runtime_scope(home):
                 assert authorize_source(runner, live.source)
                 assert runner.session_store.lookup_by_session_key(live.route).origin == live.source
+        assert runner.session_store._db_for_session_id('agentready_home') is None
+        for name, home in homes.items():
+            with _profile_runtime_scope(home):
+                assert runner.session_store._db_for_session_id('agentready_home').db_path == home / 'state.db'
+                assert runner.session_store._owner_key_for_session_id('agentready_home') == f'agent:{name}:agentready:home'
         assert sources['alpha'] != sources['bravo']
     finally:
         runner.session_store.close_all_db_handles()

@@ -193,6 +193,10 @@ class SessionPersistenceMixin:
         published. Deliberately lock-free: several callers already hold ``_lock``."""
         if not session_id:
             return None
+        from hermes_runtime.adapters.hermes import enabled, shared_host
+        from hermes_runtime.sessions import HOME_SESSION_ID, home_session_key
+        if shared_host() and session_id == HOME_SESSION_ID:
+            return home_session_key() if enabled() else None
         try:
             for entry in list(self._entries.values()):
                 if entry.session_id == session_id:
@@ -206,6 +210,10 @@ class SessionPersistenceMixin:
         unknown ids fall back to the ambient store)."""
         if not session_id:
             return self._db
+        from hermes_runtime.adapters.hermes import enabled, shared_host
+        from hermes_runtime.sessions import HOME_SESSION_ID
+        if shared_host() and session_id == HOME_SESSION_ID:
+            return self._db if enabled() else None
         return self._db_for_key(self._owner_key_for_session_id(session_id))
 
     def close_all_db_handles(self) -> None:
