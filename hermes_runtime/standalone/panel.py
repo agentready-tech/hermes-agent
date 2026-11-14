@@ -326,5 +326,22 @@ async def worker(home):
             await asyncio.gather(task, return_exceptions=True)
 
 
+async def run_profile_connector(authority):
+    from pathlib import Path
+    from gateway.session_authorities import owner_scope
+    from hermes_runtime.standalone.config import settings
+
+    home = Path(authority.profile_id)
+    while True:
+        try:
+            with owner_scope(authority):
+                panel = (await asyncio.to_thread(settings, home)).get("panel", {})
+                if panel.get("url"):
+                    await worker(home)
+        except (OSError, RuntimeError, ValueError):
+            logger.warning("Profile Panel connector unavailable; retrying")
+        await asyncio.sleep(10)
+
+
 def run(home):
     asyncio.run(worker(home))

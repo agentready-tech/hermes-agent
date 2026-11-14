@@ -20,6 +20,7 @@ def shared_homes(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, 'home', lambda: tmp_path)
     monkeypatch.setattr(hermes, '_home', None)
     monkeypatch.setattr(hermes, '_hosted_homes', frozenset())
+    monkeypatch.setattr(hermes, '_shared_root', None)
     hermes.activate_profiles(homes.values())
     return root, homes
 
@@ -92,6 +93,7 @@ def test_legacy_single_runtime_keeps_its_existing_home_key(tmp_path, monkeypatch
 
     monkeypatch.setattr(hermes, '_home', None)
     monkeypatch.setattr(hermes, '_hosted_homes', frozenset())
+    monkeypatch.setattr(hermes, '_shared_root', None)
     hermes.activate(tmp_path)
     assert home_session_key() == HOME_SESSION_KEY
     with pytest.raises(RuntimeError, match='exactly one'):
@@ -248,3 +250,83 @@ async def test_shared_gateway_polls_only_enabled_mail_and_admits_to_own_profile(
             await _stop_profile_mail(authority, 5)
         runner.session_store.close_all_db_handles()
         ownership.close()
+
+
+@pytest.mark.asyncio
+async def test_shared_profile_host_bootstraps_newly_reserved_home(tmp_path, monkeypatch):
+    import hermes_state
+    from gateway.config import GatewayConfig
+    from gateway.run import GatewayRunner, _profile_runtime_scope
+    from gateway.run_runtime import _build_profile_authority
+    from gateway.runtime_ownership import ProfileOwnership
+    from gateway.session_authorities import SessionAuthorities
+    from hermes_runtime.adapters.state import current_home_session_id
+
+    root = tmp_path / '.hermes'
+    root.mkdir()
+    monkeypatch.setenv('HERMES_HOME', str(root))
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    monkeypatch.setattr(hermes, '_home', None)
+    monkeypatch.setattr(hermes, '_hosted_homes', frozenset())
+    monkeypatch.setattr(hermes, '_shared_root', None)
+    monkeypatch.setattr(hermes_state, 'DEFAULT_DB_PATH', hermes_state._IMPORT_DEFAULT_DB_PATH)
+    ownership = ProfileOwnership()
+    monkeypatch.setattr('gateway.runtime_ownership.process_ownership', ownership)
+    hermes.activate_profile_host(root)
+    runner = GatewayRunner(GatewayConfig(multiplex_profiles=True, sessions_dir=root / 'sessions'))
+    runner._primary_profile_name = 'default'
+    runner.session_authorities = SessionAuthorities(root, multiplexed=True)
+    runner.session_runtime_descriptor = {'instance_id': 'shared-hot-add-fixture'}
+    try:
+        for name in ('alpha', 'bravo'):
+            home = root / 'profiles' / name
+            home.mkdir(parents=True)
+            (home / 'config.yaml').write_text('model: {}\n')
+            assert not hermes.owns_home(home)
+            ownership.reserve([home])
+            assert hermes.owns_home(home) and not hermes.owns_home(root)
+            authority = await _build_profile_authority(runner, name, home, register=False)
+            assert authority.sessions['agentready_home'].route == f'agent:{name}:agentready:home'
+            with _profile_runtime_scope(home):
+                assert current_home_session_id() == 'agentready_home'
+        assert runner.session_authorities.for_home(root / 'profiles' / 'alpha') is not authority
+    finally:
+        runner.session_store.close_all_db_handles()
+        ownership.close()
+
+
+@pytest.mark.asyncio
+async def test_profile_panel_connector_uses_own_home_and_credential(shared_homes, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    from agent.secret_scope import get_secret
+    from gateway.run_runtime import _start_profile_panel, _stop_profile_panel
+    from hermes_runtime.standalone import panel
+
+    _, homes = shared_homes
+    runner = SimpleNamespace(config=SimpleNamespace(multiplex_profiles=True), _draining=False,
+                             session_runtime_descriptor={'state': 'ready'})
+    authorities = [SimpleNamespace(profile_id=str(home), runner=runner) for home in homes.values()]
+    seen = {}
+    connected = asyncio.Event()
+    blocking = asyncio.Event()
+
+    async def worker(home):
+        seen[home.name] = hermes.managed_home(), get_secret('HERMES_PANEL_CREDENTIAL')
+        if len(seen) == len(homes):
+            connected.set()
+        await blocking.wait()
+
+    monkeypatch.setattr(panel, 'worker', worker)
+    for name, home in homes.items():
+        (home / 'config.yaml').write_text(f'autonomous:\n  panel:\n    url: https://fixture.invalid\n    environment_id: {name}\n')
+        (home / '.env').write_text(f'HERMES_PANEL_CREDENTIAL={name}-fixture\n')
+    try:
+        for authority in authorities:
+            _start_profile_panel(authority)
+        await asyncio.wait_for(connected.wait(), timeout=5)
+        assert seen == {name: (home, name + '-fixture') for name, home in homes.items()}
+    finally:
+        for authority in authorities:
+            await _stop_profile_panel(authority)

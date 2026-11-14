@@ -38,6 +38,8 @@ async def _build_profile_authority(runner, name, home, *, register):
     """One profile's authority against its own ``state.db``; raises when that store is unusable."""
     from gateway.run import _profile_runtime_scope
     from gateway.session_authority import initialize_session_authority
+    from hermes_runtime.adapters.hermes import shared_host, owns_home
+    from hermes_runtime.adapters.state import ensure_home_session
     registry = runner.session_authorities
     instance_id = runner.session_runtime_descriptor['instance_id']
     # Each home's store resolves through the runner's scope-following handle cache, exactly
@@ -46,6 +48,8 @@ async def _build_profile_authority(runner, name, home, *, register):
         db = getattr(runner._session_db, '_db', runner._session_db)
         if db is None or (await asyncio.to_thread(Path(db.db_path).resolve)).parent != home:
             raise RuntimeError(f'session authority database does not belong to the reserved profile {home}')
+        if shared_host() and owns_home(home):
+            await asyncio.to_thread(ensure_home_session)
         registry.add(home, None, name=name)
         try:
             authority = await initialize_session_authority(
@@ -265,6 +269,7 @@ async def _retire_profile_authority(authority, timeout=None):
     if getattr(authority.runner, 'session_ticket_store', None) is not None:
         _publish_served_set(authority.runner)  # discovery and tickets stop naming it now
     stop_authority_work(authority)
+    await _stop_profile_panel(authority)
     mail = asyncio.create_task(_stop_profile_mail(authority, timeout))
     service = getattr(authority, 'hosted_room_service', None)
     rooms = None if service is None else asyncio.ensure_future(asyncio.to_thread(service.stop, timeout=timeout))
@@ -340,6 +345,7 @@ async def serve_profile_runtime(runner, name, home):
     _publish_served_set(runner)
     start_ready_hosted_services(runner)
     _start_profile_mail(authority)
+    _start_profile_panel(authority)
     return authority
 
 
@@ -421,6 +427,7 @@ def publish_gateway_runtime_ready(runner):
     if shared_host():
         for authority in runner.session_authorities.serving():
             _start_profile_mail(authority)
+            _start_profile_panel(authority)
 
 
 def _start_profile_mail(authority):
@@ -455,6 +462,26 @@ async def _stop_profile_mail(authority, timeout):
     return True
 
 
+def _start_profile_panel(authority):
+    from hermes_runtime.adapters.hermes import owns_home, shared_host
+    from hermes_runtime.standalone.panel import run_profile_connector
+
+    runner = authority.runner
+    if (not shared_host() or not owns_home(authority.profile_id)
+            or runner.session_runtime_descriptor.get('state') != 'ready' or runner._draining
+            or getattr(authority, 'retiring', False) or getattr(authority, '_panel_connector', None) is not None):
+        return
+    authority._panel_connector = asyncio.create_task(run_profile_connector(authority))
+
+
+async def _stop_profile_panel(authority):
+    connector = getattr(authority, '_panel_connector', None)
+    if connector is not None:
+        connector.cancel()
+        await asyncio.gather(connector, return_exceptions=True)
+        authority._panel_connector = None
+
+
 async def wait_gateway_runtime(runner):
     """A vanished interactive listener is fatal, not a healthy headless runtime."""
     shutdown = asyncio.create_task(runner.wait_for_shutdown())
@@ -481,7 +508,8 @@ async def drain_gateway_runtime(runner):
     descriptor.update(state='draining', capabilities=[])
     from gateway.session_hosted_service import stop_hosted_service
     await asyncio.gather(stop_hosted_service(runner),
-                         *(_stop_profile_mail(authority, 5) for authority in _authorities(runner)))
+                         *(_stop_profile_mail(authority, 5) for authority in _authorities(runner)),
+                         *(_stop_profile_panel(authority) for authority in _authorities(runner)))
     # Withdraw the public ingress callback without disconnecting egress needed
     # by already admitted work. Base adapters refuse before stamping acceptance.
     for adapter in runner.adapters.values():
