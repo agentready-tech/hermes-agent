@@ -137,21 +137,23 @@ async def _open_rfb(profile_home: Path):
     """``(reader, writer, relay)`` for THIS profile's Xvnc. Gateway-hosted screen: its unix socket. Screen inside
     the terminal backend: a ``docker exec`` / ``ssh`` relay whose stdio IS the RFB stream (``relay`` is that
     Popen; None for a socket). Raises OSError when nothing is running."""
-    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
     from tools.bot_desktop import runtime as _bd_runtime
-    token = set_hermes_home_override(profile_home)
-    try:
-        if _bd_runtime.sandbox_screen_running():
-            relay = _bd_runtime.open_rfb_stream()
-        else:
-            sock = profile_home / "bot-desktop" / "rfb.sock"
-            if not sock.exists():
-                raise OSError("rfb.sock missing")
-            reader, writer = await asyncio.open_unix_connection(str(sock))
-            return reader, writer, None
-    finally:
-        reset_hermes_home_override(token)
-    return await _relay_io(relay)
+    from tui_gateway.server import _session_profile_runtime_scope
+
+    def owned_open():
+        with _session_profile_runtime_scope({"profile_home": str(profile_home)}, hydrate_secrets=False):
+            if _bd_runtime.sandbox_screen_running():
+                return _bd_runtime.open_rfb_stream()
+        return None
+
+    relay = await asyncio.to_thread(owned_open)
+    if relay is not None:
+        return await _relay_io(relay)
+    sock = profile_home / "bot-desktop" / "rfb.sock"
+    if not sock.exists():
+        raise OSError("rfb.sock missing")
+    reader, writer = await asyncio.open_unix_connection(str(sock))
+    return reader, writer, None
 
 
 async def _relay_io(relay):

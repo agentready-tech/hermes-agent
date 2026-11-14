@@ -216,7 +216,13 @@ async def execute_admission(authority, ref, row):
         event = restore_native(row['payload'], authority.runner)
     else:
         from gateway.session_ingress_media import restore_attachments
-        event = MessageEvent(text=row['payload']['text'], source=live.source,
+        source = live.source
+        if 'native_origin_v1' in row['payload']:
+            from gateway.session_envelope import restore_native_source
+            source = restore_native_source({'native_text_v1': row['payload']['native_origin_v1']}, authority.runner)
+            if authority.runner.session_store._generate_session_key(source) != live.route:
+                raise RuntimeStoreError('admission_conflict')
+        event = MessageEvent(text=row['payload']['text'], source=source,
                              message_id=row['admission_id'], reply_anchor_override='',
                              **restore_attachments(row['payload']))
         if 'local_automation_v1' in row['payload']:

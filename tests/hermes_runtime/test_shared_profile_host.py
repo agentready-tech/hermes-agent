@@ -398,3 +398,83 @@ def test_shared_kubernetes_desktop_reuses_its_existing_sandbox_identity(shared_h
         (home / 'config.yaml').write_text('terminal:\n  backend: kubernetes\n')
         with _profile_runtime_scope(home):
             assert _profile_name() == 'default'
+
+
+@pytest.mark.asyncio
+async def test_desktop_rfb_opens_under_its_own_terminal_policy(shared_homes, monkeypatch):
+    from hermes_cli.web_routers import display
+    from hermes_constants import get_hermes_home
+    from tools.bot_desktop import runtime
+    from tools.terminal_scope import terminal_env
+
+    root, homes = shared_homes
+    home = homes['alpha']
+    (home / 'config.yaml').write_text('terminal:\n  backend: kubernetes\n')
+    relay = object()
+
+    def open_stream():
+        assert get_hermes_home() == home
+        assert terminal_env('TERMINAL_ENV') == 'kubernetes'
+        return relay
+
+    async def relay_io(opened):
+        assert opened is relay
+        return None, None, relay
+
+    monkeypatch.setattr(runtime, 'sandbox_screen_running', lambda: True)
+    monkeypatch.setattr(runtime, 'open_rfb_stream', open_stream)
+    monkeypatch.setattr(display, '_relay_io', relay_io)
+    assert await display._open_rfb(home) == (None, None, relay)
+    assert get_hermes_home() == root
+
+
+@pytest.mark.asyncio
+async def test_panel_turn_restores_admitted_telegram_owner_before_dispatch(shared_homes, monkeypatch):
+    from types import SimpleNamespace
+    from gateway.config import GatewayConfig, Platform
+    from gateway.run import GatewayRunner, _profile_runtime_scope
+    from gateway.session import SessionSource
+    from gateway.session_contract import SessionRef
+    from gateway.session_ingress import execute_admission
+    from gateway.session_authorities import SessionAuthorities
+    from hermes_constants import get_hermes_home
+    from hermes_runtime.sessions import HOME_SESSION_ID, home_session_key
+
+    root, homes = shared_homes
+    home = homes['alpha']
+    (home / '.env').write_text('TELEGRAM_ALLOWED_USERS=42\n')
+    runner = GatewayRunner(GatewayConfig(multiplex_profiles=True, sessions_dir=root / 'sessions'))
+    runner._primary_profile_name = 'default'
+    runner.config._runtime_profile_homes = (('default', root), ('alpha', home))
+    runner.session_authorities = SessionAuthorities(root, multiplexed=True)
+    runner.session_authorities.add(home, None, name='alpha')
+    source = SessionSource(platform=Platform.TELEGRAM, chat_id='42', chat_type='dm', user_id='42', profile='alpha')
+    from unittest.mock import MagicMock
+    adapter = MagicMock()
+    runner._profile_adapters = {'alpha': {Platform.TELEGRAM: adapter}}
+    runner._native_transport_homes = {'alpha': home}
+    touched = []
+
+    async def handle(event):
+        assert get_hermes_home() == home
+        assert event.source is not source
+        assert runner._is_user_authorized_for_source(event.source)
+        assert not event.internal
+        touched.append(event.text)
+
+    monkeypatch.setattr(runner, '_handle_message', handle)
+    with _profile_runtime_scope(home):
+        route = home_session_key()
+    authority = SimpleNamespace(runner=runner, profile_id=str(home),
+        sessions={HOME_SESSION_ID: SimpleNamespace(source=source, route=route)},
+        native_waiters=set(), pending_results={}, pending_deliveries={})
+    runner.session_authorities.replace(home, authority)
+    origin = {'source': {**source.to_dict(), 'is_bot': False}, 'provenance': {
+        'transport_home': str(home), 'runtime_home': str(home), 'transport_profile': 'alpha',
+        'platform': 'telegram', 'connector': 'adapter:telegram:alpha'}}
+    row = {'admission_id': 'fixture-panel', 'payload': {'text': 'fixture', 'native_origin_v1': origin}}
+    try:
+        await execute_admission(authority, SessionRef(str(home), HOME_SESSION_ID), row)
+        assert touched == ['fixture']
+    finally:
+        runner.session_store.close_all_db_handles()
