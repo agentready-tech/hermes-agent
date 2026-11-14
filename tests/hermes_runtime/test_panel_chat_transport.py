@@ -50,13 +50,18 @@ def test_chat_reverse_channel_preserves_native_rpc_and_observer_feed():
 
 
 @pytest.mark.parametrize("dashboard", [True, False])
-def test_panel_worker_binds_its_home_before_choosing_chat_transport(monkeypatch, tmp_path, dashboard):
+@pytest.mark.parametrize("backend", ["kubernetes", "firecracker"])
+def test_panel_worker_binds_its_home_before_choosing_chat_transport(monkeypatch, tmp_path, dashboard, backend):
     from hermes_runtime.adapters import hermes, state
-    from hermes_runtime.standalone import panel, config
+    from hermes_runtime.standalone import computer, panel, config
+    from tools.bot_desktop import placement
     import agent.secret_scope
+    desktop_starts = []
+    monkeypatch.setattr(computer, "start_desktop", lambda: desktop_starts.append(backend))
+    monkeypatch.setattr(placement, "resolve", lambda: placement.Placement(placement.TERMINAL, backend))
     monkeypatch.setattr(hermes, "_home", None)
     monkeypatch.setattr(config, "settings", lambda home: {
-        "dashboard": {"enabled": dashboard}, "port": 1,
+        "dashboard": {"enabled": dashboard}, "port": 1, "computer": {"enabled": True},
         "panel": {"url": "https://panel.invalid", "environment_id": "env_fixture"}})
     monkeypatch.setattr(agent.secret_scope, "get_secret", lambda name: "fixture-credential")
     monkeypatch.setattr(state, "main_gateway_origin", lambda: {"session_key": "agent:main:agentready:home"})
@@ -74,6 +79,7 @@ def test_panel_worker_binds_its_home_before_choosing_chat_transport(monkeypatch,
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(panel.worker(tmp_path))
+    assert desktop_starts == ([backend] if backend == "kubernetes" else [])
 
 
 @pytest.mark.asyncio

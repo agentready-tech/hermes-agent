@@ -28,7 +28,7 @@ def configure(home):
         computer.pop(key, None)
     autonomous["rdp"] = False
     terminal = config.setdefault("terminal", {})
-    if terminal.get("backend") != "kubernetes":
+    if terminal.get("backend") not in {"kubernetes", "firecracker"}:
         terminal.update({"backend": "docker", "docker_image": SANDBOX_IMAGE_HINT,
                          "container_persistent": True, "docker_persist_across_processes": True})
     config.setdefault("browser", {}).update({"headed": True, "cdp_url": ""})
@@ -51,8 +51,8 @@ def start_desktop():
     from tools.bot_desktop import placement, runtime
 
     where = placement.resolve()
-    if where.backend not in {"docker", "kubernetes"} or where.where != placement.TERMINAL:
-        raise ValueError("Computer mode requires a Docker or Kubernetes sandbox; run install-service --computer")
+    if where.backend not in {"docker", "kubernetes", "firecracker"} or where.where != placement.TERMINAL:
+        raise ValueError("Computer mode requires a Docker, Kubernetes or Firecracker sandbox; run install-service --computer")
     return runtime.start()
 
 

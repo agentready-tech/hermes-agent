@@ -288,7 +288,9 @@ async def _worker(home):
     if not panel.get("url") or not credential or (with_dashboard and not dashboard_token):
         raise ValueError("Panel connection is not registered for this Hermes home")
     if config.get("computer", {}).get("enabled"):
-        await asyncio.to_thread(start_desktop)
+        from tools.bot_desktop import placement
+        if placement.resolve().backend != "firecracker":
+            await asyncio.to_thread(start_desktop)
     if with_dashboard:
         auth = NativeScreenAuth(config["port"], dashboard_token,
             username=get_secret("HERMES_DASHBOARD_BASIC_AUTH_USERNAME"),
