@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.14.4",
+  "defaultRuntimeVersion": "2026.11.14.5",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -4191,6 +4191,47 @@
         "establishedConnectionsToPanel": 5
       },
       "description": "Preserve each sandbox watchdog owner when its Hermes home is mounted under the shared runtime."
+    },
+    "2026.11.14.5": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:4ab8fd7cbdbd1c0486b966441aee0720783dde6e54ec19e4d9640335a47e41ad",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.14.5",
+      "configDigest": "sha256:60460f013ea5e0d80ce5937fa4ae0bf9cfd71dc1c73a7cdbdc3ed45316ed63b0",
+      "platform": "linux/amd64",
+      "sourceRevision": "91b7372e7c8060dfd5200138901edb3b07a90b74",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:4ab8fd7cbdbd1c0486b966441aee0720783dde6e54ec19e4d9640335a47e41ad",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.14.5",
+        "digest": "sha256:4ab8fd7cbdbd1c0486b966441aee0720783dde6e54ec19e4d9640335a47e41ad",
+        "configDigest": "sha256:60460f013ea5e0d80ce5937fa4ae0bf9cfd71dc1c73a7cdbdc3ed45316ed63b0",
+        "sourceRevision": "91b7372e7c8060dfd5200138901edb3b07a90b74",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 43587146416,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "profileCount": 5,
+        "sandboxPodsPreserved": true,
+        "originalProfileDirectoriesPreserved": true,
+        "sharedWatchdogOwnerCompatibility": true,
+        "sharedProfilePanelTurnAndRfbFix": true
+      },
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml",
+      "validation": {
+        "runtimeReady": true,
+        "nativeRfbHandshakeProfiles": 5,
+        "panelChatOwnerRegressionTested": true,
+        "futureDefaultConfigured": true
+      },
+      "description": "Bind desktop RFB execution and accepted Panel messages to their owning profile."
     }
   },
   "supersededRuntimeAttempts": {
