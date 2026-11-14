@@ -63,21 +63,29 @@ def relay(connection: socket.socket) -> int:
         output.flush()
 
 
+def _split_argv(argv):
+    if "--" not in argv:
+        return argv, False, []
+    index = argv.index("--")
+    return argv[:index], True, argv[index + 1:]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("socket_path")
     parser.add_argument("generation")
     parser.add_argument("--stdin", action="store_true")
     parser.add_argument("--user")
-    args, command = parser.parse_known_args()
-    if len(command) < 2 or command[0] != "--":
+    flags, separator, command = _split_argv(sys.argv[1:])
+    if not separator or not command:
         parser.error("Expected a command after --")
+    args = parser.parse_args(flags)
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(25)
             connection.connect(args.socket_path)
             exchange(connection, {"operation": "exec", "generation": args.generation,
-                                  "user": args.user, "argv": command[1:]})
+                                  "user": args.user, "argv": command})
             connection.settimeout(None)
             if args.stdin:
                 threading.Thread(target=upload, args=(connection,), daemon=True).start()
