@@ -1,4 +1,5 @@
 """Private Panel-only main delivery on the existing native session event stream."""
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -87,6 +88,37 @@ def main_source(authority):
     return source
 
 
+def existing_main_for_profile(authority, target, source, route):
+    """Project the standalone route into this profile without rewriting its rollback entry."""
+    import json
+    from gateway.config import Platform
+    from gateway.session import SessionEntry
+    from hermes_runtime.sessions import HOME_SESSION_KEY
+
+    if route == HOME_SESSION_KEY:
+        return None
+    rows = authority.db._read_all(
+        "SELECT entry_json FROM gateway_routing WHERE session_key=? ORDER BY updated_at DESC",
+        (HOME_SESSION_KEY,),
+    )
+    entries = [SessionEntry.from_dict(json.loads(row[0])) for row in rows]
+    matches = [entry for entry in entries if entry.session_id == target and entry.origin is not None]
+    if not matches:
+        return None
+    entry = matches[0]
+    if any(other.origin.to_dict() != entry.origin.to_dict() for other in matches[1:]):
+        raise RuntimeError("Conflicting standalone routes for the managed main session")
+    if entry.active_turn_token or entry.active_turn_delivery:
+        raise RuntimeError("Standalone main still has an active turn")
+    if entry.origin.platform.value == 'agentready':
+        origin = source
+    elif entry.origin.platform == Platform.TELEGRAM and not entry.origin.profile:
+        origin = replace(entry.origin, profile=source.profile)
+    else:
+        raise RuntimeError("Unsupported standalone origin for the shared main session")
+    return replace(entry, session_key=route, origin=origin, transport_profile=source.profile)
+
+
 def bootstrap_main(authority):
     """Bind the existing managed transcript, never create a replacement conversation."""
     from gateway.session import SessionEntry
@@ -108,6 +140,7 @@ def bootstrap_main(authority):
         entry = store._entries.get(route)
         if entry is not None:
             return entry
+        candidate = existing_main_for_profile(authority, target, source, route) or candidate
         store._entries[route] = candidate
     try:
         store._save_entries()

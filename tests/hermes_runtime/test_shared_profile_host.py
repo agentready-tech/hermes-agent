@@ -330,3 +330,46 @@ async def test_profile_panel_connector_uses_own_home_and_credential(shared_homes
     finally:
         for authority in authorities:
             await _stop_profile_panel(authority)
+
+
+@pytest.mark.asyncio
+async def test_shared_gateway_keeps_existing_transport_and_legacy_route(shared_homes, monkeypatch):
+    from datetime import datetime, timezone
+    import json
+
+    import hermes_state
+    from gateway.config import GatewayConfig, Platform
+    from gateway.run import GatewayRunner, _profile_runtime_scope
+    from gateway.run_runtime import _build_profile_authority
+    from gateway.session import SessionEntry, SessionSource
+    from gateway.session_authorities import SessionAuthorities
+    from hermes_runtime.adapters.state import ensure_home_session
+    from hermes_runtime.sessions import HOME_SESSION_ID, HOME_SESSION_KEY
+
+    root, homes = shared_homes
+    home = homes['alpha']
+    monkeypatch.setattr(hermes_state, 'DEFAULT_DB_PATH', hermes_state._IMPORT_DEFAULT_DB_PATH)
+    runner = GatewayRunner(GatewayConfig(multiplex_profiles=True, sessions_dir=root / 'sessions'))
+    runner.session_authorities = SessionAuthorities(root, multiplexed=True)
+    runner.session_runtime_descriptor = {'instance_id': 'shared-legacy-fixture'}
+    timestamp = datetime.now(timezone.utc)
+    origin = SessionSource(platform=Platform.TELEGRAM, chat_id='42', chat_type='dm', user_id='42')
+    existing = SessionEntry(HOME_SESSION_KEY, HOME_SESSION_ID, timestamp, timestamp,
+                            origin=origin, platform=origin.platform, display_name='Existing main')
+    legacy = json.dumps(existing.to_dict())
+    try:
+        with _profile_runtime_scope(home):
+            ensure_home_session()
+            db = runner.session_store._db
+            db.save_gateway_routing_entry(HOME_SESSION_KEY, legacy, scope='/root/.hermes/sessions')
+        authority = await _build_profile_authority(runner, 'alpha', home, register=False)
+        from hermes_runtime.adapters.main_transport import bootstrap_main
+        with _profile_runtime_scope(home):
+            entry = bootstrap_main(authority)
+            assert entry.session_key == 'agent:alpha:agentready:home'
+            assert entry.session_id == HOME_SESSION_ID
+            assert entry.origin.to_dict() == {**origin.to_dict(), 'profile': 'alpha'}
+            assert entry.display_name == 'Existing main'
+            assert authority.db.load_gateway_routing_entries(scope='/root/.hermes/sessions') == {HOME_SESSION_KEY: legacy}
+    finally:
+        runner.session_store.close_all_db_handles()
