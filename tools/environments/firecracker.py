@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 SOCKET_ROOT = Path("/run/agentsee-firecracker")
 CLIENT = Path(__file__).with_name("firecracker_client.py")
 GENERATION = re.compile(r"[a-f0-9]{32}\Z")
+GUEST_EXEC_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
 def profile_socket() -> Path:
@@ -76,7 +77,8 @@ class FirecrackerEnvironment(BaseEnvironment):
 
     def exec_prefix(self, *, user: str | None = None, interactive: bool = True) -> list[str]:
         self._before_execute()
-        return self._prefix(user=user, interactive=interactive)
+        # Direct exec inherits the initramfs PATH, which omits image tools and Node.
+        return [*self._prefix(user=user, interactive=interactive), "/usr/bin/env", f"PATH={GUEST_EXEC_PATH}"]
 
     def _prefix(self, *, user: str | None = None, interactive: bool = True) -> list[str]:
         argv = [sys.executable, str(CLIENT), str(self._socket), self.instance_id or ""]

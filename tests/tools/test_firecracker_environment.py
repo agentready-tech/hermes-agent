@@ -55,6 +55,9 @@ def test_opt_in_backend_shares_transport_with_desktop(monkeypatch, tmp_path):
             stream = streams.open_stream(env, ["cat"], user="pn")
             assert stream.communicate(b"RFB\x00\n", timeout=5)[0] == b"RFB\x00\n"
             assert calls[-1]["user"] == "pn"
+            result = streams.run_in(env, ["/usr/bin/printenv", "PATH"], user="pn")
+            assert result.returncode == 0
+            assert "/usr/local/bin" in result.stdout.decode().strip().split(":")
 
             old = env.firecracker_identity
             state["generation"] = "b" * 32
