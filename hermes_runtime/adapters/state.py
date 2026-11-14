@@ -3,8 +3,9 @@
 import logging
 import json
 import sqlite3
+from contextlib import closing
 from hermes_runtime.sessions import HOME_SESSION_ID
-from hermes_runtime.adapters.hermes import managed_home
+from hermes_runtime.adapters.hermes import managed_home, shared_host
 
 
 # Native branches, resets and delegated workers are independent conversations,
@@ -27,10 +28,32 @@ def main_gateway_origin(*, session_store=None):
     from gateway.session import SessionEntry
     from hermes_runtime.sessions import home_session_key
 
-    key = home_session_key()
-    if session_store is None:
+    home = managed_home()
+    from hermes_constants import (
+        get_default_hermes_root, named_profile_home, reset_hermes_home_override, set_hermes_home_override,
+    )
+
+    routing_home = home
+    shared = shared_host()
+    root = get_default_hermes_root(home=home)
+    if root != home and named_profile_home(home) == home:
+        token = set_hermes_home_override(str(root))
+        try:
+            root_config = load_gateway_config()
+        finally:
+            reset_hermes_home_override(token)
+        if shared or root_config.multiplex_profiles is True:
+            routing_home = root
+            scope = str(root_config.sessions_dir.resolve())
+            shared = True
+    if routing_home == home:
         scope = str(load_gateway_config().sessions_dir.resolve())
-        with sqlite3.connect(state_db_path()) as connection:
+    key = home_session_key(home, shared=shared)
+    if session_store is None:
+        database = routing_home / 'state.db'
+        if not database.is_file():
+            return {}
+        with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)) as connection:
             row = connection.execute("SELECT entry_json FROM gateway_routing WHERE scope=? AND session_key=?",
                                      (scope, key)).fetchone()
         entry = SessionEntry.from_dict(json.loads(row[0])) if row is not None else None

@@ -5,11 +5,13 @@ HOME_SESSION_TITLE = "Bot Chat"
 HOME_SESSION_KEY = "agent:main:agentready:home"
 
 
-def home_session_key(home=None):
+def home_session_key(home=None, *, shared=None):
     """One home conversation per profile, with a unique in-process routing lane."""
     from hermes_runtime.adapters.hermes import managed_home, shared_host
 
-    if not shared_host():
+    if shared is None:
+        shared = shared_host()
+    if not shared:
         return HOME_SESSION_KEY
     from gateway.session import _session_key_namespace
     from hermes_constants import named_profile_home

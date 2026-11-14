@@ -348,11 +348,12 @@ async def test_shared_gateway_keeps_existing_transport_and_legacy_route(shared_h
     from gateway.run_runtime import _build_profile_authority
     from gateway.session import SessionEntry, SessionSource
     from gateway.session_authorities import SessionAuthorities
-    from hermes_runtime.adapters.state import ensure_home_session
+    from hermes_runtime.adapters.state import ensure_home_session, main_gateway_origin
     from hermes_runtime.sessions import HOME_SESSION_ID, HOME_SESSION_KEY
 
     root, homes = shared_homes
     home = homes['alpha']
+    (root / 'config.yaml').write_text('gateway:\n  multiplex_profiles: true\n')
     monkeypatch.setattr(hermes_state, 'DEFAULT_DB_PATH', hermes_state._IMPORT_DEFAULT_DB_PATH)
     runner = GatewayRunner(GatewayConfig(multiplex_profiles=True, sessions_dir=root / 'sessions'))
     runner.session_authorities = SessionAuthorities(root, multiplexed=True)
@@ -375,6 +376,14 @@ async def test_shared_gateway_keeps_existing_transport_and_legacy_route(shared_h
             assert entry.session_id == HOME_SESSION_ID
             assert entry.origin.to_dict() == {**origin.to_dict(), 'profile': 'alpha'}
             assert entry.display_name == 'Existing main'
+            assert main_gateway_origin()['session_key'] == 'agent:alpha:agentready:home'
+            assert main_gateway_origin()['profile'] == 'alpha'
+        with _profile_runtime_scope(homes['bravo']):
+            assert main_gateway_origin() == {}
+        monkeypatch.setattr(hermes, '_hosted_homes', frozenset())
+        monkeypatch.setattr(hermes, '_home', home)
+        with _profile_runtime_scope(home):
+            assert main_gateway_origin()['session_key'] == 'agent:alpha:agentready:home'
             assert authority.db.load_gateway_routing_entries(scope='/root/.hermes/sessions') == {HOME_SESSION_KEY: legacy}
     finally:
         runner.session_store.close_all_db_handles()
