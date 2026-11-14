@@ -66,7 +66,8 @@ def poll(home, config, cursors):
     if config.get("native") is not True:
         return cursors
     from hermes_runtime.workspace.service import Workspace
-    return admit_batches(home, Workspace(home).events(cursors), cursors)
+    from hermes_runtime.workspace.transport import poll_request
+    return admit_batches(home, Workspace(home, runner=poll_request).events(cursors), cursors)
 
 
 def worker(home):

@@ -1,12 +1,13 @@
 """The transport never falls back to the gateway or places secrets on argv."""
 
 import json
+import sys
 from types import SimpleNamespace
 
 import pytest
 
 from hermes_runtime.workspace.store import WorkspaceError
-from hermes_runtime.workspace.transport import sandbox_request
+from hermes_runtime.workspace.transport import poll_request, sandbox_request
 
 
 def home(tmp_path):
@@ -61,3 +62,26 @@ def test_lost_write_receipt_never_becomes_definite_failure(monkeypatch, tmp_path
     with pytest.raises(WorkspaceError, match="^" + expected + "$"):
         sandbox_request(home(tmp_path), program, payload)
     assert len(calls) == 1
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="The Hermes collector uses Linux RLIMIT_AS")
+@pytest.mark.parametrize("program,payload,expected", [
+    ("sandbox_mail", {"operation": "incoming"}, "INVALID_MAIL_CONTENT"),
+    ("sandbox_google", {"operation": "request", "service": "gmail", "method": "GET", "path": "profile",
+                        "services": ["mailRead"]}, "INVALID_GOOGLE_RECONNECT_REQUIRED"),
+])
+def test_real_poll_child_reports_safe_missing_credentials(tmp_path, program, payload, expected):
+    with pytest.raises(WorkspaceError, match="^" + expected + "$"):
+        poll_request(tmp_path, program, payload)
+
+
+def test_tool_search_still_requires_sandbox(monkeypatch, tmp_path):
+    from hermes_runtime.workspace.service import Workspace
+    from tests.hermes_runtime.test_workspace_native import ID, SECRET, connection
+
+    workspace = Workspace(tmp_path)
+    workspace.store.upsert(connection(), SECRET)
+    monkeypatch.setattr("tools.terminal_tool.ensure_task_env", lambda *_: None)
+    monkeypatch.setattr("subprocess.run", lambda *_args, **_kwargs: pytest.fail("Tool must use its sandbox"))
+    with pytest.raises(WorkspaceError, match="^INVALID_MAIL_SANDBOX_UNAVAILABLE$"):
+        workspace.search({"connectionId": ID})

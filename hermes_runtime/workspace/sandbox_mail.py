@@ -1,4 +1,4 @@
-"""Bounded IMAP/SMTP client, executed inside the employee sandbox, never on the worker.
+"""Bounded IMAP/SMTP client for the selected workspace network.
 
 Only the fixed program is passed on argv. Account credentials and message content
 arrive on stdin and are neither persisted nor included in diagnostics.
@@ -47,8 +47,8 @@ def endpoint(value):
 
 
 def public_socket(host, port):
-    # Resolve here, inside the sandbox's network namespace, and connect to the
-    # validated literal. TLS still checks the original DNS name (including SNI).
+    # Resolve on the selected network and connect to the validated literal.
+    # TLS still checks the original DNS name (including SNI).
     addresses = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
     if not addresses or any(not ipaddress.ip_address(row[4][0]).is_global for row in addresses):
         raise MailError("INVALID_PUBLIC_MAIL_SERVER_REQUIRED")

@@ -1,4 +1,4 @@
-"""Google JSON operations on the sandbox network; composed after the fixed mail client."""
+"""Google JSON operations on the selected workspace network."""
 
 import http.client
 from urllib.parse import quote, urlencode, urlsplit

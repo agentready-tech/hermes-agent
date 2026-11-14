@@ -1,6 +1,9 @@
 """Mailbox collection preserves native durable admission and never fetches attachments."""
 
 import base64
+import json
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -30,26 +33,49 @@ def test_incoming_uses_selected_text_with_attachment_metadata_and_no_full_mime(m
     assert b"fixture-only attachment" not in base64.b64decode(message["raw"])
 
 
-def test_native_poll_uses_local_workspace_events_and_old_url_never_contacts_panel(monkeypatch, tmp_path):
-    workspace = Workspace(tmp_path)
-    workspace.store.upsert(connection(proactive=True, senderPolicy="all"), SECRET)
+@pytest.mark.parametrize("provider", ["imap_smtp", "google"])
+def test_native_poll_admits_mail_without_a_sandbox(monkeypatch, tmp_path, provider):
+    from tests.hermes_runtime.test_workspace_gmail import message, workspace as gmail_workspace
+
+    if provider == "google":
+        gmail_workspace(tmp_path, None)
+    else:
+        Workspace(tmp_path).store.upsert(connection(proactive=True, senderPolicy="all"), SECRET)
     requests = []
-    def run(home, program, request):
-        requests.append((program, request))
-        return {"messages": [{"uid": 27, "format": "text-v1", "internalDate": "06-Nov-2026 08:00:00 +0000", "attachments": [],
-            "raw": base64.b64encode(b"From: lead@example.invalid\r\nSubject: Synthetic\r\n\r\nNative body").decode()}], "cursor": {"validity": "7", "uid": 27}}
-    workspace.runner = run
-    monkeypatch.setattr("hermes_runtime.workspace.service.Workspace", lambda home: workspace)
+
+    def run(command, *, input, env, **_kwargs):
+        assert command[:3] == [sys.executable, "-I", "-c"] and env == {}
+        request = json.loads(input)
+        requests.append(request)
+        if request.get("path", "").startswith("history?"):
+            value = {"historyId": "43", "history": [{"messagesAdded": [{"message": {"id": "gmail-one"}}]}]}
+        elif request.get("service") == "gmail":
+            value = message()
+        else:
+            value = {"messages": [{"uid": 27, "format": "text-v1", "internalDate": "06-Nov-2026 08:00:00 +0000",
+                "attachments": [], "raw": base64.b64encode(b"From: lead@example.invalid\r\nSubject: Synthetic\r\n\r\nNative body").decode()}],
+                "cursor": {"validity": "7", "uid": 27}}
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"ok": True, "value": value}).encode())
+
+    monkeypatch.setattr("tools.terminal_tool.ensure_task_env", lambda *_: pytest.fail("Polling must not access the sandbox"))
+    monkeypatch.setattr("hermes_runtime.workspace.transport.subprocess.run", run)
     accepted = []
     monkeypatch.setattr("hermes_runtime.standalone.workspace.admit_mail", lambda *args: accepted.append(args))
     cursor = {}
     assert poll(tmp_path, {"url": "https://panel.invalid/workspace"}, cursor) == {}
     assert not requests
     result = poll(tmp_path, {"native": True}, cursor)
-    assert result == {ID: {"validity": "7", "uid": 27}}
-    assert requests[0][1]["format"] == "text-v1"
-    assert accepted[0][1:3] == ("email:" + ID, "7:27")
-    assert SECRET["password"] not in str(accepted)
+    if provider == "google":
+        assert result == {ID: {"historyId": "43"}}
+        assert [request["method"] for request in requests] == ["GET", "GET"]
+        assert accepted[0][1:3] == ("gmail:" + ID, "gmail-one")
+        assert "synthetic-refresh" not in str(accepted)
+    else:
+        assert result == {ID: {"validity": "7", "uid": 27}}
+        assert requests[0]["format"] == "text-v1"
+        assert accepted[0][1:3] == ("email:" + ID, "7:27")
+        assert SECRET["password"] not in str(accepted)
+    assert len(accepted) == 1
 
 
 def test_native_failed_admission_keeps_original_cursor_for_replay(tmp_path):
