@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -24,6 +25,9 @@ if __package__:
     from . import browser_instance as instance
 else:
     import browser_instance as instance
+
+
+_UNCHECKED_DISCOVERY = object()
 
 
 def _positive_port():
@@ -60,7 +64,12 @@ def _owner(profile, pid, generation=None):
     return owner, lock
 
 
-def _publish(profile, pid, port, *, expected_generation=None, expected_lock=None, missing_only=False):
+def _discovery_identity(record):
+    return record.st_dev, record.st_ino, record.st_size, record.st_mtime_ns, record.st_ctime_ns
+
+
+def _publish(profile, pid, port, *, expected_generation=None, expected_lock=None,
+             expected_discovery=_UNCHECKED_DISCOVERY):
     owner, lock = _owner(profile, pid, expected_generation)
     if expected_lock is not None and lock != expected_lock:
         raise ValueError('Native browser profile lock changed')
@@ -79,18 +88,43 @@ def _publish(profile, pid, port, *, expected_generation=None, expected_lock=None
         if (_owner(profile, pid, generation)[1] != lock
                 or not instance._owns_listener(owner, port, address='127.0.0.1')):
             raise ValueError('Native browser generation changed before publication')
-        if missing_only:
-            os.link(temporary, profile / 'DevToolsActivePort', follow_symlinks=False)
+        discovery = profile / 'DevToolsActivePort'
+        if expected_discovery is None:
+            os.link(temporary, discovery, follow_symlinks=False)
         else:
-            os.replace(temporary, profile / 'DevToolsActivePort')
+            if (expected_discovery is not _UNCHECKED_DISCOVERY
+                    and _discovery_identity(discovery.lstat()) != expected_discovery):
+                raise ValueError('Native browser discovery changed before publication')
+            os.replace(temporary, discovery)
     finally:
         Path(temporary).unlink(missing_ok=True)
     # The same read-only admission guard remains authoritative after publication.
     return instance.inspect_profile(profile)
 
 
+def _stale_discovery_identity(profile, owner, fixed_port):
+    discovery = profile / 'DevToolsActivePort'
+    try:
+        descriptor = os.open(discovery, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    with os.fdopen(descriptor, 'rb') as source:
+        record = os.fstat(source.fileno())
+        if (not stat.S_ISREG(record.st_mode) or record.st_uid != owner['uid']
+                or record.st_nlink != 1 or record.st_size > 512):
+            raise ValueError('Unverified native browser discovery file')
+        match = re.fullmatch(rb'([0-9]{1,5})\n/devtools/browser/[A-Za-z0-9-]+\n?', source.read(513))
+        identity = _discovery_identity(record)
+        if not match or _discovery_identity(os.fstat(source.fileno())) != identity:
+            raise ValueError('Unverified native browser discovery contents')
+    port = int(match[1])
+    if not 0 < port < 65536 or port == fixed_port or instance._owns_listener(owner, port):
+        raise ValueError('Native browser discovery is not proven stale')
+    return identity
+
+
 def _recover_existing_cdp(profile):
-    """Republish only a verified live owner's declared fixed loopback CDP listener."""
+    """Republish a verified live owner's fixed loopback listener after missing or stale discovery."""
     lock = instance._lock(profile)
     if lock is None:
         return None
@@ -98,8 +132,10 @@ def _recover_existing_cdp(profile):
     value = instance._flag(owner['argv'], '--remote-debugging-port')
     if not isinstance(value, str) or not re.fullmatch(r'[0-9]+', value) or not 0 < int(value) < 65536:
         return None
-    return _publish(profile, owner['pid'], int(value), expected_generation=instance._generation(owner),
-                    expected_lock=lock, missing_only=True)
+    port = int(value)
+    discovery = _stale_discovery_identity(profile, owner, port)
+    return _publish(profile, owner['pid'], port, expected_generation=instance._generation(owner),
+                    expected_lock=lock, expected_discovery=discovery)
 
 
 def _wait_ready(profile, process, port, timeout):
@@ -167,7 +203,7 @@ def ensure(argv, *, exclude_session=None, timeout=15, open_google=False):
         # Human singleton forwarding needs a verified owner, not its agent-only CDP endpoint.
         if open_google and result['state'] in ('attachable', 'owned', 'blocked'):
             return _forward_google(argv, profile)
-        if result['state'] == 'blocked' and not os.path.lexists(profile / 'DevToolsActivePort'):
+        if result['state'] == 'blocked':
             try:
                 recovered = _recover_existing_cdp(profile)
                 if recovered is not None and recovered.get('state') == 'attachable':

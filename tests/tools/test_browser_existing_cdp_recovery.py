@@ -1,4 +1,4 @@
-"""A verified existing Chrome may republish its own missing discovery file, never relaunch."""
+"""A verified existing Chrome may repair missing or stale discovery without relaunching."""
 import contextlib
 import json
 import os
@@ -46,6 +46,57 @@ def test_existing_fixed_owned_listener_recovers_missing_discovery_without_relaun
     assert item.lock=={'pid':111,'identity':(1,2,3)}
     assert any(call.kwargs=={'address':'127.0.0.1'} for call in item.listener.call_args_list)
     item.endpoint.assert_called_once_with(41111);item.process.assert_not_called()
+
+
+def test_existing_fixed_listener_replaces_proven_stale_discovery(existing):
+    item = existing
+    target = item.profile / 'DevToolsActivePort'
+    target.write_text('41222\n/devtools/browser/old\n')
+    item.listener.side_effect = lambda owner, port, **kwargs: port == 41111
+    assert instance.inspect_profile(item.profile) == {'state': 'blocked'}
+
+    result = launch.ensure(item.owner['argv'])
+
+    assert instance.admitted_endpoint(result).port == 41111
+    assert target.read_text() == '41111\n/devtools/browser/synthetic\n'
+    assert (item.profile / 'saved.synthetic').read_text() == 'preserve'
+    item.endpoint.assert_called_once_with(41111)
+    item.process.assert_not_called()
+
+
+def test_recovery_does_not_replace_discovery_for_current_fixed_port(existing):
+    item = existing
+    target = item.profile / 'DevToolsActivePort'
+    record = '41111\n/devtools/browser/current\n'
+    target.write_text(record)
+    instance.socket.create_connection.side_effect = ConnectionRefusedError()
+
+    with pytest.raises(instance.ProfileUnavailable):
+        launch.ensure(item.owner['argv'])
+
+    assert target.read_text() == record
+    item.endpoint.assert_not_called()
+    item.process.assert_not_called()
+
+
+def test_stale_recovery_does_not_replace_a_changed_discovery(existing):
+    item = existing
+    target = item.profile / 'DevToolsActivePort'
+    target.write_text('41222\n/devtools/browser/old\n')
+    item.listener.side_effect = lambda owner, port, **kwargs: port == 41111
+    concurrent_record = '41333\n/devtools/browser/concurrent\n'
+
+    def changed(port):
+        target.write_text(concurrent_record)
+        return '/devtools/browser/synthetic'
+
+    item.endpoint.side_effect = changed
+    with pytest.raises(instance.ProfileUnavailable):
+        launch.ensure(item.owner['argv'])
+
+    assert target.read_text() == concurrent_record
+    assert not list(item.profile.glob('.DevToolsActivePort-*'))
+    item.process.assert_not_called()
 
 
 @pytest.mark.parametrize('port',[None,'0','-1','65536','abc','41111/path','1e3'])
