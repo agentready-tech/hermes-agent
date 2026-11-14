@@ -387,3 +387,14 @@ async def test_shared_gateway_keeps_existing_transport_and_legacy_route(shared_h
             assert authority.db.load_gateway_routing_entries(scope='/root/.hermes/sessions') == {HOME_SESSION_KEY: legacy}
     finally:
         runner.session_store.close_all_db_handles()
+
+
+def test_shared_kubernetes_desktop_reuses_its_existing_sandbox_identity(shared_homes):
+    from gateway.run import _profile_runtime_scope
+    from tools.bot_desktop.runtime import _profile_name
+
+    _, homes = shared_homes
+    for home in homes.values():
+        (home / 'config.yaml').write_text('terminal:\n  backend: kubernetes\n')
+        with _profile_runtime_scope(home):
+            assert _profile_name() == 'default'
