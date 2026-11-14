@@ -31,22 +31,22 @@ def marker():
 
 
 def owner_identity(env):
-    # Pod filesystems use the same /root/.hermes path. Include the stable sandbox
-    # binding, but not replaceable Pod/container IDs, so ordinary upgrades retain ownership.
+    # Use the durable managed sandbox binding across Kubernetes and Firecracker.
     target = getattr(env, 'kubernetes_identity', {})
     stable = {key: target.get(key) for key in ('namespace', 'pod', 'container')}
     home = get_hermes_home().resolve()
-    # These are the exact existing per-employee Kubernetes profiles. Moving
-    # Hermes to the shared host leaves the sandbox and its watchdog state intact.
     profile = home.name
-    if home.parent == Path('/root/.hermes/profiles') and stable['pod'] == 'sandbox-0' and stable['container'] == 'sandbox':
+    if home.parent == Path('/root/.hermes/profiles'):
         if profile == 'mike':
             namespace = 'agentsee-mike'
         elif re.fullmatch(r'env_[a-f0-9]{32}', profile):
             namespace = 'agentsee-a-' + profile[4:]
         else:
             namespace = None
-        if namespace and stable['namespace'] == namespace:
+        binding = {'namespace': namespace, 'pod': 'sandbox-0', 'container': 'sandbox'}
+        if namespace and getattr(env, 'firecracker_identity', None):
+            stable = binding
+        if namespace and stable == binding:
             home = Path('/root/.hermes')
     return hashlib.sha256(json.dumps([str(home), stable], sort_keys=True).encode()).hexdigest()
 
