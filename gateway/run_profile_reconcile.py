@@ -375,6 +375,9 @@ class GatewayProfileReconcileMixin:
             # The reservation (gateway.lock) is released LAST: a deleter waiting on it may rmtree the
             # home as soon as it goes, so every handle this process holds there must close first.
             try:
+                with _log_suppressed(logging.DEBUG, "managed terminal cache release failed", exc_info=True):
+                    from tools.terminal_tool_lifecycle import cleanup_managed_profile_environments
+                    await asyncio.to_thread(cleanup_managed_profile_environments, home)
                 with _log_suppressed(logging.DEBUG, "profile handle release failed", exc_info=True):
                     from hermes_state_registry import close_all_under
                     close_all_under(home)

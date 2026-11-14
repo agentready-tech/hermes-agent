@@ -142,6 +142,21 @@ def _unregister_env(task_id: str):
     return env
 
 
+def cleanup_managed_profile_environments(home: Path) -> None:
+    """Release cached platform-owned connections when one profile is parked."""
+    from tools.terminal_tool import _active_environments, _env_lock
+
+    key = f"home:{home.resolve()}"
+    with _env_lock:
+        keys = [
+            name for name, env in _active_environments.items()
+            if (name == key or name.startswith(key + ":"))
+            and getattr(env, "env_type", None) in {"kubernetes", "firecracker"}
+        ]
+    for name in keys:
+        cleanup_vm(name)
+
+
 def _cleanup_inactive_envs(lifetime_seconds: int = 300):
     """Clean up environments that have been inactive for longer than lifetime_seconds."""
     from tools.terminal_tool import (
