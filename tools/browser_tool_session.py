@@ -5,6 +5,7 @@ Split out of ``tools/browser_tool.py``. Facade-owned state is read through ``_bt
 """
 
 import base64
+from contextlib import ExitStack
 import hashlib
 import json
 import logging
@@ -826,7 +827,19 @@ def run_fenced(session_info: dict[str, Any], fn: Callable[[], dict[str, Any]]) -
         admitted = _bd_lease.assert_agent_may_act()
     except _bd_lease.HumanHasControl as e:
         return {"success": False, "error": str(e), "code": "human_has_control"}
-    result = fn()
+    from tools.bot_desktop import placement
+    from tools.environments.base import EnvironmentConnectionError
+    from tools.environments.firecracker import browser_activity
+
+    with ExitStack() as stack:
+        target = placement.resolve()
+        if target.where == placement.TERMINAL and target.backend == "firecracker":
+            try:
+                stack.enter_context(browser_activity())
+            except EnvironmentConnectionError:
+                return {"success": False, "code": "browser_unavailable",
+                        "error": "The Firecracker browser is no longer running. Reopen it before continuing."}
+        result = fn()
     if _bd_lease.get().epoch != admitted.epoch:
         return {"success": False, "code": "human_has_control",
                 "error": "A human took over the bot's screen while this browser command ran; its result was "

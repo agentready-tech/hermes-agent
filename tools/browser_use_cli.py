@@ -487,7 +487,7 @@ def _reach_sandbox_cdp(cdp: str) -> str:
         sandbox = _bd_runtime._sandbox_env(create=True)
         if sandbox is None:
             return cdp
-        local = streams.forward_port(sandbox, parts.port, user=sandbox_host._user_for(sandbox))
+        local = streams.forward_port(sandbox, parts.port, user=sandbox_host._user_for(sandbox), browser_cdp=True)
         return urlunsplit(parts._replace(netloc=f"127.0.0.1:{local}"))
     except Exception as e:  # a failed forward degrades to the unreachable endpoint's own error
         logger.debug("sandbox CDP forward unavailable: %s", e)

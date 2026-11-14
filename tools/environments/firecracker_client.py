@@ -75,7 +75,9 @@ def main() -> int:
     parser.add_argument("socket_path")
     parser.add_argument("generation")
     parser.add_argument("--stdin", action="store_true")
-    parser.add_argument("--probe", action="store_true")
+    operation = parser.add_mutually_exclusive_group()
+    operation.add_argument("--probe", action="store_const", const="probe", dest="operation")
+    operation.add_argument("--relay", action="store_const", const="relay", dest="operation")
     parser.add_argument("--user")
     flags, separator, command = _split_argv(sys.argv[1:])
     if not separator or not command:
@@ -85,7 +87,7 @@ def main() -> int:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(25)
             connection.connect(args.socket_path)
-            exchange(connection, {"operation": "probe" if args.probe else "exec", "generation": args.generation,
+            exchange(connection, {"operation": args.operation or "exec", "generation": args.generation,
                                   "user": args.user, "argv": command})
             connection.settimeout(None)
             if args.stdin:

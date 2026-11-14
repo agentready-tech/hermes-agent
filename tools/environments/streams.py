@@ -170,16 +170,18 @@ _TCP_RELAY = (
     "finally: s.close()\n"
 )
 
-_forwards: dict[tuple[int, str, int, Optional[float]], PortForward] = {}
+_forwards: dict[tuple[int, str, int, Optional[float], Optional[str]], PortForward] = {}
 _forwards_lock = threading.Lock()
 
 
 class PortForward:
     """Local ``127.0.0.1:<local_port>`` whose connections land on ``remote_host:remote_port`` inside ``env``."""
 
-    def __init__(self, env: BaseEnvironment, remote_host: str, remote_port: int, *, user: Optional[str], close_grace: Optional[float] = None):
+    def __init__(self, env: BaseEnvironment, remote_host: str, remote_port: int, *, user: Optional[str],
+                 close_grace: Optional[float] = None, passive_generation: Optional[str] = None):
         self.env, self.remote_host, self.remote_port, self.user = env, remote_host, remote_port, user
         self.close_grace = close_grace
+        self.passive_generation = passive_generation
         self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server.bind(("127.0.0.1", 0))
@@ -201,7 +203,12 @@ class PortForward:
             argv = ["python3", "-c", _TCP_RELAY, self.remote_host, str(self.remote_port)]
             if self.close_grace is not None:
                 argv.append(str(self.close_grace))
-            proc = open_stream(self.env, argv, user=self.user)
+            if self.passive_generation is None:
+                proc = open_stream(self.env, argv, user=self.user)
+            else:
+                prefix = self.env.relay_prefix(self.passive_generation, user=self.user)
+                proc = subprocess.Popen(remote_argv(prefix, argv), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL, close_fds=True)
         except Exception:
             conn.close()
             return
@@ -233,26 +240,43 @@ class PortForward:
             pass
         finally:
             try:
-                conn.close()
+                conn.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
             finally:
+                conn.close()
                 proc.kill()
 
     def close(self) -> None:
         self._closed = True
         try:
-            self._server.close()
+            self._server.shutdown(socket.SHUT_RDWR)
         except OSError:
             pass
+        finally:
+            self._server.close()
 
 
 def forward_port(env: BaseEnvironment, remote_port: int, *, remote_host: str = "127.0.0.1",
-                 user: Optional[str] = None, close_grace: Optional[float] = None) -> int:
+                 user: Optional[str] = None, close_grace: Optional[float] = None,
+                 browser_cdp: bool = False) -> int:
     """Local port on 127.0.0.1 that reaches ``remote_host:remote_port`` inside ``env``; one listener per
     (env, host, port) is kept for the process lifetime (daemon threads, nothing to clean up)."""
-    # HTTP closes own idle streams; long-lived desktop relays retain TCP half-close semantics.
-    key = (id(env), remote_host, int(remote_port), close_grace)
+    from tools.environments.firecracker import FirecrackerEnvironment
+
+    # Browser CDP connections are cached and may stay open beyond the last tool request.
+    passive = None
+    if browser_cdp and isinstance(env, FirecrackerEnvironment):
+        passive = env.instance_id
+        if not passive:
+            raise RuntimeError("Cannot forward CDP for an inactive Firecracker generation")
+    key = (id(env), remote_host, int(remote_port), close_grace, passive)
     with _forwards_lock:
+        if passive:
+            for retired in [key for key in _forwards if key[0] == id(env) and key[4] and key[4] != passive]:
+                _forwards.pop(retired).close()
         fwd = _forwards.get(key)
         if fwd is None or fwd._closed:
-            fwd = _forwards[key] = PortForward(env, remote_host, int(remote_port), user=user, close_grace=close_grace)
+            fwd = _forwards[key] = PortForward(env, remote_host, int(remote_port), user=user,
+                                               close_grace=close_grace, passive_generation=passive)
     return fwd.local_port

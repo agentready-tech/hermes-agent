@@ -1,5 +1,6 @@
 """Firecracker terminal backend using the worker's profile-scoped Unix socket."""
 
+from contextlib import contextmanager
 import logging
 import re
 import socket
@@ -75,6 +76,27 @@ def marker_alive(identity: dict) -> bool:
         return False
 
 
+@contextmanager
+def browser_activity():
+    """Keep the live browser generation available through a real tool response."""
+    from tools.environments.firecracker_client import exchange
+
+    path = profile_socket()
+    current = generation(path, wake=False)
+    if current is None:
+        raise EnvironmentConnectionError("The Firecracker browser is no longer running")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        try:
+            connection.settimeout(3)
+            connection.connect(str(path))
+            reply = exchange(connection, {"operation": "activity", "generation": current})
+            if reply.get("generation") != current:
+                raise ValueError("Firecracker generation changed")
+        except (OSError, EOFError, ValueError) as error:
+            raise EnvironmentConnectionError("The Firecracker browser is no longer running") from error
+        yield
+
+
 class FirecrackerEnvironment(BaseEnvironment):
     _persistent = True
     _profile_scoped_passthrough = True
@@ -99,17 +121,22 @@ class FirecrackerEnvironment(BaseEnvironment):
         return [*self._prefix(user=user, interactive=interactive), "/usr/bin/env", f"PATH={GUEST_EXEC_PATH}"]
 
     def probe_prefix(self, *, user: str | None = None, interactive: bool = False) -> list[str]:
-        return [*self._prefix(user=user, interactive=interactive, passive=True),
+        return [*self._prefix(user=user, interactive=interactive, operation="probe"),
                 "/usr/bin/env", f"PATH={GUEST_EXEC_PATH}"]
 
-    def _prefix(self, *, user: str | None = None, interactive: bool = True, passive: bool = False) -> list[str]:
-        argv = [sys.executable, str(CLIENT), str(self._socket), self.instance_id or ""]
+    def relay_prefix(self, expected_generation: str, *, user: str | None = None) -> list[str]:
+        return [*self._prefix(user=user, interactive=True, operation="relay", identity=expected_generation),
+                "/usr/bin/env", f"PATH={GUEST_EXEC_PATH}"]
+
+    def _prefix(self, *, user: str | None = None, interactive: bool = True,
+                operation: str = "exec", identity: str | None = None) -> list[str]:
+        argv = [sys.executable, str(CLIENT), str(self._socket), identity or self.instance_id or ""]
         if interactive:
             argv.append("--stdin")
         if user:
             argv.extend(["--user", user])
-        if passive:
-            argv.append("--probe")
+        if operation != "exec":
+            argv.append(f"--{operation}")
         return [*argv, "--"]
 
     def _before_execute(self) -> None:
