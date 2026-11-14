@@ -95,8 +95,8 @@ def test_a_takeover_made_by_another_process_stops_input_before_the_next_frame(mo
     captured = {}
 
     class _Filter(rfb_filter.RfbClientFilter):
-        def __init__(self, allow_input):
-            super().__init__(allow_input)
+        def __init__(self, allow_input, **kwargs):
+            super().__init__(allow_input, **kwargs)
             captured["allow"] = allow_input
             captured["ready"].set()
     monkeypatch.setattr(rfb_filter, "RfbClientFilter", _Filter)

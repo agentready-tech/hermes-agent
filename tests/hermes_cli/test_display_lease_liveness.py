@@ -147,6 +147,43 @@ class Bridge(unittest.TestCase):
 
         self.run_clock(run)
 
+    def test_idle_viewer_releases_control_despite_framebuffer_requests(self):
+        async def run(clock):
+            asyncio.get_running_loop().time = lambda: clock.now
+            lease.acquire("fixture-viewer", profile_key=self.home)
+
+            class Viewer(Ws):
+                def __init__(self):
+                    super().__init__(1000)
+                    self.messages = asyncio.Queue()
+
+                async def receive(self):
+                    return {"type": "websocket.receive", "bytes": await self.messages.get()}
+
+                async def close(self, code=1000, reason=""):
+                    if reason:
+                        self.disconnect_reason = reason
+
+            ws = Viewer()
+            task = asyncio.create_task(self.open(ws))
+            await clock.flush()
+            ws.messages.put_nowait(b"RFB 003.008\n\x01\x01")
+            await clock.advance(8)
+            ws.messages.put_nowait(bytes([4]) + bytes(7))
+            await clock.flush()
+            await clock.advance(2)
+            self.assertFalse(task.done())
+            await clock.advance(7)
+            ws.messages.put_nowait(bytes([3]) + bytes(9))
+            await clock.flush()
+            await clock.advance(1)
+            await task
+            self.assertEqual(ws.disconnect_reason, "desktop-idle")
+            self.assertEqual(self.raw()["holder"], "agent")
+
+        with patch.object(display, "_desktop_viewer_idle_seconds", return_value=10):
+            self.run_clock(run)
+
     def test_deferred_clean_close_cannot_release_newer_same_viewer_epoch(self):
         async def run(clock):
             old = lease.acquire("fixture-viewer", profile_key=self.home)
@@ -212,8 +249,8 @@ class Bridge(unittest.TestCase):
         captured = {}
 
         class Filter(rfb_filter.RfbClientFilter):
-            def __init__(self, allow):
-                super().__init__(allow)
+            def __init__(self, allow, **kwargs):
+                super().__init__(allow, **kwargs)
                 captured["allow"] = allow
 
         async def run(clock):

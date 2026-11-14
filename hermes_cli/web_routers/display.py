@@ -202,6 +202,21 @@ async def _open_browser_rfb(info):
         raise
 
 
+def _desktop_viewer_idle_seconds(profile_home: str) -> float:
+    from hermes_cli.config import load_config_readonly
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    token = set_hermes_home_override(profile_home)
+    try:
+        config = load_config_readonly().get("bot_desktop") or {}
+        minutes = config.get("viewer_idle_minutes", 0)
+        if type(minutes) not in (int, float) or not 0 < minutes <= 1440:
+            return 0
+        return minutes * 60
+    finally:
+        reset_hermes_home_override(token)
+
+
 async def _bridge(ws: WebSocket, info: dict) -> None:
     """Pump RFB bytes between the viewer socket (already accepted) and THIS profile's Xvnc, gated by
     the lease."""
@@ -212,6 +227,8 @@ async def _bridge(ws: WebSocket, info: dict) -> None:
     profile_home = str(info["hermes_home"])
     profile_key = hermes_home_key(profile_home)
     viewer_id = str(info.get("viewer_id") or info.get("user_id") or "viewer")
+    is_desktop = info.get("surface") != "browser-window"
+    viewer_idle_seconds = _desktop_viewer_idle_seconds(profile_home) if is_desktop else 0
     stream_key = (profile_key, viewer_id)
     streams = _viewer_streams.setdefault(stream_key, _ViewerStreams())
     with streams.lock:
@@ -261,6 +278,7 @@ async def _bridge(ws: WebSocket, info: dict) -> None:
     allowed = {"input": held["ever"]}
     last_held_epoch = {"value": current.epoch if held["ever"] else None}
     disconnect_epoch = {"value": None}
+    viewer_closed = asyncio.Event()
 
     def _refresh_allowed(lease=None) -> None:
         if not _owns_stream():
@@ -275,7 +293,7 @@ async def _bridge(ws: WebSocket, info: dict) -> None:
 
     def _may_send_input() -> bool:
         _refresh_allowed()
-        return allowed["input"]
+        return allowed["input"] and not viewer_closed.is_set()
 
     def _on_lease(key: str, lease) -> None:
         if key != profile_key:
@@ -291,9 +309,14 @@ async def _bridge(ws: WebSocket, info: dict) -> None:
             loop.call_soon_threadsafe(evicted.set)
     unsubscribe = _lease.on_change(_on_lease)
 
-    rfb_filter = RfbClientFilter(_may_send_input)
+    last_user_input = loop.time()
 
-    viewer_closed = asyncio.Event()
+    def touch_user_input() -> None:
+        nonlocal last_user_input
+        last_user_input = loop.time()
+
+    rfb_filter = RfbClientFilter(_may_send_input, on_user_input=touch_user_input)
+
     view_change = {"value":False}
     activity_file = Path(profile_home) / "bot-desktop" / "activity"
     stamped = {"at": 0.0}
@@ -360,8 +383,19 @@ async def _bridge(ws: WebSocket, info: dict) -> None:
                 _refresh_allowed(current)
             await asyncio.sleep(_lease.RENEW_INTERVAL_S)
 
+    async def disconnect_idle_viewer() -> None:
+        while _owns_stream():
+            remaining = last_user_input + viewer_idle_seconds - loop.time()
+            if remaining <= 0:
+                viewer_closed.set()
+                await ws.close(code=1000, reason="desktop-idle")
+                return
+            await asyncio.sleep(remaining)
+
     tasks = [asyncio.create_task(rfb_to_ws()), asyncio.create_task(ws_to_rfb()),
              asyncio.create_task(watch_eviction()), asyncio.create_task(renew_human_control())]
+    if viewer_idle_seconds:
+        tasks.append(asyncio.create_task(disconnect_idle_viewer()))
     try:
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for t in pending:
