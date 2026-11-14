@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.12.2",
+  "defaultRuntimeVersion": "2026.11.14.3",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -4105,6 +4105,48 @@
         "productionFunctionalTests": false
       },
       "description": "AgentSee Hermes 2026.11.12.2 keeps internal delegation coordination wakeups out of visible replies and retains native delivery of real child results."
+    },
+    "2026.11.14.3": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:471848450ea7bfebfb3aff97054cf3e96fbdb1841cf1fee9b4978185d96d86dd",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.14.3",
+      "configDigest": "sha256:cf8629431bc88da7564012cda2b47bde165cd2e334f68dee461432588ba082dc",
+      "platform": "linux/amd64",
+      "sourceRevision": "af64948ae9a36cff8551760009fd778204392af2",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:471848450ea7bfebfb3aff97054cf3e96fbdb1841cf1fee9b4978185d96d86dd",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.14.3",
+        "digest": "sha256:471848450ea7bfebfb3aff97054cf3e96fbdb1841cf1fee9b4978185d96d86dd",
+        "configDigest": "sha256:cf8629431bc88da7564012cda2b47bde165cd2e334f68dee461432588ba082dc",
+        "sourceRevision": "af64948ae9a36cff8551760009fd778204392af2",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 43581428772,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "profileCount": 5,
+        "sandboxPodsPreserved": true,
+        "originalProfileDirectoriesPreserved": true
+      },
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml",
+      "validation": {
+        "runtimeReady": true,
+        "profiles": 5,
+        "sandboxPodsPreserved": true,
+        "existingMainSessionResumed": true,
+        "desktopStatusRead": true,
+        "soulAndSkillsRead": true,
+        "futureDefaultConfigured": true
+      },
+      "description": "One Hermes StatefulSet per worker with existing agent profile bind mounts."
     }
   },
   "supersededRuntimeAttempts": {
