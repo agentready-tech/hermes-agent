@@ -161,3 +161,90 @@ async def test_panel_only_main_binds_each_profile_on_recovery(shared_homes, monk
         assert sources['alpha'] != sources['bravo']
     finally:
         runner.session_store.close_all_db_handles()
+
+
+@pytest.mark.asyncio
+async def test_shared_gateway_polls_only_enabled_mail_and_admits_to_own_profile(shared_homes, monkeypatch):
+    import base64
+    import json
+    import sqlite3
+    from types import SimpleNamespace
+
+    import hermes_state
+    from gateway.config import GatewayConfig
+    from gateway.run import GatewayRunner, _profile_runtime_scope
+    from gateway.run_runtime import _build_profile_authority, _stop_profile_mail, publish_gateway_runtime_ready
+    from gateway.runtime_ownership import ProfileOwnership
+    from gateway.session_authorities import SessionAuthorities
+    from hermes_runtime.adapters.state import ensure_home_session
+    from hermes_runtime.workspace.service import Workspace
+    from tests.hermes_runtime.test_workspace_native import SECRET, connection
+    from tests.waiting import async_wait_until
+
+    root, homes = shared_homes
+    monkeypatch.setattr(hermes_state, 'DEFAULT_DB_PATH', hermes_state._IMPORT_DEFAULT_DB_PATH)
+    ownership = ProfileOwnership()
+    monkeypatch.setattr('gateway.runtime_ownership.process_ownership', ownership)
+    ownership.reserve(homes.values())
+    runner = GatewayRunner(GatewayConfig(multiplex_profiles=True, sessions_dir=root / 'sessions'))
+    runner._primary_profile_name = 'default'
+    runner.session_authorities = SessionAuthorities(root, multiplexed=True)
+    runner.session_runtime_descriptor = {'instance_id': 'shared-mail-fixture'}
+    runner.session_api = SimpleNamespace(task=SimpleNamespace(done=lambda: False))
+    runner._running = True
+    requests = []
+    disabled_checked = threading.Event()
+    from hermes_runtime.standalone.workspace import poll
+
+    def track_poll(home, *args, **kwargs):
+        result = poll(home, *args, **kwargs)
+        if home == homes['bravo']:
+            disabled_checked.set()
+        return result
+
+    def fetch(_home, program, request):
+        requests.append(request['credential']['username'])
+        assert program == 'sandbox_mail' and request['operation'] == 'incoming'
+        return {'messages': [{'uid': 27, 'format': 'text-v1', 'attachments': [],
+            'internalDate': '06-Nov-2026 08:00:00 +0000',
+            'raw': base64.b64encode(b'From: lead@example.invalid\r\nSubject: Synthetic\r\n\r\nBody').decode()}],
+            'cursor': {'validity': '7', 'uid': 27}}
+
+    monkeypatch.setattr('hermes_runtime.workspace.transport.poll_request', fetch)
+    monkeypatch.setattr('hermes_runtime.standalone.workspace.poll', track_poll)
+    monkeypatch.setattr('tools.terminal_tool.ensure_task_env', lambda *_: pytest.fail('Mail must not access the sandbox'))
+    authorities = {}
+    try:
+        for name, home in homes.items():
+            (home / 'config.yaml').write_text('autonomous:\n  workspace:\n    native: true\n')
+            Workspace(home).store.upsert(connection(proactive=name == 'alpha', senderPolicy='all'),
+                                         {**SECRET, 'username': name + '@example.invalid'})
+            with _profile_runtime_scope(home):
+                ensure_home_session()
+            authorities[name] = await _build_profile_authority(runner, name, home, register=False)
+        publish_gateway_runtime_ready(runner)
+        alpha_cursor = homes['alpha'] / 'autonomous' / 'workspace-cursors.json'
+        await async_wait_until(lambda: alpha_cursor.is_file() and disabled_checked.is_set(), timeout=10)
+        for authority in authorities.values():
+            assert getattr(authority, '_workspace_mail', None) is not None
+            assert await _stop_profile_mail(authority, 5)
+        assert requests == ['alpha@example.invalid']
+        with sqlite3.connect(homes['alpha'] / 'state.db') as con:
+            event, = con.execute('SELECT event_json FROM async_delegations').fetchall()
+        event = json.loads(event[0])
+        assert event['session_key'] == 'agent:alpha:agentready:home'
+        scheduled = []
+        monkeypatch.setattr(authorities['alpha'], '_schedule', scheduled.append)
+        from gateway.run import _format_gateway_process_notification
+        assert await runner._deliver_completion_notification(_format_gateway_process_notification(event), event) is True
+        with sqlite3.connect(homes['alpha'] / 'state.db') as con:
+            assert con.execute("SELECT status FROM session_admissions WHERE principal_id LIKE 'automation:%'").fetchall() == [('queued',)]
+        assert [(ref.profile_id, ref.session_id) for ref in scheduled] == [(str(homes['alpha']), 'agentready_home')]
+        with sqlite3.connect(homes['bravo'] / 'state.db') as con:
+            assert con.execute('SELECT count(*) FROM session_admissions').fetchone() == (0,)
+        assert not (homes['bravo'] / 'autonomous' / 'workspace-cursors.json').exists()
+    finally:
+        for authority in authorities.values():
+            await _stop_profile_mail(authority, 5)
+        runner.session_store.close_all_db_handles()
+        ownership.close()

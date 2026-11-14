@@ -5,12 +5,13 @@ import json
 import logging
 import signal
 import threading
+from functools import partial
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
-def admit_mail(prompt, source, event_id, metadata=None):
+def admit_mail(prompt, source, event_id, metadata=None, *, session_store=None):
     """Let the native gateway own a mail reply, including while Panel owns a turn.
 
     Injecting into HomeInbox would lend the mail the foreground UI's transport.
@@ -31,7 +32,7 @@ def admit_mail(prompt, source, event_id, metadata=None):
     if legacy is not None:
         # A cursor-write retry across an upgrade must not execute an old mail again.
         return {"message_id": legacy[0], "pending": legacy[1] is None}
-    origin = main_gateway_origin()
+    origin = main_gateway_origin() if session_store is None else main_gateway_origin(session_store=session_store)
     if not origin:
         return enqueue(prompt, source, event_id, metadata)
     identity = "main-mail-" + hashlib.sha256(key.encode()).hexdigest()
@@ -62,30 +63,49 @@ def admit_batches(home, response, cursors, *, admit=None, save=None):
     return cursors
 
 
-def poll(home, config, cursors):
+def poll(home, config, cursors, *, admit=None, stopped=None):
     if config.get("native") is not True:
         return cursors
     from hermes_runtime.workspace.service import Workspace
     from hermes_runtime.workspace.transport import poll_request
-    return admit_batches(home, Workspace(home, runner=poll_request).events(cursors), cursors)
+    response = Workspace(home, runner=poll_request).events(cursors)
+    if stopped is not None and stopped.is_set():
+        return cursors
+    return admit_batches(home, response, cursors, admit=admit)
 
 
 def worker(home):
-    from hermes_runtime.standalone.config import activate_home, settings
+    from hermes_runtime.standalone.config import activate_home
 
     activate_home(home)
-    path = Path(home) / "autonomous" / "workspace-cursors.json"
-    cursors = json.loads(path.read_text()) if path.exists() else {}
     stopped = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stopped.set())
+    run_polls(home, stopped)
+
+
+def run_polls(home, stopped, *, session_store=None):
+    from hermes_runtime.standalone.config import settings
+
+    path = Path(home) / "autonomous" / "workspace-cursors.json"
+    cursors = None
+    admit = partial(admit_mail, session_store=session_store) if session_store is not None else None
     while not stopped.is_set():
-        config = settings(home).get("workspace", {})
-        if config.get("native") is not True:
-            stopped.wait(max(30, float(config.get("poll_seconds", 60))))
-            continue
+        interval = 60
         try:
-            poll(home, config, cursors)
+            config = settings(home).get("workspace", {})
+            interval = max(30, float(config.get("poll_seconds", 60)))
+            if config.get("native") is True:
+                if cursors is None:
+                    cursors = json.loads(path.read_text()) if path.exists() else {}
+                poll(home, config, cursors, admit=admit, stopped=stopped)
         except Exception as error:  # health: allow BLE001 -- transport exceptions can contain credentials
             logger.warning("Workspace poll deferred (%s); batch remains retryable", type(error).__name__)
-        stopped.wait(max(30, float(config.get("poll_seconds", 60))))
+        stopped.wait(interval)
+
+
+def run_profile_polls(authority, stopped):
+    from gateway.session_authorities import owner_scope
+
+    with owner_scope(authority):
+        run_polls(Path(authority.profile_id), stopped, session_store=authority.runner.session_store)

@@ -54,7 +54,9 @@ Authorization-code exchange and token refresh execute inside the same sandbox.
 
 Set `autonomous.workspace.native: true` to start the existing mailbox worker.
 Its IMAP/Gmail polling runs in a bounded subprocess inside Hermes even when
-the sandbox is stopped. Mail tools continue to use the sandbox transport.
+the sandbox is stopped. The shared gateway starts a collector for each served
+managed profile. Each poll uses the current per-mailbox `proactive` setting,
+sender rules and saved cursor. Mail tools continue to use the sandbox transport.
 The worker owns filtering and event formatting and submits events to the existing
 single `agentready_home` durable queue. Cursor location and source/event identities
 are unchanged; cursors advance only after durable admission. Legacy Panel URLs

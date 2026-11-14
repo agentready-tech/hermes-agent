@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+import threading
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -264,6 +265,7 @@ async def _retire_profile_authority(authority, timeout=None):
     if getattr(authority.runner, 'session_ticket_store', None) is not None:
         _publish_served_set(authority.runner)  # discovery and tickets stop naming it now
     stop_authority_work(authority)
+    mail = asyncio.create_task(_stop_profile_mail(authority, timeout))
     service = getattr(authority, 'hosted_room_service', None)
     rooms = None if service is None else asyncio.ensure_future(asyncio.to_thread(service.stop, timeout=timeout))
     try:
@@ -275,7 +277,7 @@ async def _retire_profile_authority(authority, timeout=None):
     rooms_stopped = rooms is None or await rooms is not False
     if not rooms_stopped:
         logger.error('Profile %s hosted rooms did not stop; ownership retained', authority.profile_id)
-    if not (workers_stopped and rooms_stopped):
+    if not (await mail and workers_stopped and rooms_stopped):
         return False
     # Idle drains and receipt watchers wait on admissions this profile will no longer run.
     rest = _authority_tasks(authority)
@@ -337,6 +339,7 @@ async def serve_profile_runtime(runner, name, home):
         raise
     _publish_served_set(runner)
     start_ready_hosted_services(runner)
+    _start_profile_mail(authority)
     return authority
 
 
@@ -414,6 +417,42 @@ def publish_gateway_runtime_ready(runner):
         'session-authority-v1', 'durable-admission-v1', 'event-replay-v1'])
     from gateway.session_hosted_service import start_ready_hosted_services
     start_ready_hosted_services(runner)
+    from hermes_runtime.adapters.hermes import shared_host
+    if shared_host():
+        for authority in runner.session_authorities.serving():
+            _start_profile_mail(authority)
+
+
+def _start_profile_mail(authority):
+    from gateway.runtime_ownership import process_ownership
+    from hermes_runtime.adapters.hermes import owns_home, shared_host
+    from hermes_runtime.standalone.workspace import run_profile_polls
+
+    runner = authority.runner
+    home = Path(authority.profile_id)
+    if (not shared_host() or not owns_home(home) or not process_ownership.owns(home)
+            or runner.session_runtime_descriptor.get('state') != 'ready' or runner._draining
+            or getattr(authority, 'retiring', False) or getattr(authority, '_workspace_mail', None) is not None):
+        return
+    stopped = threading.Event()
+    thread = threading.Thread(target=run_profile_polls, args=(authority, stopped),
+                              name='workspace-mail', daemon=True)
+    process_ownership.start_writer(thread)
+    authority._workspace_mail = stopped, thread
+
+
+async def _stop_profile_mail(authority, timeout):
+    mail = getattr(authority, '_workspace_mail', None)
+    if mail is None:
+        return True
+    stopped, thread = mail
+    stopped.set()
+    from gateway.run import _await_thread_exit
+    if not await _await_thread_exit(thread, timeout):
+        logger.warning('Workspace mail for profile %s is still stopping', authority.profile_id)
+        return False
+    authority._workspace_mail = None
+    return True
 
 
 async def wait_gateway_runtime(runner):
@@ -441,7 +480,8 @@ async def drain_gateway_runtime(runner):
     runner._draining = True
     descriptor.update(state='draining', capabilities=[])
     from gateway.session_hosted_service import stop_hosted_service
-    await stop_hosted_service(runner)
+    await asyncio.gather(stop_hosted_service(runner),
+                         *(_stop_profile_mail(authority, 5) for authority in _authorities(runner)))
     # Withdraw the public ingress callback without disconnecting egress needed
     # by already admitted work. Base adapters refuse before stamping acceptance.
     for adapter in runner.adapters.values():
