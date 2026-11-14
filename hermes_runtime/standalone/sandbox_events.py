@@ -72,11 +72,17 @@ def admit(home, event):
 
 
 def poll(home):
-    from tools.bot_desktop.browser_memory_guard import configuration, marker, receive
+    from tools.bot_desktop.browser_memory_guard import configuration, deliver_events, marker, receive
+    from tools.bot_desktop.placement import _terminal_backend
     from tools.environments.network_transport import sandbox_environment
+    from tools.terminal_scope import install_and_reset_profile_terminal_scope
 
     require_owner(home)
     if configuration(home)['enabled'] or marker().exists():
+        with install_and_reset_profile_terminal_scope(home):
+            if _terminal_backend() == 'firecracker':
+                from tools.environments.firecracker import acknowledge_watchdog_event, watchdog_events
+                return deliver_events(watchdog_events(), lambda event: admit(home, event), acknowledge_watchdog_event)
         environment = sandbox_environment()
         if environment is None:
             raise RuntimeError('Sandbox watchdog requires the agent sandbox, never host execution')

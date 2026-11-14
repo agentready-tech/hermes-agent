@@ -284,7 +284,7 @@ def grab_jpeg(env: Any, published: dict[str, str], max_size: tuple[int, int], qu
         return None
     child_env = {k: v for k, v in published.items() if k in ("DISPLAY", "XAUTHORITY")}
     try:
-        proc = streams.run_in(env, ["python3", "-c", _GRAB_SCRIPT, display, str(max_size[0]), str(max_size[1]),
+        proc = streams.probe_in(env, ["python3", "-c", _GRAB_SCRIPT, display, str(max_size[0]), str(max_size[1]),
                                     str(quality)], child_env=child_env, user=_user_for(env), timeout=20)
     except (OSError, subprocess.SubprocessError) as exc:
         logger.debug("sandbox screen grab failed: %s", exc)
@@ -297,6 +297,10 @@ def grab_jpeg(env: Any, published: dict[str, str], max_size: tuple[int, int], qu
 
 def _user_for(env: Any) -> Optional[str]:
     """DESKTOP_USER when the sandbox has it, else None (exec default). Cached on the env object."""
+    from tools.environments.firecracker import FirecrackerEnvironment
+
+    if isinstance(env, FirecrackerEnvironment):
+        return DESKTOP_USER  # The enrolled Firecracker guest executor fixes this account.
     cached = getattr(env, "_bd_desktop_user", "unset")
     if cached != "unset":
         return cached
@@ -308,12 +312,12 @@ def _user_for(env: Any) -> Optional[str]:
 
 def missing_binaries(env: Any) -> list[str]:
     script = "for b in " + " ".join(_REQUIRED) + '; do command -v "$b" >/dev/null 2>&1 || echo "$b"; done'
-    proc = streams.run_in(env, ["bash", "-c", script], user=_user_for(env), timeout=20)
+    proc = streams.probe_in(env, ["bash", "-c", script], user=_user_for(env), timeout=20)
     return [b for b in proc.stdout.decode("utf-8", "replace").split() if b]
 
 
 def _published(env: Any, rdir: str) -> dict[str, str]:
-    proc = streams.run_in(env, ["bash", "-c", f"kill -0 $(cat {shlex.quote(rdir)}/launcher.pid 2>/dev/null) 2>/dev/null "
+    proc = streams.probe_in(env, ["bash", "-c", f"kill -0 $(cat {shlex.quote(rdir)}/launcher.pid 2>/dev/null) 2>/dev/null "
                                              f"&& test -S {shlex.quote(rdir)}/rfb.sock && cat {shlex.quote(rdir)}/env"],
                           user=_user_for(env), timeout=15)
     if proc.returncode != 0:

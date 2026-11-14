@@ -78,9 +78,9 @@ def intent(viewer):
     return validate_viewport(value['viewport'])
 
 
-def _sandbox():
+def _sandbox(*, passive=False):
     from tools.bot_desktop import sandbox_host
-    env=runtime._owned_sandbox_env()
+    env=runtime._owned_sandbox_env(passive=True) if passive else runtime._owned_sandbox_env()
     if env is None or sandbox_host._user_for(env)!=sandbox_host.DESKTOP_USER:
         raise WindowUnavailable('browser_window_environment_unavailable')
     return env
@@ -92,10 +92,10 @@ def available():
     from tools.bot_desktop import sandbox_host
     from tools.environments import streams
     try:
-        env=_sandbox()
-        result=streams.run_in(env,_python("import ctypes,os;assert os.access('/usr/bin/x11vnc',os.X_OK);[ctypes.CDLL(n) for n in ('libX11.so.6','libXRes.so.1','libXtst.so.6','libXcomposite.so.1')]"),
+        env=_sandbox(passive=True)
+        result=streams.probe_in(env,_python("import ctypes,os;assert os.access('/usr/bin/x11vnc',os.X_OK);[ctypes.CDLL(n) for n in ('libX11.so.6','libXRes.so.1','libXtst.so.6','libXcomposite.so.1')]"),
             user=sandbox_host.DESKTOP_USER,timeout=10)
-        return result.returncode==0 and bool(_helper_dir(env))
+        return result.returncode==0 and bool(_helper_dir(env,passive=True))
     except (OSError,ValueError,RuntimeError):return False
 
 
@@ -156,12 +156,13 @@ print('verified')
 """
 
 
-def _helper_dir(env):
+def _helper_dir(env, *, passive=False):
     from tools.bot_desktop import browser_instance, browser_launch, browser_window_x11, browser_window_stream, rfb_filter, sandbox_host
     from tools.environments import streams
     sources={Path(module.__file__).name:hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest()
              for module in (browser_instance,browser_launch,browser_window_x11,browser_window_stream,rfb_filter)}
-    result=streams.run_in(env,_python(_CHECK_HELPERS),stdin=json.dumps(sources).encode(),
+    run=streams.probe_in if passive else streams.run_in
+    result=run(env,_python(_CHECK_HELPERS),stdin=json.dumps(sources).encode(),
         user=sandbox_host.DESKTOP_USER,timeout=10)
     if result.returncode or result.stdout.strip()!=b'verified':raise WindowUnavailable('browser_window_helper_unavailable')
     return _HELPER_ROOT

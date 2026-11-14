@@ -31,22 +31,40 @@ def profile_socket() -> Path:
     return SOCKET_ROOT / f"{home.name}.sock"
 
 
-def generation(path: Path, *, wake: bool) -> str | None:
+def _request(path: Path, operation: str, *, timeout: float = 2, **payload) -> dict:
     from tools.environments.firecracker_client import exchange
 
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-            connection.settimeout(25 if wake else 2)
+            connection.settimeout(timeout)
             connection.connect(str(path))
-            state = exchange(connection, {"operation": "ensure" if wake else "status"})
+            return exchange(connection, {"operation": operation, **payload})
+    except (OSError, EOFError, ValueError) as error:
+        raise EnvironmentConnectionError("The profile's Firecracker worker is unavailable") from error
+
+
+def generation(path: Path, *, wake: bool) -> str | None:
+    state = _request(path, "ensure" if wake else "status", timeout=25 if wake else 2)
+    try:
         value = state["generation"]
         if value is None and not wake:
             return None
         if not isinstance(value, str) or not GENERATION.fullmatch(value):
             raise ValueError
         return value
-    except (OSError, EOFError, ValueError, KeyError) as error:
+    except (ValueError, KeyError) as error:
         raise EnvironmentConnectionError("The profile's Firecracker worker is unavailable") from error
+
+
+def watchdog_events() -> list[dict]:
+    result = _request(profile_socket(), "watchdog-events").get("events")
+    if not isinstance(result, list) or not all(isinstance(item, dict) for item in result):
+        raise EnvironmentConnectionError("Invalid Firecracker watchdog receipt response")
+    return result
+
+
+def acknowledge_watchdog_event(event_id: str) -> None:
+    _request(profile_socket(), "watchdog-ack", event_id=event_id)
 
 
 def marker_alive(identity: dict) -> bool:
@@ -80,12 +98,18 @@ class FirecrackerEnvironment(BaseEnvironment):
         # Direct exec inherits the initramfs PATH, which omits image tools and Node.
         return [*self._prefix(user=user, interactive=interactive), "/usr/bin/env", f"PATH={GUEST_EXEC_PATH}"]
 
-    def _prefix(self, *, user: str | None = None, interactive: bool = True) -> list[str]:
+    def probe_prefix(self, *, user: str | None = None, interactive: bool = False) -> list[str]:
+        return [*self._prefix(user=user, interactive=interactive, passive=True),
+                "/usr/bin/env", f"PATH={GUEST_EXEC_PATH}"]
+
+    def _prefix(self, *, user: str | None = None, interactive: bool = True, passive: bool = False) -> list[str]:
         argv = [sys.executable, str(CLIENT), str(self._socket), self.instance_id or ""]
         if interactive:
             argv.append("--stdin")
         if user:
             argv.extend(["--user", user])
+        if passive:
+            argv.append("--probe")
         return [*argv, "--"]
 
     def _before_execute(self) -> None:

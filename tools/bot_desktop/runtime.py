@@ -483,8 +483,9 @@ def published_env() -> dict[str, str]:
     must not load config (that initializes HERMES_HOME). A sandbox-hosted screen leaves a host-side marker at
     start; only its presence routes to the sandbox probe."""
     from tools.bot_desktop import sandbox_host
-    if sandbox_host._read_marker():
-        return _sandbox_published_env()
+    marker = sandbox_host._read_marker()
+    if marker:
+        return _sandbox_published_env(marker)
     if _launcher_pid() is None:
         return {}
     raw = _read(state_dir() / "env")
@@ -524,6 +525,8 @@ def sandbox_screen_running() -> bool:
     marker = sandbox_host._read_marker()
     if not marker:
         return False
+    if marker.get("firecracker"):
+        return sandbox_host.marker_sandbox_alive(marker)
     if _sandbox_env(create=False) is not None:
         return True
     if sandbox_host.marker_sandbox_alive(marker):
@@ -532,7 +535,7 @@ def sandbox_screen_running() -> bool:
     return False
 
 
-def _owned_sandbox_env():
+def _owned_sandbox_env(*, passive: bool = False):
     """The environment hosting the screen the marker records, re-attaching after a restart when the recorded
     sandbox is still alive; None when there is no marker or its sandbox is gone. Never builds a sandbox for
     a screen that is not there."""
@@ -540,11 +543,27 @@ def _owned_sandbox_env():
     marker = sandbox_host._read_marker()
     if not marker:
         return None
+    if passive and marker.get("firecracker"):
+        return _firecracker_screen_env(marker)
     env = _sandbox_env(create=False)
     if env is not None:
         return env
     if sandbox_host.marker_sandbox_alive(marker):
         return _sandbox_env(create=True)
+    return None
+
+
+def _firecracker_screen_env(marker):
+    from tools.environments.base import EnvironmentConnectionError
+    from tools.environments.firecracker import FirecrackerEnvironment
+
+    try:
+        env = FirecrackerEnvironment(cwd="/workspace", timeout=15, persistent=False, probe_only=True)
+    except EnvironmentConnectionError:
+        return None
+    expected = marker.get("firecracker")
+    if env.instance_id and (not expected or env.firecracker_identity == expected):
+        return env
     return None
 
 
@@ -555,7 +574,7 @@ def is_running() -> bool:
 def open_rfb_stream() -> subprocess.Popen:
     """Popen whose stdin/stdout carry RFB bytes for a sandbox-hosted screen (``in_sandbox()`` only)."""
     from tools.bot_desktop import sandbox_host
-    env = _sandbox_env(create=False)
+    env = _owned_sandbox_env() if sandbox_host._read_marker().get("firecracker") else _sandbox_env(create=False)
     if env is None:
         raise RuntimeError("the sandbox hosting this screen is not running")
     return sandbox_host.open_rfb_stream(env, _profile_name())
@@ -604,7 +623,11 @@ def _sandbox_status(profile: Optional[str], where) -> DesktopStatus:
     """Status of a sandbox-placed screen. Package presence is only known once the sandbox exists; before
     that the pane shows "installed" with the image hint carried in ``install_command`` so Start can explain."""
     from tools.bot_desktop import sandbox_host
-    env = _owned_sandbox_env() or _sandbox_env(create=False)
+    marker = sandbox_host._read_marker()
+    if marker.get("firecracker") or where.backend == "firecracker":
+        env = _firecracker_screen_env(marker)
+    else:
+        env = _owned_sandbox_env() or _sandbox_env(create=False)
     missing = sandbox_host.missing_binaries(env) if env is not None else []
     published = sandbox_host.published_env(env, profile or _profile_name()) if env is not None else {}
     running = bool(published.get("DISPLAY"))
@@ -824,10 +847,10 @@ def _start_in_sandbox(wait_seconds: float) -> DesktopStatus:
     return status()
 
 
-def _sandbox_published_env() -> dict[str, str]:
+def _sandbox_published_env(marker) -> dict[str, str]:
     """Published env of a sandbox-hosted screen (the caller saw the host-side marker written at start)."""
     from tools.bot_desktop import sandbox_host
-    env = _sandbox_env(create=False)
+    env = _firecracker_screen_env(marker) if marker.get("firecracker") else _sandbox_env(create=False)
     if env is None:
         return {}
     return sandbox_host.published_env(env, _profile_name())

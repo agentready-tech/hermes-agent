@@ -125,6 +125,18 @@ def run_in(env: BaseEnvironment, argv: Sequence[str], *, child_env: Optional[dic
         command, input=stdin, capture_output=True, timeout=timeout, check=False)
 
 
+def probe_in(env: BaseEnvironment, argv: Sequence[str], *, child_env: Optional[dict] = None,
+             user: Optional[str] = None, timeout: float = 15.0,
+             stdin: Optional[bytes] = None) -> subprocess.CompletedProcess:
+    """Inspect the existing Firecracker generation without waking or keeping it alive."""
+    from tools.environments.firecracker import FirecrackerEnvironment
+
+    if not isinstance(env, FirecrackerEnvironment):
+        return run_in(env, argv, child_env=child_env, user=user, timeout=timeout, stdin=stdin)
+    command = remote_argv(env.probe_prefix(user=user, interactive=stdin is not None), argv, env=child_env)
+    return subprocess.run(command, input=stdin, capture_output=True, timeout=timeout, check=False)
+
+
 # ── TCP port forwarding through the exec stream ──────────────────────────────────────────────────────
 # A sandbox's loopback ports (Chromium's CDP endpoint, a dev server) are unreachable from the gateway host:
 # Docker bridge / ssh remote / apptainer netns. Rather than teach every client a backend-specific tunnel

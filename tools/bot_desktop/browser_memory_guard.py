@@ -103,11 +103,15 @@ def receive(env, admit):
     if not installed:
         return 0
     events = json.loads(command(env, installed, 'events'))
+    return deliver_events(events, admit, lambda event_id: command(env, installed, 'ack', '--event-id', event_id))
+
+
+def deliver_events(events, admit, acknowledge):
     for event in events:
         receipt = admit(event)
         if not isinstance(receipt, dict) or not (receipt.get('accepted') is True or receipt.get('message_id')):
             raise RuntimeError('Sandbox browser incident has no durable main admission receipt')
-        command(env, installed, 'ack', '--event-id', event['id'])
+        acknowledge(event['id'])
     return len(events)
 
 

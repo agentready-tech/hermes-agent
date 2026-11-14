@@ -26,7 +26,7 @@ def thumbnail_data_url(max_size: tuple[int, int] = THUMB_MAX, quality: int = 72)
         return None
     if runtime.sandbox_screen_running():
         from tools.bot_desktop import sandbox_host
-        sandbox = runtime._owned_sandbox_env()
+        sandbox = runtime._owned_sandbox_env(passive=True)
         jpeg = sandbox_host.grab_jpeg(sandbox, env, max_size, quality) if sandbox is not None else None
         return "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii") if jpeg else None
     if runtime._launcher_pid() is None:

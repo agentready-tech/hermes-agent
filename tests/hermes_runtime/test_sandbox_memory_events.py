@@ -137,6 +137,32 @@ def test_disabled_unused_guard_never_contacts_sandbox(home, monkeypatch):
     assert events.poll(home) == 0
 
 
+def test_firecracker_admits_persistent_events_without_waking_and_retries_ack(home, monkeypatch):
+    from hermes_runtime.adapters.inbox import HomeInbox
+    from tools.environments import firecracker
+
+    (home / 'config.yaml').write_text('terminal:\n  backend: firecracker\nbrowser:\n  memory_guard:\n    enabled: true\n')
+    monkeypatch.setattr('tools.environments.network_transport.sandbox_environment',
+                        lambda: pytest.fail('The Firecracker event bridge must not start a sandbox'))
+    monkeypatch.setattr('hermes_runtime.adapters.state.main_gateway_origin', dict)
+    monkeypatch.setattr('hermes_runtime.adapters.turns.forward_to_active_turn', lambda *_: False)
+    monkeypatch.setattr(firecracker, 'watchdog_events', lambda: [incident()])
+    acknowledgments = []
+
+    def acknowledge(event_id):
+        assert len(HomeInbox().pending()) == 1
+        acknowledgments.append(event_id)
+        if len(acknowledgments) == 1:
+            raise OSError('synthetic worker interruption')
+
+    monkeypatch.setattr(firecracker, 'acknowledge_watchdog_event', acknowledge)
+    with pytest.raises(OSError, match='worker interruption'):
+        events.poll(home)
+    assert events.poll(home) == 1
+    assert len(HomeInbox().pending()) == 1
+    assert acknowledgments == ['a' * 32, 'a' * 32]
+
+
 def test_foreign_home_is_refused_before_sandbox_or_native_queue_access(home, tmp_path, monkeypatch):
     monkeypatch.setattr('tools.environments.network_transport.sandbox_environment',
                         lambda: pytest.fail('Foreign profile must never reach a sandbox'))
