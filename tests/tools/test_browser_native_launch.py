@@ -70,6 +70,53 @@ def test_browser_request_under_continued_pressure_never_launches_or_dispatches(m
     assert result['success'] is False and result['code'] == 'browser_memory_pressure'
 
 
+def test_startup_uses_first_open_budget_and_only_dispatches_after_admission(monkeypatch, tmp_path):
+    from tools import browser_tool_session as session
+
+    clock = [0]
+    calls = []
+    monkeypatch.setattr(session, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(runtime, 'state_dir', lambda: tmp_path)
+    monkeypatch.setattr(runtime, 'published_env', lambda: {'DISPLAY': ':20'})
+    monkeypatch.setattr(runtime, 'ensure_started_for_tool', lambda: None)
+    monkeypatch.setattr(session._bt, '_get_open_command_timeout', lambda **kwargs: 25)
+
+    def launch(info, *, launch, timeout):
+        assert launch
+        calls.append(('start', timeout))
+        clock[0] = 16  # The new Chrome only exposes CDP after the former 15-second limit.
+        return browser_instance.BrowserEndpoint(41327, 'a' * 64)
+
+    def probe(task_id, info, command, engine, timeout, endpoint):
+        calls.append(('connect', timeout))
+        return info, [], {'success': True}
+
+    monkeypatch.setattr(session, '_bot_desktop_endpoint', launch)
+    monkeypatch.setattr(session, '_probe_native_client', probe)
+    monkeypatch.setattr(session, '_agent_browser_argv', lambda command: [command])
+    monkeypatch.setattr(session, '_shim_safe_args', lambda binary, command, args: (command, args, None))
+    monkeypatch.setattr(session, '_spawn_and_collect', lambda *args: calls.append(('dispatch', args[3])) or {'success': True})
+    info = {'session_name': 'own', 'features': {'local': True}}
+    _, result = session._dispatch_browser_command('task', info, 'agent-browser', 'open', ['about:blank'], 30, 'auto')
+    assert result['success'] is True
+    assert calls == [('start', 25), ('connect', 9), ('dispatch', 'open')]
+
+
+def test_startup_timeout_is_reported_before_page_dispatch(monkeypatch):
+    from tools import browser_tool_session as session
+
+    def launch(*args):
+        response = SimpleNamespace(returncode=1, stdout=b'{"startup":"cdp_timeout"}')
+        return browser_instance.launch_result_endpoint(response)
+
+    monkeypatch.setattr(session, '_shared_browser_handshake', launch)
+    monkeypatch.setattr(session, '_spawn_and_collect', lambda *a: pytest.fail('startup failure must not dispatch'))
+    _, result = session._dispatch_browser_command('task', {}, 'agent-browser', 'open', ['about:blank'], 30, 'auto')
+    assert result['success'] is False
+    assert result['code'] == 'browser_startup_failed'
+    assert result['startupStage'] == 'cdp_timeout'
+
+
 @pytest.mark.platforms('posix')
 @pytest.mark.parametrize('permit_returncode', [0, 1])
 def test_human_dock_explicit_request_uses_own_image_guard_headroom(monkeypatch, tmp_path, permit_returncode):
@@ -284,13 +331,15 @@ def test_sandbox_allocation_runs_as_own_user_inside_remote_namespace(monkeypatch
     monkeypatch.setattr(streams, 'run_in', lambda e, argv, **kw: calls.append((e, argv, kw)) or
                         SimpleNamespace(returncode=0, stdout=json.dumps({'state': 'attachable', 'port': 41327,
                                                                         'generation': 'a' * 64}).encode()))
-    assert sandbox_host.ensure_browser_endpoint(env, exclude_session='own-child') == browser_instance.BrowserEndpoint(41327, 'a' * 64)
+    assert sandbox_host.ensure_browser_endpoint(env, exclude_session='own-child', timeout=65) == browser_instance.BrowserEndpoint(41327, 'a' * 64)
     target, command, options = calls[0]
     assert target is env and command == ['python3', '/own/launcher/browser_launch.py']
     assert options['user'] == 'pn'
+    assert options['timeout'] == 65
     assert options['child_env']['DISPLAY'] == ':20'
     request = json.loads(options['stdin'])
     assert request['exclude_session'] == 'own-child'
+    assert request['timeout'] == 60
     assert request['argv'][0] == '/own/guarded-chrome'
     assert '--user-data-dir=/own/profile' in request['argv']
     assert not any(arg.startswith('--remote-debugging-port=') for arg in request['argv'])

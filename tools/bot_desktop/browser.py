@@ -138,12 +138,12 @@ def dock_exec_line(exe: str, user_data_dir: str, *, sandbox_bypass: Optional[boo
     return "Exec=" + " ".join(quote(arg) for arg in command)
 
 
-def ensure_instance_endpoint(user_data_dir: str, *, exclude_session: Optional[str] = None):
+def ensure_instance_endpoint(user_data_dir: str, *, exclude_session: Optional[str] = None, timeout: float = 20):
     """Agent-first and human-first use the same native headed browser, then attach."""
     import json
     import subprocess
     import sys
-    from tools.bot_desktop.browser_instance import admitted_endpoint
+    from tools.bot_desktop.browser_instance import launch_result_endpoint, launch_wait_budget
     from tools.environments.local import served_profile_child_env
     exe = executable()
     if not exe:
@@ -153,13 +153,10 @@ def ensure_instance_endpoint(user_data_dir: str, *, exclude_session: Optional[st
     child.update(runtime.published_env())
     result = subprocess.run([sys.executable, str(Path(__file__).with_name('browser_launch.py'))],
                             input=json.dumps({'argv': dock_argv(exe, user_data_dir),
-                                              'exclude_session': exclude_session}).encode(),
-                            env=child, capture_output=True, timeout=20, check=False)
-    try:
-        value = json.loads(result.stdout) if result.returncode == 0 else {}
-    except (ValueError, TypeError):
-        value = {}
-    return admitted_endpoint(value if isinstance(value, dict) else {})
+                                              'exclude_session': exclude_session,
+                                              'timeout': launch_wait_budget(timeout)}).encode(),
+                            env=child, capture_output=True, timeout=timeout, check=False)
+    return launch_result_endpoint(result)
 
 
 def running_instance_cdp_port(user_data_dir: str, *, exclude_session: Optional[str] = None) -> Optional[int]:

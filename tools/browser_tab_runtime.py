@@ -37,9 +37,11 @@ def _close_idle_user_tabs(home, task):
 
 
 def prepare_native_tabs(code: str, task: str, cmd: list, env: dict, *, generation: str = '') -> str:
+    from tools.browser_use_cli import configure_harness_runtime
     home = str(get_hermes_home())
     endpoint = env.get("BU_CDP_WS") or env.get("BU_CDP_URL") or ""
     if not endpoint or (not task and not generation):
+        configure_harness_runtime(env)
         return code
     # Keep credentials in this process only; the durable ledger receives a hash.
     identity = endpoint + '\0' + generation if generation else endpoint
@@ -48,6 +50,7 @@ def prepare_native_tabs(code: str, task: str, cmd: list, env: dict, *, generatio
     # profile and task so a sibling cannot switch its attachment mid-operation.
     name = "hermes-" + hashlib.sha256((home + "\0" + task + "\0" + env.get("BU_NAME", "default") + "\0" + browser).encode()).hexdigest()[:32]
     env["BU_NAME"] = name
+    configure_harness_runtime(env)
     if not task:
         return code
     from tools.bot_desktop import lease

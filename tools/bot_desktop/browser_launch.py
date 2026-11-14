@@ -138,19 +138,18 @@ def _recover_existing_cdp(profile):
                     expected_lock=lock, expected_discovery=discovery)
 
 
-def _wait_ready(profile, process, port, timeout):
-    deadline = time.monotonic() + timeout
+def _wait_ready(profile, process, port, deadline):
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            raise RuntimeError('Native browser exited before CDP admission')
+            raise instance.BrowserStartupError('process_exit')
         try:
             result = _publish(profile, process.pid, port)
             if result.get('state') == 'attachable' and result.get('port') == port:
                 return result
         except (OSError, ValueError, KeyError, IndexError, http.client.HTTPException):
             pass
-        time.sleep(0.1)
-    raise RuntimeError('Native browser did not publish a verified CDP listener')
+        time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+    raise instance.BrowserStartupError('cdp_timeout')
 
 
 @contextlib.contextmanager
@@ -165,7 +164,7 @@ def _fence(profile, timeout):
                 break
             except BlockingIOError:
                 if time.monotonic() >= deadline:
-                    raise RuntimeError('Native browser launch admission is busy') from None
+                    raise instance.BrowserStartupError('admission_busy') from None
                 time.sleep(0.1)
         yield
 
@@ -198,6 +197,7 @@ def ensure(argv, *, exclude_session=None, timeout=15, open_google=False):
         raise ValueError('Native desktop browser requires its absolute profile path')
     profile = Path(profile_value)
     profile.mkdir(mode=0o700, parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout
     with _fence(profile, timeout):
         result = instance.inspect_profile(profile, exclude_session=exclude_session)
         # Human singleton forwarding needs a verified owner, not its agent-only CDP endpoint.
@@ -213,12 +213,14 @@ def ensure(argv, *, exclude_session=None, timeout=15, open_google=False):
         instance.admitted_port(result)  # Agent attachment still refuses blocked/unknown owners.
         if result['state'] in ('attachable', 'owned'):
             return result
+        if time.monotonic() >= deadline:
+            raise instance.BrowserStartupError('admission_busy')
         port = _positive_port()  # executed HERE, in the browser's user/network namespace.
         command = [*argv, '--remote-debugging-address=127.0.0.1', f'--remote-debugging-port={port}',
                    *(['https://accounts.google.com/'] if open_google else [])]
         process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                    stderr=subprocess.DEVNULL, close_fds=True)
-        result = _wait_ready(profile, process, port, timeout)
+        result = _wait_ready(profile, process, port, deadline)
         return {'opened': True} if open_google else result
 
 
@@ -277,8 +279,13 @@ def main():
             result = dock(sys.argv[2:])
         else:
             request = json.load(sys.stdin)
-            result = open_google(request['argv']) if request.get('open_google') is True else ensure(request['argv'], exclude_session=request.get('exclude_session'))
+            result = open_google(request['argv']) if request.get('open_google') is True else ensure(
+                request['argv'], exclude_session=request.get('exclude_session'),
+                timeout=request.get('timeout', 15))
         print(json.dumps(result))
+    except instance.BrowserStartupError as error:
+        print(json.dumps({'startup': error.stage}))
+        raise SystemExit(1)
     except (OSError, ValueError, RuntimeError, KeyError) as error:
         # No argv, endpoint, profile contents or provider data in a tool-visible error.
         state = error.state if isinstance(error, instance.ProfileUnavailable) else 'unknown'

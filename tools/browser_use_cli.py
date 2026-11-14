@@ -5,6 +5,7 @@ instead of default browser tools
 """
 
 import contextlib
+import hashlib
 import importlib
 import importlib.util
 import json
@@ -12,6 +13,7 @@ import logging
 import os
 import re
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -19,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
-from hermes_constants import get_hermes_home
+from hermes_constants import get_hermes_home, hermes_home_key
 from utils import is_truthy_value
 
 logger = logging.getLogger(__name__)
@@ -182,6 +184,39 @@ def _base_subprocess_env() -> dict:
     env["PATH"] = _floor_subprocess_path(env.get("PATH", ""))
     env.setdefault("ANONYMIZED_TELEMETRY", "false")
     return env
+
+
+def configure_harness_runtime(env: dict) -> None:
+    """Keep the harness's AF_UNIX socket short without moving its logs or workspace."""
+    if not hasattr(os, 'geteuid'):
+        return
+    supplied = env.get('BH_RUNTIME_DIR') or env.get('BH_TMP_DIR')
+    if supplied:
+        runtime = Path(supplied).expanduser().resolve()
+    else:
+        home = env.get('BH_HOME') or env.get('BROWSER_HARNESS_HOME')
+        config = Path(env.get('XDG_CONFIG_HOME') or Path.home() / '.config')
+        runtime = (Path(home) if home else config / 'browser-harness').expanduser().resolve() / 'runtime'
+    name = env.get('BU_NAME', 'default')
+    stem = 'bu' if supplied and env.get('BH_RUNTIME_DIR_SHARED') != '1' else 'bu-' + name
+    limit = 103 if sys.platform == 'darwin' else 107
+    if len(os.fsencode(runtime / (stem + '.sock'))) <= limit:
+        return
+
+    base = Path('/tmp').resolve()
+    uid = os.geteuid()
+    metadata = base.stat()
+    if (metadata.st_uid not in (0, uid)
+            or metadata.st_mode & 0o022 and not metadata.st_mode & stat.S_ISVTX):
+        raise OSError('No safe browser harness runtime base')
+    key = hashlib.sha256(os.fsencode(runtime) + b'\0' + name.encode()).hexdigest()[:24]
+    target = base / f'hermes-bh-{uid}-{key}'
+    target.mkdir(mode=0o700, exist_ok=True)
+    metadata = target.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != uid or stat.S_IMODE(metadata.st_mode) != 0o700:
+        raise OSError('Unsafe browser harness runtime directory')
+    env['BH_RUNTIME_DIR'] = str(target)
+    env['BH_RUNTIME_DIR_SHARED'] = '0'
 
 
 def _floor_subprocess_path(path: str) -> str:
@@ -462,6 +497,8 @@ def _resolve_managed_chromium_cdp(env: dict, task_id: Optional[str], session_nam
                                timeout=_get_open_command_timeout(first_open=True))
     cdp = str(((res or {}).get("data") or {}).get("cdpUrl") or "") if (res or {}).get("success") else ""
     if not cdp:
+        if res and res.get('code') == 'browser_startup_failed':
+            return res['error']
         return (f"The local browser could not be started: {(res or {}).get('error') or 'agent-browser returned no CDP endpoint'} "
                 "Run `hermes tools` → Browser Automation to (re)install Chromium, or switch backends.")
     cdp = _reach_sandbox_cdp(cdp)
@@ -701,6 +738,9 @@ def _run_cli_killing_process_group(cmd, code, env, timeout):
 # endpoint leaves later browser_exec calls in the old browser until these are stopped.
 _driven_daemons: set = set()
 _driven_daemons_lock = threading.Lock()
+_DAEMON_ROUTE_KEYS = ('BU_NAME', 'BH_HOME', 'BROWSER_HARNESS_HOME', 'BH_RUNTIME_DIR',
+                      'BH_RUNTIME_DIR_SHARED', 'BH_TMP_DIR', 'BH_TMP_DIR_SHARED',
+                      'BH_CONFIG_DIR', 'XDG_CONFIG_HOME')
 # Route cache key -> whether its last browser_exec ran on the hybrid local sidecar.
 _exec_route_is_sidecar: dict[str, bool] = {}
 # Route cache key -> the note from its real-profile fallback; that route stays on the fallback browser.
@@ -711,16 +751,17 @@ _real_profile_note_delivered: set = set()
 def stop_harness_daemons() -> None:
     """Stop every harness daemon this process drove, through the harness's own identity-checked
     ``--reload``; the next browser_exec respawns one on the endpoint it resolves then."""
+    home = hermes_home_key()
     with _driven_daemons_lock:
-        names = sorted(_driven_daemons)
-        _driven_daemons.clear()
-    cmd = _find_cli() if names else None
+        driven = {(profile, route) for profile, route in _driven_daemons if profile == home}
+        _driven_daemons.difference_update(driven)
+    cmd = _find_cli() if driven else None
     if not cmd:
         return
-    env = _base_subprocess_env()
-    for name in names:
+    env = {key: value for key, value in _base_subprocess_env().items() if key not in _DAEMON_ROUTE_KEYS}
+    for _, route in sorted(driven):
         with contextlib.suppress(OSError, subprocess.SubprocessError):
-            _run_cli_killing_process_group([*cmd, "--reload"], "", {**env, "BU_NAME": name}, 15)
+            _run_cli_killing_process_group([*cmd, "--reload"], "", {**env, **dict(route)}, 15)
 
 
 def _route_exec(env: dict, session: str, task_id: Optional[str], local: bool, local_sidecar: bool,
@@ -805,12 +846,18 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
 
     def dispatch() -> dict[str, Any]:
         nonlocal code
-        if bot_desktop_browser:
-            from tools.browser_tab_runtime import prepare_native_tabs
-            code = prepare_native_tabs(code, str(task_id or ""), cmd, env, generation=generation)
+        try:
+            if bot_desktop_browser:
+                from tools.browser_tab_runtime import prepare_native_tabs
+                code = prepare_native_tabs(code, str(task_id or ""), cmd, env, generation=generation)
+            else:
+                configure_harness_runtime(env)
+        except OSError:
+            return {"error_result": tool_error("The browser harness needs a private runtime directory.")}
         _attach_vault_supervisor(env, task_id)
         with _driven_daemons_lock:
-            _driven_daemons.add(env.get("BU_NAME", "default"))
+            route = tuple((key, env[key]) for key in _DAEMON_ROUTE_KEYS if key in env)
+            _driven_daemons.add((hermes_home_key(), route))
         try:
             return {"proc": _run_cli_killing_process_group(cmd, code, env, timeout)}
         except subprocess.TimeoutExpired:

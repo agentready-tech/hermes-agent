@@ -2,6 +2,7 @@
 import importlib.metadata
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -91,3 +92,46 @@ def test_browser_exec_child_environment(tmp_path, monkeypatch):
     assert child["env"]["BROWSERBASE_API_KEY"] == "browser-key"
     assert child["env"]["KEEP_BROWSER_PROBE"] == "kept"
     assert attached == [("owner", "ws://127.0.0.1:47000/private")]
+@pytest.mark.skipif(not hasattr(os, 'geteuid'), reason='Unix socket path limit')
+def test_long_profile_harness_runtime_binds_real_socket(tmp_path):
+    profile = tmp_path / 'profiles' / ('env_' + 'a' * 32)
+    home = profile / 'cache' / 'browser-harness'
+    env = {**os.environ, 'BH_HOME': str(home), 'BU_NAME': 'hermes-' + 'b' * 32}
+    before = dict(env)
+    bu.configure_harness_runtime(env)
+    runtime = Path(env['BH_RUNTIME_DIR'])
+    try:
+        assert runtime.lstat().st_mode & 0o777 == 0o700
+        assert env['BH_HOME'] == str(home)
+        repeated = dict(before)
+        bu.configure_harness_runtime(repeated)
+        assert repeated['BH_RUNTIME_DIR'] == str(runtime)
+        adjacent = {**before, 'BU_NAME': 'hermes-' + 'c' * 32}
+        bu.configure_harness_runtime(adjacent)
+        try:
+            assert adjacent['BH_RUNTIME_DIR'] != str(runtime)
+        finally:
+            Path(adjacent['BH_RUNTIME_DIR']).rmdir()
+        script = (
+            'import os, socket; from browser_harness import _ipc; '
+            'path=_ipc.sock_addr(os.environ["BU_NAME"]); '
+            'sock=socket.socket(socket.AF_UNIX); sock.bind(path); sock.close(); os.unlink(path)'
+        )
+        subprocess.run([sys.executable, '-c', script], env=env, capture_output=True, check=True, timeout=15)
+    finally:
+        runtime.rmdir()
+
+
+@pytest.mark.skipif(not hasattr(os, 'geteuid'), reason='Unix socket path limit')
+def test_harness_runtime_rejects_replaced_private_directory(tmp_path):
+    env = {'BH_HOME': str(tmp_path / ('a' * 100)), 'BU_NAME': 'fixture'}
+    safe = dict(env)
+    bu.configure_harness_runtime(safe)
+    path = Path(safe['BH_RUNTIME_DIR'])
+    path.rmdir()
+    path.symlink_to(tmp_path, target_is_directory=True)
+    try:
+        with pytest.raises(OSError, match='Unsafe browser harness runtime directory'):
+            bu.configure_harness_runtime(env)
+    finally:
+        path.unlink()

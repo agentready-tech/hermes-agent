@@ -26,6 +26,39 @@ class ProfileUnavailable(RuntimeError):
                          'No second Chrome was started; do not delete profile locks or retry an unsafe action.')
 
 
+class BrowserStartupError(RuntimeError):
+    messages = {
+        'cdp_timeout': 'Chrome did not expose a verified debugging connection before the browser startup deadline.',
+        'process_exit': 'Chrome exited before its debugging connection was ready.',
+        'admission_busy': 'Another browser startup is still in progress.',
+    }
+
+    def __init__(self, stage):
+        self.stage = stage
+        super().__init__(self.messages[stage])
+
+
+def launch_result_endpoint(result):
+    """Decode the native launch helper's bounded status, including failure stages."""
+    try:
+        value = json.loads(result.stdout)
+    except (ValueError, TypeError):
+        value = {}
+    if not isinstance(value, dict):
+        value = {}
+    if result.returncode:
+        stage = value.get('startup')
+        if isinstance(stage, str) and stage in BrowserStartupError.messages:
+            raise BrowserStartupError(stage)
+        raise ProfileUnavailable(value.get('state'))
+    return admitted_endpoint(value)
+
+
+def launch_wait_budget(transport_timeout):
+    # Preserve the native helper's five-second reply margin for normal calls.
+    return transport_timeout - min(5, transport_timeout / 4)
+
+
 def admitted_port(result):
     state = result.get('state')
     if state == 'attachable' and type(result.get('port')) is int and 0 < result['port'] < 65536:

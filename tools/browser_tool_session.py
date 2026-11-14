@@ -11,6 +11,7 @@ import logging
 import os
 import shutil
 import subprocess
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -857,17 +858,22 @@ def _shares_bot_desktop_browser(session_info: dict[str, Any]) -> bool:
     return bool(_bd_runtime.published_env().get("DISPLAY")) or _bd_lease.human_holds()
 
 
-def _bot_desktop_endpoint(session_info: dict[str, Any], *, launch: bool):
+def _bot_desktop_endpoint(session_info: dict[str, Any], *, launch: bool, timeout: float = 20):
     """Admit the owned Chrome, in the namespace where the shared profile and process live."""
     name = session_info['session_name']
     if _browser_in_sandbox():
         from tools.bot_desktop import runtime, sandbox_host
         env = runtime._sandbox_env(create=launch)
-        probe = sandbox_host.ensure_browser_endpoint if launch else sandbox_host.browser_instance_endpoint
-        return probe(env, exclude_session=name) if env else None
+        if env is None:
+            return None
+        if launch:
+            return sandbox_host.ensure_browser_endpoint(env, exclude_session=name, timeout=timeout)
+        return sandbox_host.browser_instance_endpoint(env, exclude_session=name)
     from tools.bot_desktop import browser
-    probe = browser.ensure_instance_endpoint if launch else browser.running_instance_endpoint
-    return probe(str(browser.profile_dir()), exclude_session=name)
+    profile = str(browser.profile_dir())
+    if launch:
+        return browser.ensure_instance_endpoint(profile, exclude_session=name, timeout=timeout)
+    return browser.running_instance_endpoint(profile, exclude_session=name)
 
 
 def _browser_backend_args(session_info: dict[str, Any], engine: str, *, desktop_port=None) -> list[str]:
@@ -914,6 +920,7 @@ def _probe_native_client(task_id, session_info, browser_cmd, engine, timeout, en
 def _shared_browser_handshake(task_id, session_info, browser_cmd, command, engine, timeout):
     """Serialize only admission and daemon handshake, never a page action or wait."""
     from tools.bot_desktop import runtime
+    from tools.bot_desktop.browser_instance import BrowserStartupError
     shared = (not session_info.get('cdp_url') and engine != 'lightpanda' and command != 'close'
               and _shares_bot_desktop_browser(session_info))
     if not shared:
@@ -925,13 +932,20 @@ def _shared_browser_handshake(task_id, session_info, browser_cmd, command, engin
         # This explicit browser request must grant the existing headroom-gated
         # watchdog permit BEFORE native Chrome launch, including after a stop.
         runtime.ensure_started_for_tool()
-        limit = min(timeout, _bt._get_open_command_timeout(first_open=True))
-        endpoint = _bot_desktop_endpoint(session_info, launch=True)
-        bound, args, result = _probe_native_client(task_id, session_info, browser_cmd, engine, limit, endpoint)
+        deadline = time.monotonic() + min(timeout, _bt._get_open_command_timeout(first_open=True))
+
+        def remaining():
+            budget = deadline - time.monotonic()
+            if budget <= 0:
+                raise BrowserStartupError('cdp_timeout')
+            return budget
+
+        endpoint = _bot_desktop_endpoint(session_info, launch=True, timeout=remaining())
+        bound, args, result = _probe_native_client(task_id, session_info, browser_cmd, engine, remaining(), endpoint)
         if endpoint is not None and not result.get('success'):
             current = _bot_desktop_endpoint(bound, launch=False)
             if current is not None and current != endpoint:
-                return _probe_native_client(task_id, session_info, browser_cmd, engine, limit, current)
+                return _probe_native_client(task_id, session_info, browser_cmd, engine, remaining(), current)
     return bound, args, result
 
 
@@ -940,7 +954,7 @@ def _dispatch_browser_command(
     timeout: int, _engine_override: Optional[str],
 ) -> tuple[str, dict[str, Any]]:
     """Admit a local shared browser before dispatching the task's daemon command."""
-    from tools.bot_desktop.browser_instance import ProfileUnavailable
+    from tools.bot_desktop.browser_instance import BrowserStartupError, ProfileUnavailable
     if command != "close" and session_info.get("cdp_url"):
         _cdp._ensure_cdp_supervisor(task_id)
     engine = _engine_override or _cloud._get_browser_engine()
@@ -950,6 +964,9 @@ def _dispatch_browser_command(
     except ProfileUnavailable as error:
         return engine, {'success': False, 'code': 'browser_profile_unavailable',
                         'profileState': error.state, 'error': str(error)}
+    except BrowserStartupError as error:
+        return engine, {'success': False, 'code': 'browser_startup_failed',
+                        'startupStage': error.stage, 'error': str(error)}
     except RuntimeError as error:
         if not str(error).startswith('BROWSER_MEMORY_'):
             raise
