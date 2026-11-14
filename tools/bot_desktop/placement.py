@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 GATEWAY = "gateway"
 TERMINAL = "terminal"
 REFUSED = "refused"
-_STREAM_BACKENDS = ("docker", "kubernetes", "ssh", "singularity")
+_STREAM_BACKENDS = ("docker", "kubernetes", "firecracker", "ssh", "singularity")
 
 
 @dataclass(frozen=True)

@@ -41,11 +41,12 @@ def exec_prefix(env: BaseEnvironment, *, user: Optional[str] = None, interactive
     the caller). ``interactive`` keeps stdin open (``docker exec -i``); ssh and apptainer always do.
     """
     from tools.environments.docker import DockerEnvironment
+    from tools.environments.firecracker import FirecrackerEnvironment
     from tools.environments.kubernetes import KubernetesEnvironment
     from tools.environments.singularity import SingularityEnvironment
     from tools.environments.ssh import SSHEnvironment
 
-    if isinstance(env, KubernetesEnvironment):
+    if isinstance(env, (KubernetesEnvironment, FirecrackerEnvironment)):
         return env.exec_prefix(user=user, interactive=interactive)
     if isinstance(env, DockerEnvironment):
         container = getattr(env, "_container_id", None)
@@ -67,7 +68,9 @@ def exec_prefix(env: BaseEnvironment, *, user: Optional[str] = None, interactive
 
 
 def supports_streams(env: BaseEnvironment) -> bool:
-    return exec_prefix(env, interactive=True) is not None
+    from tools.environments.firecracker import FirecrackerEnvironment
+
+    return isinstance(env, FirecrackerEnvironment) or exec_prefix(env, interactive=True) is not None
 
 
 def remote_argv(prefix: Sequence[str], argv: Sequence[str], *, env: Optional[dict] = None,

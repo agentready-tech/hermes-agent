@@ -651,7 +651,7 @@ def _profile_name() -> str:
     # Managed Kubernetes profiles already have a dedicated sandbox each. Its
     # desktop socket and preferences keep the standalone name after cutover.
     from hermes_runtime.adapters.hermes import enabled
-    if enabled() and placement.resolve().backend == "kubernetes":
+    if enabled() and placement.resolve().backend in ("kubernetes", "firecracker"):
         return "default"
     try:
         from hermes_cli.profiles import get_active_profile_name

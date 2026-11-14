@@ -51,7 +51,7 @@ def terminal_backend_unavailable_reason() -> Optional[str]:
 
 _VERCEL_SANDBOX_DEFAULT_CWD = "/vercel/sandbox"
 _SUPPORTED_VERCEL_RUNTIMES = ("node24", "node22", "python3.13")
-_BUILTIN_BACKENDS = "local, docker, kubernetes, singularity, modal, daytona, vercel_sandbox, ssh"
+_BUILTIN_BACKENDS = "local, docker, kubernetes, firecracker, singularity, modal, daytona, vercel_sandbox, ssh"
 
 # Config -> kwargs shapers, driven by (out_key, config_key, default) tables. The container table's
 # (key, default) literal is intentionally greppable; tools/terminal_tool.py keeps its own for the AST test.
@@ -69,6 +69,7 @@ _CONTAINER_KEYS = (
     ("docker_image_pinned", False), ("docker_container", ""),
     ("kubernetes_namespace", ""), ("kubernetes_pod", "sandbox-0"),
     ("kubernetes_container", "sandbox"), ("kubernetes_persistent", True),
+    ("firecracker_persistent", True),
 )
 _DOCKER_KWARGS = (
     ("volumes", "docker_volumes", []), ("auto_mount_cwd", "docker_mount_cwd_to_workspace", False),
@@ -192,6 +193,11 @@ def _build_kubernetes_env(*, cwd, timeout, cc, probe_only=False, **_):
         cwd=cwd, timeout=timeout, persistent=cc.get("kubernetes_persistent", True), probe_only=probe_only)
 
 
+def _build_firecracker_env(*, cwd, timeout, cc, probe_only=False, **_):
+    from tools.environments.firecracker import FirecrackerEnvironment
+    return FirecrackerEnvironment(cwd, timeout, cc.get("firecracker_persistent", True), probe_only=probe_only)
+
+
 # env_type -> (class getter, takes image, extra kwargs from (cc, resource kwargs)). SDK-backed modules
 # (daytona/vercel) are imported lazily so they are only required when that backend is selected.
 _SANDBOX_ROWS = {
@@ -249,7 +255,8 @@ def _build_plugin_env(*, env_type, image, cwd, timeout, cc, task_id, **_):
 # Built-in backend -> builder. Anything else is looked up in the plugin registry.
 _ENV_BUILDERS = {"local": _build_local_env, "docker": _build_docker_env, "singularity": _build_singularity_env,
                  "modal": _build_modal_env, "daytona": _build_daytona_env, "vercel_sandbox": _build_vercel_env,
-                 "ssh": _build_ssh_env, "kubernetes": _build_kubernetes_env}
+                 "ssh": _build_ssh_env, "kubernetes": _build_kubernetes_env,
+                 "firecracker": _build_firecracker_env}
 
 
 def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
@@ -341,9 +348,19 @@ def _kubernetes_pre(config: dict[str, Any]) -> bool:
     return True
 
 
+def _firecracker_pre(_config: dict[str, Any]) -> bool:
+    from tools.environments.firecracker import EnvironmentConnectionError, generation, profile_socket
+    try:
+        generation(profile_socket(), wake=False)
+    except EnvironmentConnectionError as error:
+        return _reject(str(error))
+    return True
+
+
 _BACKEND_SPECS: dict[str, dict[str, Any]] = {
     "local": {},
     "kubernetes": {"pre": _kubernetes_pre},
+    "firecracker": {"pre": _firecracker_pre},
     "docker": {"binary": (lambda: importlib.import_module("tools.environments.docker").find_docker(), "version",
                           "Docker is not installed — no docker executable in PATH or the usual install locations")},
     "singularity": {"binary": (lambda: shutil.which("apptainer") or shutil.which("singularity"), "--version", None)},
