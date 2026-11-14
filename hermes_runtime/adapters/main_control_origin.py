@@ -19,7 +19,7 @@ def capture_origin(authority, ref, source):
     if Path(authority.profile_id).resolve() != home:
         raise RuntimeStoreError('profile_mismatch')
     runner = authority.runner
-    if source.platform in (Platform.LOCAL, Platform.API_SERVER):
+    if source.platform in (Platform.LOCAL, Platform.API_SERVER) or source.platform.value == 'agentready':
         return {}
     adapter = runner._adapter_for_source(source)
     if adapter is None:

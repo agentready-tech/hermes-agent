@@ -48,15 +48,15 @@ def automation_ref(authority, adapter, source, entry):
     from gateway.session_contract import SessionRef
     from hermes_runtime.adapters.hermes import enabled, managed_home
     from hermes_runtime.adapters.state import resolve_home
-    from hermes_runtime.sessions import HOME_SESSION_ID, HOME_SESSION_KEY
+    from hermes_runtime.sessions import HOME_SESSION_ID, home_session_key
 
     live = authority.sessions.get(HOME_SESSION_ID)
     if (not enabled() or Path(authority.profile_id).resolve() != managed_home()
             or not isinstance(adapter, MainAdapter) or adapter.authority is not authority
-            or live is None or live.route != HOME_SESSION_KEY
+            or live is None or live.route != home_session_key()
             or live.source.to_dict() != source.to_dict()
             or entry.origin is None or entry.origin.to_dict() != source.to_dict()
-            or entry.session_key != HOME_SESSION_KEY or resolve_home(entry.session_id) is None
+            or entry.session_key != live.route or resolve_home(entry.session_id) is None
             or authority.runner._adapter_for_source(source) is not adapter
             or authorize_source(authority.runner, source) is not True):
         raise RuntimeStoreError('permission_denied')
@@ -91,7 +91,7 @@ def bootstrap_main(authority):
     """Bind the existing managed transcript, never create a replacement conversation."""
     from gateway.session import SessionEntry
     from hermes_runtime.adapters.state import current_home_session_id, resolve_home
-    from hermes_runtime.sessions import HOME_SESSION_ID, HOME_SESSION_KEY, HOME_SESSION_TITLE
+    from hermes_runtime.sessions import HOME_SESSION_ID, HOME_SESSION_TITLE, home_session_key
     authority._require_admission_open()
     register_platform()
     target = current_home_session_id()
@@ -99,21 +99,22 @@ def bootstrap_main(authority):
         raise RuntimeStoreError('not_found')
     source = main_source(authority)
     now = datetime.now()
-    candidate = SessionEntry(HOME_SESSION_KEY, target, now, now, origin=source,
+    route = home_session_key()
+    candidate = SessionEntry(route, target, now, now, origin=source,
                              platform=source.platform, display_name=HOME_SESSION_TITLE)
     store = authority.runner.session_store
     with store._lock:
         store._ensure_loaded_locked()
-        entry = store._entries.get(HOME_SESSION_KEY)
+        entry = store._entries.get(route)
         if entry is not None:
             return entry
-        store._entries[HOME_SESSION_KEY] = candidate
+        store._entries[route] = candidate
     try:
         store._save_entries()
     except BaseException:
         with store._lock:
-            if store._entries.get(HOME_SESSION_KEY) is candidate:
-                del store._entries[HOME_SESSION_KEY]
+            if store._entries.get(route) is candidate:
+                del store._entries[route]
         raise
     return candidate
 
@@ -130,8 +131,8 @@ def require_owner(connection):
 def native_head_source(authority, live, payload):
     """An actual messaging head keeps its own authenticated delivery transport."""
     from hermes_runtime.adapters.hermes import enabled
-    from hermes_runtime.sessions import HOME_SESSION_KEY
-    if (enabled() and live.route == HOME_SESSION_KEY and live.source.platform.value == 'agentready'):
+    from hermes_runtime.sessions import home_session_key
+    if (enabled() and live.route == home_session_key() and live.source.platform.value == 'agentready'):
         from gateway.session_envelope import restore_native
         return restore_native(payload, authority.runner).source
     return live.source

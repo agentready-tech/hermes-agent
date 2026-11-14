@@ -15,6 +15,8 @@ def activate_profiles(homes) -> None:
     if _home is not None or (_hosted_homes and _hosted_homes != resolved):
         raise RuntimeError("Managed runtime ownership is already configured")
     _hosted_homes = resolved
+    from hermes_runtime.adapters.main_transport import register_platform
+    register_platform()
 
 
 def activate(home: Path) -> None:

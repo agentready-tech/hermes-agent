@@ -127,3 +127,37 @@ def test_adapter_completion_route_matches_botmode_store(shared_homes, name):
         assert ':agentready:home' not in BasePlatformAdapter._source_session_key(adapter, source)
     finally:
         store.close_all_db_handles()
+
+
+@pytest.mark.asyncio
+async def test_panel_only_main_binds_each_profile_on_recovery(shared_homes, monkeypatch):
+    import hermes_state
+    from gateway.config import GatewayConfig
+    from gateway.run import GatewayRunner, _profile_runtime_scope
+    from gateway.run_runtime import _build_profile_authority
+    from gateway.session_authorities import SessionAuthorities
+    from hermes_runtime.adapters.main_transport import authorize_source
+    from hermes_runtime.adapters.state import ensure_home_session
+
+    root, homes = shared_homes
+    monkeypatch.setattr(hermes_state, 'DEFAULT_DB_PATH', hermes_state._IMPORT_DEFAULT_DB_PATH)
+    runner = GatewayRunner(GatewayConfig(multiplex_profiles=True, sessions_dir=root / 'sessions'))
+    runner._primary_profile_name = 'default'
+    runner.session_authorities = SessionAuthorities(root, multiplexed=True)
+    runner.session_runtime_descriptor = {'instance_id': 'shared-panel-fixture'}
+    try:
+        sources = {}
+        for name, home in homes.items():
+            with _profile_runtime_scope(home):
+                ensure_home_session()
+            authority = await _build_profile_authority(runner, name, home, register=False)
+            live = authority.sessions['agentready_home']
+            assert live.route == 'agent:' + name + ':agentready:home'
+            assert live.source.profile == name
+            sources[name] = live.source
+            with _profile_runtime_scope(home):
+                assert authorize_source(runner, live.source)
+                assert runner.session_store.lookup_by_session_key(live.route).origin == live.source
+        assert sources['alpha'] != sources['bravo']
+    finally:
+        runner.session_store.close_all_db_handles()

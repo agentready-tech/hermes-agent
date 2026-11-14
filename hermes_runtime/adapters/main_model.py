@@ -29,10 +29,10 @@ def selection_revision(user_config):
 
 def apply_selection(runner, source, session_key, revision):
     from hermes_runtime.adapters.hermes import enabled, managed_home
-    from hermes_runtime.sessions import HOME_SESSION_KEY
+    from hermes_runtime.sessions import home_session_key
     from hermes_cli.profiles import profile_matches_home
 
-    own_main = (session_key == HOME_SESSION_KEY and enabled()
+    own_main = (enabled() and session_key == home_session_key()
                 and (not source.profile or profile_matches_home(source.profile, managed_home())))
     if (own_main and isinstance(revision, str) and re.fullmatch(r'[a-f0-9]{32}', revision)
             and _consume_selection(runner.session_store, session_key, revision)):

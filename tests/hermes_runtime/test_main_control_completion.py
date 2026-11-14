@@ -31,11 +31,12 @@ async def control_home(tmp_path, monkeypatch):
     runner = GatewayRunner(GatewayConfig(sessions_dir=home / 'sessions'))
     adapter = runner._instantiate_adapter(Platform.TELEGRAM, PlatformConfig(enabled=True, token='fixture'))
     runner.adapters[Platform.TELEGRAM] = adapter
+    source = adapter.build_source(chat_id='fixture-chat', user_id='9001', chat_type='dm')
+    # This profile has a registered delivery route but no inbound Telegram message.
+    entry = runner.session_store.get_or_create_session(source)
     authority = await initialize_session_authority(runner, profile_id=str(home), instance_id='before')
     runner._wire_adapter_handlers(adapter)
     await adapter.connect()
-    source = adapter.build_source(chat_id='fixture-chat', user_id='9001', chat_type='dm')
-    entry = runner.session_store.get_or_create_session(source)
     connection = AuthorityConnection(authority, SimpleNamespace(write=lambda frame: None), {
         'user_id': 'fixture-panel', 'provider': 'local', 'profile_id': str(home),
         'instance_id': 'before', 'native_bootstrap': True})
