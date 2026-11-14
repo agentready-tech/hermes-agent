@@ -135,3 +135,21 @@ def test_harness_runtime_rejects_replaced_private_directory(tmp_path):
             bu.configure_harness_runtime(env)
     finally:
         path.unlink()
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='Linux container runtime directories')
+def test_harness_runtime_uses_sticky_shm_when_pod_tmp_is_not_sticky(monkeypatch, tmp_path):
+    nonsticky = tmp_path / 'tmp'
+    sticky = tmp_path / 'shm'
+    nonsticky.mkdir()
+    nonsticky.chmod(0o777)
+    sticky.mkdir()
+    sticky.chmod(0o1777)
+    monkeypatch.setattr(bu, '_HARNESS_RUNTIME_BASES', (nonsticky, sticky))
+    env = {'BH_HOME': str(tmp_path / ('a' * 100)), 'BU_NAME': 'hermes-' + 'b' * 32}
+    bu.configure_harness_runtime(env)
+    runtime = Path(env['BH_RUNTIME_DIR'])
+    assert runtime.parent == sticky
+    assert runtime.lstat().st_mode & 0o777 == 0o700
+    assert env['BH_RUNTIME_DIR_SHARED'] == '0'
+    assert not list(nonsticky.iterdir())

@@ -186,6 +186,25 @@ def _base_subprocess_env() -> dict:
     return env
 
 
+_HARNESS_RUNTIME_BASES = ('/tmp', '/dev/shm') if sys.platform == 'linux' else ('/tmp',)
+
+
+def _harness_runtime_base(uid):
+    for candidate in _HARNESS_RUNTIME_BASES:
+        base = Path(candidate).resolve()
+        try:
+            metadata = base.stat()
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid not in (0, uid):
+            continue
+        if metadata.st_mode & 0o022 and not metadata.st_mode & stat.S_ISVTX:
+            continue
+        if os.access(base, os.W_OK | os.X_OK):
+            return base
+    raise OSError('No safe browser harness runtime base')
+
+
 def configure_harness_runtime(env: dict) -> None:
     """Keep the harness's AF_UNIX socket short without moving its logs or workspace."""
     if not hasattr(os, 'geteuid'):
@@ -203,12 +222,9 @@ def configure_harness_runtime(env: dict) -> None:
     if len(os.fsencode(runtime / (stem + '.sock'))) <= limit:
         return
 
-    base = Path('/tmp').resolve()
     uid = os.geteuid()
-    metadata = base.stat()
-    if (metadata.st_uid not in (0, uid)
-            or metadata.st_mode & 0o022 and not metadata.st_mode & stat.S_ISVTX):
-        raise OSError('No safe browser harness runtime base')
+    # Kubernetes emptyDirs may give /tmp mode 0777, without the sticky bit.
+    base = _harness_runtime_base(uid)
     key = hashlib.sha256(os.fsencode(runtime) + b'\0' + name.encode()).hexdigest()[:24]
     target = base / f'hermes-bh-{uid}-{key}'
     target.mkdir(mode=0o700, exist_ok=True)
