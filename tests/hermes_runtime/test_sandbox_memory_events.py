@@ -33,6 +33,27 @@ def test_identical_home_paths_in_different_pods_keep_distinct_stable_owners():
     assert first == bridge.owner_identity(SimpleNamespace(kubernetes_identity={**target, 'uid': 'replacement'}))
 
 
+
+@pytest.mark.parametrize(('profile', 'namespace'), (
+    ('mike', 'agentsee-mike'),
+    ('env_' + 'a' * 32, 'agentsee-a-' + 'a' * 32),
+))
+def test_shared_profile_keeps_its_existing_watchdog_owner(profile, namespace, monkeypatch):
+    from pathlib import Path
+
+    home = Path('/root/.hermes')
+    target = {'namespace': namespace, 'pod': 'sandbox-0', 'container': 'sandbox'}
+    env = SimpleNamespace(kubernetes_identity=target)
+    monkeypatch.setattr(bridge, 'get_hermes_home', lambda: home)
+    original = bridge.owner_identity(env)
+    monkeypatch.setattr(bridge, 'get_hermes_home', lambda: home / 'profiles' / profile)
+    assert bridge.owner_identity(env) == original
+    target['namespace'] = 'agentsee-a-' + 'b' * 32
+    incorrect = bridge.owner_identity(env)
+    monkeypatch.setattr(bridge, 'get_hermes_home', lambda: home)
+    assert bridge.owner_identity(env) != incorrect
+
+
 def test_retry_after_bridge_restart_deduplicates_real_native_inbox(home, monkeypatch):
     from hermes_runtime.adapters.inbox import HomeInbox
     from hermes_state import SessionDB

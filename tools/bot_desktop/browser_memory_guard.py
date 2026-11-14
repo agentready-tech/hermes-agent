@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from pathlib import Path
 
 from hermes_constants import get_hermes_home
 
@@ -33,7 +35,20 @@ def owner_identity(env):
     # binding, but not replaceable Pod/container IDs, so ordinary upgrades retain ownership.
     target = getattr(env, 'kubernetes_identity', {})
     stable = {key: target.get(key) for key in ('namespace', 'pod', 'container')}
-    return hashlib.sha256(json.dumps([str(get_hermes_home().resolve()), stable], sort_keys=True).encode()).hexdigest()
+    home = get_hermes_home().resolve()
+    # These are the exact existing per-employee Kubernetes profiles. Moving
+    # Hermes to the shared host leaves the sandbox and its watchdog state intact.
+    profile = home.name
+    if home.parent == Path('/root/.hermes/profiles') and stable['pod'] == 'sandbox-0' and stable['container'] == 'sandbox':
+        if profile == 'mike':
+            namespace = 'agentsee-mike'
+        elif re.fullmatch(r'env_[a-f0-9]{32}', profile):
+            namespace = 'agentsee-a-' + profile[4:]
+        else:
+            namespace = None
+        if namespace and stable['namespace'] == namespace:
+            home = Path('/root/.hermes')
+    return hashlib.sha256(json.dumps([str(home), stable], sort_keys=True).encode()).hexdigest()
 
 
 def install(env):
