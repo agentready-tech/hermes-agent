@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.15.8",
+  "defaultRuntimeVersion": "2026.11.16.1",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -4351,6 +4351,46 @@
         "productionGreetingTested": false
       },
       "description": "Bind the managed main route to its owning profile transport so new employees greet in Panel."
+    },
+    "2026.11.16.1": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:67c746f561ea52b2d6a845a61944dccae6f6534b3a30850dbac8e02eec5bacb3",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.16.1",
+      "configDigest": "sha256:1f8bde1b27cfb154f2c7866f36d563a747c253ad4fb08ca93f771f14970f026f",
+      "platform": "linux/amd64",
+      "sourceRevision": "30b6368a65b4e8ea25a8339be71488326de31bdf",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:67c746f561ea52b2d6a845a61944dccae6f6534b3a30850dbac8e02eec5bacb3",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.16.1",
+        "digest": "sha256:67c746f561ea52b2d6a845a61944dccae6f6534b3a30850dbac8e02eec5bacb3",
+        "configDigest": "sha256:1f8bde1b27cfb154f2c7866f36d563a747c253ad4fb08ca93f771f14970f026f",
+        "sourceRevision": "30b6368a65b4e8ea25a8339be71488326de31bdf",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 43770358285,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "profileCount": 7,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:5fdd8ca692251a996b3df562378eba6b191421c4c4c23d467d48e6fbd59bd3c9",
+        "deployRunId": 43771390293
+      },
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml",
+      "validation": {
+        "runtimeReady": true,
+        "profileGatewaysReady": 7,
+        "futureDefaultConfigured": true,
+        "introductionLanguagePolicyTested": true,
+        "productionGreetingTested": false
+      },
+      "description": "Introduce new employees in the default conversation language configured in their profiles."
     }
   },
   "supersededRuntimeAttempts": {
