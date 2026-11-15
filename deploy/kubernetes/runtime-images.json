@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.15.7",
+  "defaultRuntimeVersion": "2026.11.15.8",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -4311,6 +4311,46 @@
         "productionGreetingTested": false
       },
       "description": "Connect a managed profile to Panel through its gateway without a standalone dashboard port."
+    },
+    "2026.11.15.8": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:5fdd8ca692251a996b3df562378eba6b191421c4c4c23d467d48e6fbd59bd3c9",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.15.8",
+      "configDigest": "sha256:31f755829900cf61463f304eea376d7da9843db825f1b37cf01ed8aa8b79c0d8",
+      "platform": "linux/amd64",
+      "sourceRevision": "8941dc1587b6a70be4040f4e3a4b8ebb83b322cb",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:5fdd8ca692251a996b3df562378eba6b191421c4c4c23d467d48e6fbd59bd3c9",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.15.8",
+        "digest": "sha256:5fdd8ca692251a996b3df562378eba6b191421c4c4c23d467d48e6fbd59bd3c9",
+        "configDigest": "sha256:31f755829900cf61463f304eea376d7da9843db825f1b37cf01ed8aa8b79c0d8",
+        "sourceRevision": "8941dc1587b6a70be4040f4e3a4b8ebb83b322cb",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 43760175972,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "profileCount": 6,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:688f1b6f46689dd4c931f3ee42714754af2830a61ea91d0c921279b98eb54245",
+        "deployRunId": 43761022006
+      },
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml",
+      "validation": {
+        "runtimeReady": true,
+        "profileGatewaysReady": 6,
+        "futureDefaultConfigured": true,
+        "isolatedGreetingRoundTrip": true,
+        "productionGreetingTested": false
+      },
+      "description": "Bind the managed main route to its owning profile transport so new employees greet in Panel."
     }
   },
   "supersededRuntimeAttempts": {
