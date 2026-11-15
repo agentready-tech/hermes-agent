@@ -49,6 +49,43 @@ def test_chat_reverse_channel_preserves_native_rpc_and_observer_feed():
     asyncio.run(exercise())
 
 
+def test_new_employee_admits_one_hidden_introduction_without_a_viewer(monkeypatch, tmp_path):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from hermes_cli import gateway_client, gateway_runtime
+    from hermes_runtime.standalone.panel_chat import introduce_employee
+
+    client = SimpleNamespace(rpc=AsyncMock(side_effect=[{}, OSError("lost ACK"), {}, {}]))
+    endpoint = object()
+    monkeypatch.setattr(gateway_runtime, "discover_gateway_endpoint",
+                        lambda home: SimpleNamespace(state="ready", endpoint=endpoint))
+
+    @asynccontextmanager
+    async def connect(target):
+        assert target is endpoint
+        yield client
+
+    monkeypatch.setattr(gateway_client, "connect_gateway", connect)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    panel = {"environment_id": "env_fixture"}
+    asyncio.run(introduce_employee(tmp_path, panel))
+    client.rpc.assert_not_awaited()
+
+    panel["introduction_locale"] = "ru"
+    asyncio.run(introduce_employee(tmp_path, panel))
+    asyncio.run(introduce_employee(tmp_path, panel))
+    resume, submit, retry_resume, retry_submit = client.rpc.await_args_list
+    assert (retry_resume, retry_submit) == (resume, submit)
+    assert resume.args == ("session.resume",)
+    assert submit.args == ("prompt.submit",)
+    assert submit.kwargs["session_id"] == resume.kwargs["session_id"] == "agentready_home"
+    assert submit.kwargs["submission_id"] == "agentsee-introduction:env_fixture"
+    assert submit.kwargs["display_kind"] == "hidden"
+    assert "in Russian" in submit.kwargs["text"]
+
+
 @pytest.mark.parametrize("dashboard", [True, False])
 @pytest.mark.parametrize("backend", ["kubernetes", "firecracker"])
 def test_panel_worker_binds_its_home_before_choosing_chat_transport(monkeypatch, tmp_path, dashboard, backend):

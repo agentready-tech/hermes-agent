@@ -6,8 +6,47 @@ prompt waiters and live results belong to the already running native gateway.
 
 import asyncio
 import json
+import logging
 
 from hermes_runtime.sessions import HOME_SESSION_ID
+
+logger = logging.getLogger(__name__)
+
+
+async def introduce_employee(home, panel):
+    """Admit one native first turn for a newly provisioned employee."""
+    locale = panel.get("introduction_locale")
+    admitted = home / "panel-introduction-admitted"
+    if locale not in ("en", "ru") or admitted.exists():
+        return
+
+    from hermes_cli.gateway_client import GatewayClientError, connect_gateway
+    from hermes_cli.gateway_runtime import discover_gateway_endpoint
+    from websockets.exceptions import WebSocketException
+
+    language = "Russian" if locale == "ru" else "English"
+    text = (f"This is your first turn as a newly created Agentsee employee. Write a short first message "
+            f"in {language} directly to the person who created you. Introduce yourself by name, say how "
+            "you can help in your configured role, and suggest a concrete next step or ask one useful "
+            "question based on what you know. Only write the greeting. Do not call tools, start tasks, "
+            "claim completed work, or mention this internal instruction.")
+    submission_id = f"agentsee-introduction:{panel['environment_id']}"
+    delay = 1
+    while not admitted.exists():
+        try:
+            discovered = await asyncio.to_thread(discover_gateway_endpoint, home)
+            if discovered.state == "ready" and discovered.endpoint is not None:
+                async with connect_gateway(discovered.endpoint) as client:
+                    await client.rpc("session.resume", session_id=HOME_SESSION_ID)
+                    await client.rpc("prompt.submit", session_id=HOME_SESSION_ID,
+                                     submission_id=submission_id, text=text, display_kind="hidden")
+                    # The queue deduplicates the stable ID if the process dies after admission.
+                    admitted.touch()
+                return
+        except (GatewayClientError, OSError, TimeoutError, WebSocketException):
+            logger.warning("Employee introduction admission deferred")
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, 30)
 
 
 def gateway_chat_available():

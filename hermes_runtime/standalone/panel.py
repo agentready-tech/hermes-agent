@@ -304,17 +304,23 @@ async def _worker(home):
     google_auth = GatewayPanelAuth(home)
     from hermes_runtime.standalone.panel_skills import SkillsRead
     skills = SkillsRead(home, GatewayPanelAuth(home))
-    delay = 1
-    while True:
-        try:
-            await connection(panel, config["port"], credential, auth, subscriptions, google_auth, skills)
-            delay = 1
-        except (OSError, ValueError):
-            logger.warning("Panel unavailable; the agent and its desktop continue locally")
-        except (WebSocketException, TimeoutError):
-            logger.warning("Panel connection ended; reconnecting without restarting the agent")
-        await asyncio.sleep(delay)
-        delay = min(delay * 2, 30)
+    from hermes_runtime.standalone.panel_chat import introduce_employee
+    introduction = asyncio.create_task(introduce_employee(home, panel))
+    try:
+        delay = 1
+        while True:
+            try:
+                await connection(panel, config["port"], credential, auth, subscriptions, google_auth, skills)
+                delay = 1
+            except (OSError, ValueError):
+                logger.warning("Panel unavailable; the agent and its desktop continue locally")
+            except (WebSocketException, TimeoutError):
+                logger.warning("Panel connection ended; reconnecting without restarting the agent")
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 30)
+    finally:
+        introduction.cancel()
+        await asyncio.gather(introduction, return_exceptions=True)
 
 
 async def worker(home):
