@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.15.6",
+  "defaultRuntimeVersion": "2026.11.15.7",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -4271,6 +4271,46 @@
         "productionGreetingTested": false
       },
       "description": "AgentSee Hermes admits one introductory message for a newly provisioned profile."
+    },
+    "2026.11.15.7": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:688f1b6f46689dd4c931f3ee42714754af2830a61ea91d0c921279b98eb54245",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.15.7",
+      "configDigest": "sha256:59956644d6c7a9554a53ff2d5912b2220680d0f35d9b2ad200539191a1ba008e",
+      "platform": "linux/amd64",
+      "sourceRevision": "cf71826cd18b779ed8d5c9412f8750caeb969a36",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:688f1b6f46689dd4c931f3ee42714754af2830a61ea91d0c921279b98eb54245",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.15.7",
+        "digest": "sha256:688f1b6f46689dd4c931f3ee42714754af2830a61ea91d0c921279b98eb54245",
+        "configDigest": "sha256:59956644d6c7a9554a53ff2d5912b2220680d0f35d9b2ad200539191a1ba008e",
+        "sourceRevision": "cf71826cd18b779ed8d5c9412f8750caeb969a36",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 43757313965,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "profileCount": 6,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:38cf8922394dae5945526fa2565e1030959727ca0b778d46c5ab087034d91d32",
+        "deployRunId": 43758510760
+      },
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml",
+      "validation": {
+        "runtimeReady": true,
+        "profileGatewaysReady": 6,
+        "futureDefaultConfigured": true,
+        "productionChatConnected": true,
+        "productionGreetingTested": false
+      },
+      "description": "Connect a managed profile to Panel through its gateway without a standalone dashboard port."
     }
   },
   "supersededRuntimeAttempts": {
