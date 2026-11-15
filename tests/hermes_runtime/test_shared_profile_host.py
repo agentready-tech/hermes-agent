@@ -171,6 +171,79 @@ async def test_panel_only_main_binds_each_profile_on_recovery(shared_homes, monk
 
 
 @pytest.mark.asyncio
+async def test_new_shared_employee_introduces_itself_once_before_panel_opens(shared_homes, monkeypatch):
+    import asyncio
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    import hermes_state
+    from gateway.config import GatewayConfig
+    from gateway.response_filters import display_kind_for_event
+    from gateway.run import GatewayRunner, _profile_runtime_scope
+    from gateway.run_runtime import _build_profile_authority
+    from gateway.session_authorities import SessionAuthorities
+    from gateway.session_controls import AuthorityConnection
+    from hermes_cli import gateway_client, gateway_runtime
+    from hermes_constants import get_hermes_home
+    from hermes_runtime.sessions import HOME_SESSION_ID
+    from hermes_runtime.standalone.panel_chat import MainChat, introduce_employee
+    from hermes_state_runtime import list_session_admissions
+
+    root, homes = shared_homes
+    home = homes['alpha']
+    monkeypatch.setattr(hermes_state, 'DEFAULT_DB_PATH', hermes_state._IMPORT_DEFAULT_DB_PATH)
+    runner = GatewayRunner(GatewayConfig(multiplex_profiles=True, sessions_dir=root / 'sessions'))
+    runner._primary_profile_name = 'default'
+    runner.session_authorities = SessionAuthorities(root, multiplexed=True)
+    runner.session_runtime_descriptor = {'instance_id': 'shared-panel-fixture'}
+    authority = await _build_profile_authority(runner, 'alpha', home, register=False)
+    connection = AuthorityConnection(authority, SimpleNamespace(write=lambda _frame: True), {
+        'user_id': 'fixture-panel', 'provider': 'local', 'profile_id': str(home),
+        'instance_id': authority.instance_id, 'native_bootstrap': True})
+    endpoint = object()
+    monkeypatch.setattr(gateway_runtime, 'discover_gateway_endpoint',
+                        lambda _: SimpleNamespace(state='ready', endpoint=endpoint))
+
+    async def rpc(method, **params):
+        response = await connection.dispatch({'id': 1, 'method': method, 'params': params})
+        assert 'error' not in response, response
+        return response['result']
+
+    @asynccontextmanager
+    async def connect(target):
+        assert target is endpoint
+        yield SimpleNamespace(rpc=rpc)
+
+    greeting = 'Hello, I can help you get started.'
+
+    async def answer(event, _source, _route, _generation):
+        assert get_hermes_home() == home
+        assert 'your first turn' in event.text
+        authority.db.append_message(HOME_SESSION_ID, 'user', event.text, display_kind=display_kind_for_event(event))
+        authority.db.append_message(HOME_SESSION_ID, 'assistant', greeting)
+        return greeting
+
+    monkeypatch.setattr(gateway_client, 'connect_gateway', connect)
+    monkeypatch.setattr(runner, '_handle_message_with_agent', answer)
+    panel = {'environment_id': 'env_fixture', 'introduction_locale': 'en'}
+    try:
+        with _profile_runtime_scope(home):
+            await introduce_employee(home, panel)
+            await asyncio.wait_for(authority.sessions[HOME_SESSION_ID].task, timeout=5)
+            # Replay the same admission after losing the connector's local receipt.
+            (home / 'panel-introduction-admitted').unlink()
+            await introduce_employee(home, panel)
+            rows = list_session_admissions(authority.db, session_id=HOME_SESSION_ID, pending_only=False)
+            assert [(row['request_id'], row['outcome']) for row in rows] == [
+                ('agentsee-introduction:env_fixture', 'completed')]
+            snapshot = await MainChat(SimpleNamespace(rpc=rpc)).snapshot()
+            assert [(row['role'], row['text']) for row in snapshot['messages']] == [('assistant', greeting)]
+    finally:
+        await connection.close()
+        runner.session_store.close_all_db_handles()
+
+
+@pytest.mark.asyncio
 async def test_shared_gateway_polls_only_enabled_mail_and_admits_to_own_profile(shared_homes, monkeypatch):
     import base64
     import json

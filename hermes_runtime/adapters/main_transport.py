@@ -2,6 +2,7 @@
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from weakref import ref
 
 from gateway.session_local import LocalSessionAdapter
 from hermes_state_runtime import RuntimeStoreError
@@ -77,6 +78,8 @@ def bind_main(authority, entry):
     if not isinstance(adapter, MainAdapter) or adapter.authority is not authority:
         raise RuntimeStoreError('runtime_draining')
     adapter.register_source(entry.origin)
+    # Preserve the owning transport when the native ingress resolves the restored source.
+    entry.origin._transport_adapter_ref = ref(adapter)
 
 
 def main_source(authority):
