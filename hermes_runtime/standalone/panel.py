@@ -291,8 +291,9 @@ async def _worker(home):
         from tools.bot_desktop import placement
         if placement.resolve().backend != "firecracker":
             await asyncio.to_thread(start_desktop)
+    port = config["port"] if with_dashboard else None
     if with_dashboard:
-        auth = NativeScreenAuth(config["port"], dashboard_token,
+        auth = NativeScreenAuth(port, dashboard_token,
             username=get_secret("HERMES_DASHBOARD_BASIC_AUTH_USERNAME"),
             password=get_secret("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"))
     else:
@@ -310,7 +311,7 @@ async def _worker(home):
         delay = 1
         while True:
             try:
-                await connection(panel, config["port"], credential, auth, subscriptions, google_auth, skills)
+                await connection(panel, port, credential, auth, subscriptions, google_auth, skills)
                 delay = 1
             except (OSError, ValueError):
                 logger.warning("Panel unavailable; the agent and its desktop continue locally")

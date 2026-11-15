@@ -92,18 +92,20 @@ def test_panel_worker_binds_its_home_before_choosing_chat_transport(monkeypatch,
     from hermes_runtime.adapters import hermes, state
     from hermes_runtime.standalone import computer, panel, config
     from tools.bot_desktop import placement
-    import agent.secret_scope
     desktop_starts = []
     monkeypatch.setattr(computer, "start_desktop", lambda: desktop_starts.append(backend))
     monkeypatch.setattr(placement, "resolve", lambda: placement.Placement(placement.TERMINAL, backend))
     monkeypatch.setattr(hermes, "_home", None)
     monkeypatch.setattr(config, "settings", lambda home: {
-        "dashboard": {"enabled": dashboard}, "port": 1, "computer": {"enabled": True},
+        "dashboard": {"enabled": dashboard}, **({"port": 1} if dashboard else {}),
+        "computer": {"enabled": True},
         "panel": {"url": "https://panel.invalid", "environment_id": "env_fixture"}})
-    monkeypatch.setattr(agent.secret_scope, "get_secret", lambda name: "fixture-credential")
+    monkeypatch.setenv("HERMES_PANEL_CREDENTIAL", "fixture-credential")
+    monkeypatch.setenv("HERMES_DASHBOARD_SESSION_TOKEN", "fixture-token")
     monkeypatch.setattr(state, "main_gateway_origin", lambda: {"session_key": "agent:main:agentready:home"})
 
     async def connected(settings, port, credential, auth, subscriptions, google_auth, skills):
+        assert port == (1 if dashboard else None)
         assert skills.home == tmp_path.resolve() and skills.auth.gateway_owned
         assert google_auth.home == tmp_path.resolve() and google_auth.gateway_owned
         from hermes_runtime.standalone.panel_chat import gateway_chat_available
