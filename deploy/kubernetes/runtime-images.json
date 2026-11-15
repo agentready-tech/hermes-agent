@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.14.5",
+  "defaultRuntimeVersion": "2026.11.15.6",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -4232,6 +4232,45 @@
         "futureDefaultConfigured": true
       },
       "description": "Bind desktop RFB execution and accepted Panel messages to their owning profile."
+    },
+    "2026.11.15.6": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:38cf8922394dae5945526fa2565e1030959727ca0b778d46c5ab087034d91d32",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.15.6",
+      "configDigest": "sha256:cd3a3610f1593792506a9542d1f018e56e0a7987a32a0d72b57d527efe7134f5",
+      "platform": "linux/amd64",
+      "sourceRevision": "c052792e622ccd413d4393f667d916c01a960648",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:38cf8922394dae5945526fa2565e1030959727ca0b778d46c5ab087034d91d32",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.15.6",
+        "digest": "sha256:38cf8922394dae5945526fa2565e1030959727ca0b778d46c5ab087034d91d32",
+        "configDigest": "sha256:cd3a3610f1593792506a9542d1f018e56e0a7987a32a0d72b57d527efe7134f5",
+        "sourceRevision": "c052792e622ccd413d4393f667d916c01a960648",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 43754699056,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "profileCount": 5,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:ab2625925a223adde8fee1ffeb7a836bb8199a5b9d0158e562e6538cf62bcdbe",
+        "deployRunId": 43755731977
+      },
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml",
+      "validation": {
+        "runtimeReady": true,
+        "profileGatewaysReady": 5,
+        "futureDefaultConfigured": true,
+        "productionGreetingTested": false
+      },
+      "description": "AgentSee Hermes admits one introductory message for a newly provisioned profile."
     }
   },
   "supersededRuntimeAttempts": {
