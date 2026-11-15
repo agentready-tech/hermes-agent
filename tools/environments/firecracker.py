@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 SOCKET_ROOT = Path("/run/agentsee-firecracker")
 CLIENT = Path(__file__).with_name("firecracker_client.py")
 GENERATION = re.compile(r"[a-f0-9]{32}\Z")
+NEW_PROFILE_SOCKET = re.compile(r"(env_[a-f0-9]{32})\.sock\Z")
 GUEST_EXEC_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
@@ -32,20 +33,34 @@ def profile_socket() -> Path:
     return SOCKET_ROOT / f"{home.name}.sock"
 
 
-def _request(path: Path, operation: str, *, timeout: float = 2, **payload) -> dict:
+def _request(path: Path, operation: str | None, *, timeout: float = 2, **payload) -> dict:
     from tools.environments.firecracker_client import exchange
 
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(timeout)
             connection.connect(str(path))
-            return exchange(connection, {"operation": operation, **payload})
+            return exchange(connection, {"operation": operation, **payload} if operation else payload)
     except (OSError, EOFError, ValueError) as error:
         raise EnvironmentConnectionError("The profile's Firecracker worker is unavailable") from error
 
 
 def generation(path: Path, *, wake: bool) -> str | None:
-    state = _request(path, "ensure" if wake else "status", timeout=25 if wake else 2)
+    try:
+        state = _request(path, "ensure" if wake else "status", timeout=25 if wake else 2)
+    except EnvironmentConnectionError as error:
+        if not isinstance(error.__cause__, FileNotFoundError):
+            raise
+        if not wake:
+            return None
+        profile = NEW_PROFILE_SOCKET.fullmatch(path.name)
+        if path.parent != SOCKET_ROOT or profile is None:
+            raise
+        try:
+            _request(SOCKET_ROOT / "bootstrap.sock", None, timeout=60, profile=profile[1])
+        except EnvironmentConnectionError as bootstrap_error:
+            raise EnvironmentConnectionError("Firecracker could not prepare this profile on its worker") from bootstrap_error
+        state = _request(path, "ensure", timeout=25)
     try:
         value = state["generation"]
         if value is None and not wake:
@@ -58,7 +73,12 @@ def generation(path: Path, *, wake: bool) -> str | None:
 
 
 def watchdog_events() -> list[dict]:
-    result = _request(profile_socket(), "watchdog-events").get("events")
+    try:
+        result = _request(profile_socket(), "watchdog-events").get("events")
+    except EnvironmentConnectionError as error:
+        if isinstance(error.__cause__, FileNotFoundError):
+            return []
+        raise
     if not isinstance(result, list) or not all(isinstance(item, dict) for item in result):
         raise EnvironmentConnectionError("Invalid Firecracker watchdog receipt response")
     return result

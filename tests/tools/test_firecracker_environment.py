@@ -19,6 +19,56 @@ from tools.environments.firecracker_client import HEADER
 from tools.terminal_tool_backends import _create_environment
 
 
+def test_only_explicit_first_use_bootstraps_new_profile(monkeypatch, tmp_path):
+    calls = []
+    path = tmp_path / ("env_" + "1" * 32 + ".sock")
+    missing = firecracker.EnvironmentConnectionError("Missing worker")
+    missing.__cause__ = FileNotFoundError()
+
+    def request(target, operation, *, timeout=2, **payload):
+        calls.append((target, operation, payload))
+        if operation is None:
+            return {"ok": True}
+        if not any(entry[1] is None for entry in calls):
+            raise missing
+        return {"generation": "a" * 32}
+
+    monkeypatch.setattr(firecracker, "SOCKET_ROOT", tmp_path)
+    monkeypatch.setattr(firecracker, "profile_socket", lambda: path)
+    monkeypatch.setattr(firecracker, "_request", request)
+    assert firecracker.generation(path, wake=False) is None
+    assert firecracker.watchdog_events() == []
+    with pytest.raises(firecracker.EnvironmentConnectionError):
+        firecracker.acknowledge_watchdog_event("a" * 32)
+    assert firecracker.generation(path, wake=True) == "a" * 32
+    assert firecracker.generation(path, wake=True) == "a" * 32
+    assert [entry[1] for entry in calls] == ["status", "watchdog-events", "watchdog-ack", "ensure", None, "ensure", "ensure"]
+    assert calls[4] == (tmp_path / "bootstrap.sock", None, {"profile": path.stem})
+
+
+@pytest.mark.parametrize("name", ["mike.sock", "unexpected.sock"])
+def test_missing_legacy_socket_cannot_bootstrap(monkeypatch, tmp_path, name):
+    monkeypatch.setattr(firecracker, "SOCKET_ROOT", tmp_path)
+    with pytest.raises(firecracker.EnvironmentConnectionError, match="worker is unavailable"):
+        firecracker.generation(tmp_path / name, wake=True)
+
+
+def test_bootstrap_error_is_visible_and_worker_ensure_is_not_retried(monkeypatch, tmp_path):
+    events = []
+
+    def reject(_, operation, **payload):
+        events.append(operation)
+        if operation == "ensure":
+            raise firecracker.EnvironmentConnectionError("worker unavailable") from FileNotFoundError()
+        raise firecracker.EnvironmentConnectionError("worker unavailable") from ValueError("rejected")
+
+    monkeypatch.setattr(firecracker, "SOCKET_ROOT", tmp_path)
+    monkeypatch.setattr(firecracker, "_request", reject)
+    with pytest.raises(firecracker.EnvironmentConnectionError, match="could not prepare this profile"):
+        firecracker.generation(tmp_path / ("env_" + "1" * 32 + ".sock"), wake=True)
+    assert events == ["ensure", None]
+
+
 def test_opt_in_backend_shares_transport_with_desktop(monkeypatch, tmp_path):
     calls = []
     state = {"generation": "a" * 32}

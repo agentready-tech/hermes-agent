@@ -5,6 +5,7 @@ FROM docker:28.5.1-dind@sha256:ea9d20492ca1caaaba78e68453433895d256173c79281756e
 FROM ${HERMES_SOURCE_IMAGE}
 ARG HERMES_GIT_SHA
 ARG AGENTSEE_RELEASE_VERSION
+ARG AGENTSEE_RUNTIME_CAPABILITIES=auxiliary-gateway-v1,workspace-inbox-v1,subscriptions-v1,agent-sandbox-v1
 USER root
 WORKDIR /opt/hermes
 RUN /opt/hermes/.venv/bin/python deploy/kubernetes/release_source.py verify /opt/hermes
@@ -21,11 +22,11 @@ RUN mkdir -p plugins/model-providers/claude-subscription-directsdk-experimental 
     && claude --version \
     && /opt/hermes/.venv/bin/python deploy/kubernetes/release_source.py record-plugin /opt/hermes \
     && /opt/hermes/.venv/bin/python deploy/kubernetes/release_source.py verify /opt/hermes
-RUN /opt/hermes/.venv/bin/python -c 'import json,os; from pathlib import Path; p=Path("/etc/hermes/image-provenance.json"); v=json.loads(p.read_text()); v.update(image="agentready-tech/hermes-agent", revision=os.environ["HERMES_GIT_SHA"], version=os.environ["AGENTSEE_RELEASE_VERSION"]); p.write_text(json.dumps(v)+"\n"); p.chmod(0o444)'
+RUN /opt/hermes/.venv/bin/python -c 'import json,os; from pathlib import Path; p=Path("/etc/hermes/image-provenance.json"); v=json.loads(p.read_text()); v.update(image="agentready-tech/hermes-agent", revision=os.environ["HERMES_GIT_SHA"], version=os.environ["AGENTSEE_RELEASE_VERSION"], capabilities=os.environ["AGENTSEE_RUNTIME_CAPABILITIES"].split(",")); p.write_text(json.dumps(v)+"\n"); p.chmod(0o444)'
 LABEL org.opencontainers.image.source="https://github.com/agentready-tech/hermes-agent" \
       org.opencontainers.image.revision="${HERMES_GIT_SHA}" \
       org.opencontainers.image.version="${AGENTSEE_RELEASE_VERSION}" \
       io.agentsee.runtime.policy="common" \
       io.agentsee.runtime.source="clean-git-archive" \
-      io.agentsee.runtime.capabilities="auxiliary-gateway-v1,workspace-inbox-v1,subscriptions-v1,agent-sandbox-v1"
+      io.agentsee.runtime.capabilities="${AGENTSEE_RUNTIME_CAPABILITIES}"
 CMD ["hermes-autonomous", "run", "--host", "0.0.0.0"]
