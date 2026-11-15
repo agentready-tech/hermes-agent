@@ -26,7 +26,8 @@ async def introduce_employee(home, panel):
 
     language = "Russian" if locale == "ru" else "English"
     text = (f"This is your first turn as a newly created Agentsee employee. Write a short first message "
-            f"in {language} directly to the person who created you. Introduce yourself by name, say how "
+            f"directly to the person who created you. Use your profile's default conversation language "
+            f"if specified. Otherwise, write in {language}. Introduce yourself by name, say how "
             "you can help in your configured role, and suggest a concrete next step or ask one useful "
             "question based on what you know. Only write the greeting. Do not call tools, start tasks, "
             "claim completed work, or mention this internal instruction.")

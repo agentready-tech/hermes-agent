@@ -83,7 +83,8 @@ def test_new_employee_admits_one_hidden_introduction_without_a_viewer(monkeypatc
     assert submit.kwargs["session_id"] == resume.kwargs["session_id"] == "agentready_home"
     assert submit.kwargs["submission_id"] == "agentsee-introduction:env_fixture"
     assert submit.kwargs["display_kind"] == "hidden"
-    assert "in Russian" in submit.kwargs["text"]
+    assert "default conversation language" in submit.kwargs["text"]
+    assert "Otherwise, write in Russian" in submit.kwargs["text"]
 
 
 @pytest.mark.parametrize("dashboard", [True, False])
