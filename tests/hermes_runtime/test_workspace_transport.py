@@ -22,11 +22,23 @@ def test_missing_or_local_sandbox_refuses_before_any_host_process(monkeypatch, t
         sandbox_request(home(tmp_path), "sandbox_mail", {"operation": "search"})
 
 
-def test_sandbox_receives_credentials_only_on_protected_stdin(monkeypatch, tmp_path):
-    env = object()
+@pytest.mark.parametrize("firecracker", [False, True])
+def test_sandbox_receives_credentials_only_on_protected_stdin(monkeypatch, tmp_path, firecracker):
+    from tools.environments.firecracker import FirecrackerEnvironment
+
+    env = object.__new__(FirecrackerEnvironment) if firecracker else object()
     seen = []
     monkeypatch.setattr("tools.terminal_tool.ensure_task_env", lambda *_: env)
-    monkeypatch.setattr("tools.environments.streams.remote_command", lambda selected, argv, **kwargs: ["synthetic-native-exec", *argv] if selected is env else None)
+    def remote_command(selected, argv, *, user, interactive):
+        assert selected is env and interactive
+        if firecracker:
+            assert user is None
+            assert argv[:5] == ["/usr/sbin/runuser", "-u", "nobody", "--", "python3"]
+        else:
+            assert user == "nobody" and argv[0] == "python3"
+        return ["synthetic-native-exec", *argv]
+
+    monkeypatch.setattr("tools.environments.streams.remote_command", remote_command)
     monkeypatch.setattr("tools.environments.streams.client_environment", lambda: {"PATH": "/synthetic/client"})
     def execute(command, **kwargs):
         seen.append((command, kwargs))

@@ -51,13 +51,20 @@ def program_argv(program, executable):
 
 def sandbox_request(home, program, request):
     from tools.environments import streams
+    from tools.environments.firecracker import FirecrackerEnvironment
     from tools.terminal_tool import ensure_task_env
     argv = program_argv(program, "python3")
     with profile_scope(home):
         env = ensure_task_env("agentready_home")
         if env is None:
             raise WorkspaceError("INVALID_MAIL_SANDBOX_UNAVAILABLE")
-        command = streams.remote_command(env, argv, user="nobody", interactive=True)
+        user = "nobody"
+        if isinstance(env, FirecrackerEnvironment):
+            # The guest RPC exposes only its default and desktop accounts.
+            # Drop privileges in the guest before Python can read the request.
+            argv = ["/usr/sbin/runuser", "-u", user, "--", *argv]
+            user = None
+        command = streams.remote_command(env, argv, user=user, interactive=True)
         if command is None:
             raise WorkspaceError("INVALID_MAIL_SANDBOX_UNAVAILABLE")
         return run_request(command, streams.client_environment(), program, request,
