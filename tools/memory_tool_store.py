@@ -536,12 +536,12 @@ class MemoryStore:
         working[idx:idx + 1] = [patched]
         return None, previous_content, "none", patched
 
-    def apply_batch(self, target: str, operations: list[dict[str, Any]]) -> dict[str, Any]:
+    def apply_batch(self, target: str, operations: list[dict[str, Any]], *, exact_removes: bool = False) -> dict[str, Any]:
         """Apply add/replace/remove ops atomically against the FINAL budget, so one call
         can free space and add entries. All-or-nothing: any malformed / unmatched op or
         an over-limit result writes NOTHING and returns the first failure. Aborts do not
         echo ``current_entries`` — the store is unchanged and the model already has it."""
-        return self._batch(target, operations, commit=True)
+        return self._batch(target, operations, commit=True, exact_removes=exact_removes)
 
     def resolve_batch_entries(self, target: str, operations: list[dict[str, Any]]) -> dict[str, Any]:
         """Dry-run ``apply_batch`` under the lock without persisting: the same content scan,
@@ -550,7 +550,8 @@ class MemoryStore:
         entry its replace/remove selects now (None for add), in batch order."""
         return self._batch(target, operations, commit=False)
 
-    def _batch(self, target: str, operations: list[dict[str, Any]], *, commit: bool) -> dict[str, Any]:
+    def _batch(self, target: str, operations: list[dict[str, Any]], *, commit: bool,
+               exact_removes: bool = False) -> dict[str, Any]:
         from tools.memory_tool import _memory_target_error
         if target_error := _memory_target_error(self, target, operations):
             return target_error
@@ -559,7 +560,8 @@ class MemoryStore:
         ops = [op or {} for op in operations]
         # Scan every add/replace content BEFORE touching disk -- one poisoned op rejects the batch.
         for i, op in enumerate(ops):
-            scan_error = op.get("action") in {"add", "replace"} and op.get("content") and _scan_memory_content(op["content"])
+            content = op.get("content") or op.get("new_text")
+            scan_error = op.get("action") in {"add", "replace"} and content and _scan_memory_content(content)
             if scan_error:
                 return _error(f"Operation {i + 1}: {scan_error}", "scan_blocked")
 
@@ -572,9 +574,20 @@ class MemoryStore:
                 content, old_text = op.get("content") or op.get("new_text") or "", op.get("old_text") or ""
                 if act != "patch":  # whole-entry actions; a patch span keeps its whitespace
                     content, old_text = content.strip(), old_text.strip()
+                matched_entry = op.get("matched_entry")
+                if exact_removes:
+                    # A review's tool arguments are not an approval receipt. Find the named
+                    # entry in this same locked working snapshot, without substring matching.
+                    matched_entry = None
+                    if act == "remove" and old_text.strip():
+                        if old_text not in working:
+                            return self._batch_failure(target, (
+                                f"Operation {i + 1}: remove needs the complete, verbatim entry in old_text. "
+                                "No changes were saved."), "no_match")
+                        matched_entry = old_text
                 msg, previous_content, failure_class, after = self._apply_batch_op(
                     working, act, content, old_text, f"Operation {i + 1} ({act or 'unknown'})",
-                    op.get("matched_entry"))
+                    matched_entry)
                 if msg:  # a failed op's second value is its closest_entries (or None)
                     return self._batch_failure(target, msg, failure_class, closest_entries=previous_content)
                 matched.append(previous_content)

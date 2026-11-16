@@ -219,6 +219,14 @@ def _background_delete_gate(store, action, operations, target="memory", content=
             "batch); 'add' is still available.", success=False)
 
 
+def managed_review_can_consolidate() -> bool:
+    """Only an owned AgentSee profile with ordinary write approval off."""
+    from hermes_runtime.adapters.hermes import enabled
+    from tools import write_approval
+
+    return enabled() and not write_approval.write_approval_enabled(write_approval.MEMORY, fail_closed=True)
+
+
 def memory_tool(action: str | None = None, target: str = "memory", content: str | None = None, old_text: str | None = None,
                 new_text: str | None = None, operations: Optional[list[dict[str, Any]]] = None,
                 store: Optional[MemoryStore] = None) -> str:
@@ -249,6 +257,9 @@ def _invalid(message: str) -> tuple[str, str]:
 
 def _memory_tool(action, target, content, old_text, new_text, operations, store) -> tuple[str, str]:
     """``(outcome, result_json)``: ``rejected`` when refused or held before touching the store."""
+    from tools.skill_provenance import is_unattended_review
+
+    managed_consolidation = is_unattended_review() and managed_review_can_consolidate()
     # An omitted optional string can arrive as "" (#90468): let the new_text alias fill it.
     if not content and new_text:
         content = new_text
@@ -260,14 +271,16 @@ def _memory_tool(action, target, content, old_text, new_text, operations, store)
             return _invalid("operations must be a list of {action, content?, old_text?} objects.")
         if any(isinstance(op, dict) and op.get("action") == "replace" for op in operations):
             return _invalid(_REPLACE_REMOVED)
-        denied = _background_delete_gate(store, action, operations, target)
-        if denied is not None:
-            return "rejected", denied
+        if not managed_consolidation:
+            denied = _background_delete_gate(store, action, operations, target)
+            if denied is not None:
+                return "rejected", denied
         # Approval gate: stages (background/gateway) or prompts inline (CLI); off by default.
         gate_result = _apply_write_gate(store, "batch", target, None, None, operations)
         if gate_result is not None:
             return "rejected", gate_result
-        return _applied(store.apply_batch(target, operations))
+        return _applied(store.apply_batch(target, operations, exact_removes=True) if managed_consolidation
+                        else store.apply_batch(target, operations))
     # Reject calls that provide neither action (single-op) nor operations
     # (batch).  Without this guard the dispatch falls through to the generic
     # "Unknown action 'None'" error, which gives the model no signal about
@@ -282,10 +295,15 @@ def _memory_tool(action, target, content, old_text, new_text, operations, store)
     if action not in _STORE_ACTIONS:
         return _invalid(f"Unknown action '{action}'. Use: add, patch, remove")
     invalid = (_validate_single_op(store, action, target, content, old_text)
-               or _background_delete_gate(store, action, None, target, content, old_text)
+               or (not managed_consolidation
+                   and _background_delete_gate(store, action, None, target, content, old_text))
                or _apply_write_gate(store, action, target, content, old_text))
     if invalid is not None:
         return "rejected", invalid
+    if managed_consolidation and action == "remove":
+        # The normal single remove deliberately permits removing the last entry.
+        # Background consolidation goes through the batch's non-empty check instead.
+        return _applied(store.apply_batch(target, [{"action": action, "old_text": old_text}], exact_removes=True))
     return _applied(_STORE_ACTIONS[action][0](store, target, content, old_text))
 
 

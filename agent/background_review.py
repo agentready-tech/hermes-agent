@@ -1167,6 +1167,18 @@ def _run_review_fork(
     # tell the model that memory is available, or it will burn iterations on denied calls.
     memory_phrase_deny = " and memory for notes (add only)" if "memory" in review_whitelist else ""
     memory_phrase_prompt = "memory and skill " if "memory" in review_whitelist else "skill "
+    if not explicit and "memory" in review_whitelist:
+        from tools.memory_tool import managed_review_can_consolidate
+
+        if managed_review_can_consolidate():
+            memory_phrase_deny = " and memory for notes and consolidation"
+            prompt += (
+                "\n\nPreserve every current durable fact and standing user preference. If space is needed, "
+                "apply one atomic memory operations batch that adds the new fact and consolidates only "
+                "duplicates or facts demonstrably superseded by the conversation. Use patch for the "
+                "smallest exact span and remove only when old_text is the complete obsolete entry. "
+                "Do not remove an entry that still contains a current fact or empty a memory store."
+            )
     set_thread_tool_whitelist(
         review_whitelist,
         deny_msg_fmt=(
@@ -1231,6 +1243,9 @@ def _run_review_in_thread(
     if review_run is not None and review_run.cancel_requested.is_set():
         finish_background_review_run(agent, review_run)
         return
+    from hermes_runtime.adapters.hermes import enabled
+
+    quiet_review = not explicit and enabled()
     _set_thread_approval_callback(_bg_review_auto_deny)
     # A client that can't carry Hermes tool calls back would spawn a fork that cannot write
     # anything. Checked BEFORE the thread-scoped silence so the warning is not swallowed; cheap
@@ -1280,13 +1295,14 @@ def _run_review_in_thread(
             )
             actions = []
         _log_review_completion(st.review_usage, _classify_review_result(actions))
-        if actions:
+        if actions and not quiet_review:
             _publish_review_summary(agent, actions)
     except Exception as e:
         logger.warning("Background memory/skill review failed: %s", e)
         if st.review_usage:
             _log_review_completion(st.review_usage, "error")
-        agent._emit_auxiliary_failure(t("display.review.aux_failure_label"), e)
+        if not quiet_review:
+            agent._emit_auxiliary_failure(t("display.review.aux_failure_label"), e)
     finally:
         # Safety net for the exception path (setup failures before the request-phase finally).
         # Both cleanups are identity-scoped and idempotent; re-enter thread-scoped silence so

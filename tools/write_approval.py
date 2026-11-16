@@ -41,15 +41,15 @@ _TRUTHY_STRINGS = frozenset({"on", "true", "yes", "1", "approve", "enabled"})
 
 # --- Config resolution ---
 
-def write_approval_enabled(subsystem: str) -> bool:
-    """Read ``<subsystem>.write_approval``; any unset/invalid value means gate off."""
+def write_approval_enabled(subsystem: str, *, fail_closed: bool = False) -> bool:
+    """Read ``<subsystem>.write_approval``; unset/invalid values use the normal gate-off default."""
     if subsystem not in _SUBSYSTEMS:
         return False
     try:
         from hermes_cli.config import load_config, cfg_get
         return _normalize_enabled(cfg_get(load_config(), subsystem, CONFIG_KEY, default=False))
     except Exception:
-        return False
+        return fail_closed
 
 
 def _normalize_enabled(value: Any) -> bool:
