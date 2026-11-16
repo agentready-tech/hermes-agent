@@ -167,6 +167,8 @@ class TranscriptMessage(OpenModel):
     tool_call_id: str | None = None
     timestamp: float | None = None
     row_id: int | None = None
+    # Stable archive order for managed Panel pages (which can have gaps).
+    history_index: int | None = None
     display_kind: str | None = None
     display_metadata: JsonValue | None = None
     name: str | None = None

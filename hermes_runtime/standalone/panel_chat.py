@@ -77,14 +77,17 @@ class MainChat:
                                     'choices': prompt.get('choices', []), 'multi_select': prompt.get('multi_select', False)}]
         return {'jsonrpc': '2.0', 'id': identity, 'method': kind, 'params': params}
 
-    async def snapshot(self):
-        result = await self.client.rpc('session.resume', session_id=HOME_SESSION_ID, display_projection=True)
+    async def snapshot(self, *, history_native=False):
+        mode = {'history_native': True} if history_native else {'display_projection': True}
+        result = await self.client.rpc('session.resume', session_id=HOME_SESSION_ID, **mode)
         if result.get('session_id') != HOME_SESSION_ID:
             raise ValueError('Unexpected main conversation')
         self.session_id = HOME_SESSION_ID
         self.generation = result['execution_generation']
         requests = list(result.get('open_requests') or [])
         requests.extend(question for prompt in result.get('prompts', []) if (question := self.question(prompt)))
+        if history_native:
+            return {**result, 'open_requests': requests}
         from hermes_runtime.standalone.main_files import project_row
         rows = result.get('display_messages', result['messages'])
         return {**{key: value for key, value in result.items() if key != 'display_messages'},
@@ -99,13 +102,17 @@ class MainChat:
         if method in {'session.resume', 'session.history'}:
             if params.get('session_id', HOME_SESSION_ID) != HOME_SESSION_ID:
                 raise ValueError('Only the main conversation is available')
-            return await self.snapshot()
+            return await self.snapshot(history_native=params.get('history_native') is True)
         if method in {'panel.subagents.list', 'panel.subagents.history'}:
             if not self.session_id:
                 raise ValueError('Resume the main conversation first')
             return await self.client.rpc(method, **params)
         if not self.session_id or params.get('session_id') != self.session_id:
             raise ValueError('Resume the main conversation first')
+        if method == 'panel.history.before':
+            if set(params) - {'session_id', 'before', 'limit'}:
+                raise ValueError('Invalid history request')
+            return await self.client.rpc(method, **params)
         if method == 'prompt.submit':
             # The browser's stable nonce survives a lost ACK and is committed by Hermes.
             identity = params.get('submission_id')

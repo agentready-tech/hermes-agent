@@ -319,13 +319,14 @@ def _history_to_messages(history: list[dict], *, profile_home=None, image_urls: 
             # Mid-turn /steer: show the user's own words, not the model-facing marker wrapper.
             from agent.conversation_compression import _extract_steer_text_from_message
             content_text = _extract_steer_text_from_message(m) or content_text
+        position = ({"history_index": m["_panel_history_index"]} if "_panel_history_index" in m else {})
         if role == "tool":
             tc_name, tc_args = tool_call_args.get(m.get("tool_call_id") or "", (None, None))
             name = tc_name or m.get("tool_name") or "tool"
             args = tc_args or {}
             # `context` is an 80-char preview; ship args so a full-call renderer isn't truncated.
             labels = _bridged_tool_labels(name, args)
-            messages.append({"role": "tool", "name": name, "context": _tool_ctx(name, args),
+            messages.append({"role": "tool", "name": name, "context": _tool_ctx(name, args), **position,
                              # Edit cards need the original result; other tool outputs
                              # remain omitted from this compact display projection.
                              **({"content": m.get("content")} if name in {"write_file", "patch", "skill_manage"} else {}),
@@ -337,7 +338,7 @@ def _history_to_messages(history: list[dict], *, profile_home=None, image_urls: 
         has_assistant_detail = role == "assistant" and any(m.get(key) for key in _HISTORY_ASSISTANT_DETAIL_KEYS)
         if not content_text.strip() and not has_assistant_detail:
             continue
-        msg = {"role": role, "text": content_text}
+        msg = {"role": role, "text": content_text, **position}
         # Authoring time (Unix seconds) for display.timestamps; display-only.
         # Display-only: never fed back into model context. See #41531.
         ts = m.get("timestamp")

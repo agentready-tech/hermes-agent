@@ -9724,6 +9724,11 @@
             "default": false,
             "title": "Display Projection",
             "type": "boolean"
+          },
+          "history_native": {
+            "default": false,
+            "title": "History Native",
+            "type": "boolean"
           }
         },
         "title": "CanonicalResumeParams",
@@ -10514,6 +10519,17 @@
             ],
             "default": null,
             "title": "Display Messages"
+          },
+          "history": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PanelHistoryCursor"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "message_count": {
             "title": "Message Count",
@@ -24926,6 +24942,105 @@
           "truncated"
         ],
         "title": "PanelChildDisplayRow",
+        "type": "object"
+      },
+      "PanelHistoryCursor": {
+        "additionalProperties": false,
+        "properties": {
+          "native": {
+            "const": true,
+            "title": "Native",
+            "type": "boolean"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "before": {
+            "title": "Before",
+            "type": "integer"
+          },
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "native",
+          "total",
+          "before",
+          "has_more"
+        ],
+        "title": "PanelHistoryCursor",
+        "type": "object"
+      },
+      "PanelHistoryParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "before": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Before"
+          },
+          "limit": {
+            "default": 40,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "PanelHistoryParams",
+        "type": "object"
+      },
+      "PanelHistoryResult": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptMessage"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "history": {
+            "$ref": "#/components/schemas/PanelHistoryCursor"
+          }
+        },
+        "required": [
+          "session_id",
+          "messages",
+          "history"
+        ],
+        "title": "PanelHistoryResult",
         "type": "object"
       },
       "PanelPersistentSubagent": {
@@ -44250,6 +44365,18 @@
             "default": null,
             "title": "Row Id"
           },
+          "history_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "History Index"
+          },
           "display_kind": {
             "anyOf": [
               {
@@ -47276,6 +47403,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/KanbanRunResult"
+        }
+      }
+    },
+    {
+      "name": "panel.history.before",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PanelHistoryParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PanelHistoryResult"
         }
       }
     },

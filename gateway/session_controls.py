@@ -183,6 +183,8 @@ class AuthorityConnection:
         from hermes_runtime.adapters.main_subagents import rpc as subagent_read
         handlers['panel.subagents.list'] = partial(subagent_read, self)
         handlers['panel.subagents.history'] = partial(subagent_read, self, history=True)
+        from hermes_runtime.adapters.main_history import rpc as history_read
+        handlers['panel.history.before'] = partial(history_read, self)
         return handlers
 
     async def dispatch(self, request):
@@ -506,7 +508,12 @@ class AuthorityConnection:
         # reopens it (``reopen_local_session`` in the drain), so opening a finished chat
         # never re-lights DB-derived liveness with no new activity.
         self.authority.authorize(self.actor, ref, 'session:read')
-        snapshot = await self.authority.attach(self.actor, ref)
+        native_history = params.get('history_native') is True
+        if native_history:
+            from hermes_runtime.adapters.main_history import read_page, require_history_owner
+            require_history_owner(self, ref)
+        snapshot = await self.authority.attach(self.actor, ref, include_history=False) if native_history else (
+            await self.authority.attach(self.actor, ref))
         self.subscriptions[ref.session_id] = snapshot.subscription_id
         # Only local routes have a frozen local launch policy to project; with it, main's banner and
         # status-bar inventory (tools, skills, MCP, version, branch) for that policy.
@@ -517,10 +524,14 @@ class AuthorityConnection:
             await asyncio.to_thread(refresh_profile_hooks, policy_for_source(self.authority.runner, source))
             info = await snapshot_info(self.authority, snapshot.handle.ref)
         display = {}
-        if params.get('display_projection'):
+        if native_history:
+            page = await read_page(self, ref)
+            display.update(messages=page['messages'], history=page['history'])
+        elif params.get('display_projection'):
             display['display_messages'] = display_projection(snapshot.history, self.authority.profile_id)
         return {'session_id': ref.session_id, 'stored_session_id': ref.session_id,
-                'messages': list(snapshot.history), **display, 'message_count': len(snapshot.history),
+                'messages': list(snapshot.history), **display,
+                'message_count': len(display.get('messages', snapshot.history)),
                 'running': snapshot.handle.execution_state == 'running',
                 'authority_epoch': snapshot.handle.authority_epoch,
                 'replay_epoch': snapshot.replay_epoch, 'last_sequence': snapshot.last_sequence,

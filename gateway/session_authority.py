@@ -211,7 +211,7 @@ class SessionAuthority:
         self.authorize(actor, ref, 'session:read')
         return self._handle(ref)
 
-    async def attach(self, actor, ref):
+    async def attach(self, actor, ref, *, include_history=True):
         self.authorize(actor, ref, 'session:read')
         live = self.sessions[ref.session_id]
         from gateway.session_local_recovery import local_history
@@ -229,7 +229,7 @@ class SessionAuthority:
             prompts = live.controls.snapshot(ref.session_id, active_generation)
             epoch, sequence = live.event_stream.watermark()
             return SubscriptionSnapshot(subscription, handle, epoch,
-                                        sequence, tuple(local_history(self, ref)),
+                                        sequence, tuple(local_history(self, ref)) if include_history else (),
                                         tuple(self._pending_receipt(r) for r in self._pending_rows(ref)), prompts)
 
     def _retire_overflowed(self, session_id, transport):

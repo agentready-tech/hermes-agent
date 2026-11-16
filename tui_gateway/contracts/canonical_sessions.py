@@ -65,6 +65,8 @@ class CanonicalResumeParams(ProfileParams):
     # A renderer (the Ink TUI) asks for main's display projection of the same rows
     # (``tui_gateway.session_history._history_to_messages``) as ``display_messages``.
     display_projection: bool = False
+    # The managed Panel asks the owner for one bounded page of durable display history.
+    history_native: bool = False
 
 
 class CanonicalSessionHandle(Result):
@@ -117,12 +119,31 @@ class CanonicalSnapshotInfo(SessionInventoryFields):
     credential_hint: str | None = None
 
 
+class PanelHistoryCursor(Result):
+    native: Literal[True]
+    total: int
+    before: int
+    has_more: bool
+
+
+class PanelHistoryParams(CanonicalSessionParams):
+    before: int | None = None
+    limit: int = 40
+
+
+class PanelHistoryResult(Result):
+    session_id: str
+    messages: list[TranscriptMessage]
+    history: PanelHistoryCursor
+
+
 class CanonicalSnapshot(Result):
     session_id: str
     stored_session_id: str
     messages: list[TranscriptMessage]
     # Present only when ``display_projection`` was asked: the rows as main's TUI rendered them.
     display_messages: list[TranscriptMessage] | None = None
+    history: PanelHistoryCursor | None = None
     message_count: int
     running: bool
     authority_epoch: int
@@ -258,6 +279,7 @@ class CanonicalEventsResult(Result):
 for _name, _params, _result in (
     ('session.create', CanonicalCreateParams, CanonicalSnapshot),
     ('session.resume', CanonicalResumeParams, CanonicalSnapshot),
+    ('panel.history.before', PanelHistoryParams, PanelHistoryResult),
     ('session.list', CanonicalListParams, CanonicalListResult),
     ('session.interrupt', CanonicalControlParams, CanonicalSessionHandle),
     ('session.steer', CanonicalCorrectionParams, CanonicalCorrectionResult),

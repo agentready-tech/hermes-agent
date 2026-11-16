@@ -3123,6 +3123,7 @@ export interface TranscriptMessage {
   tool_call_id?: string | null
   timestamp?: number | null
   row_id?: number | null
+  history_index?: number | null
   display_kind?: string | null
   display_metadata?: unknown | null
   name?: string | null
@@ -4924,6 +4925,7 @@ export interface CanonicalSnapshot {
   stored_session_id: string
   messages: TranscriptMessage[]
   display_messages?: TranscriptMessage[] | null
+  history?: PanelHistoryCursor | null
   message_count: number
   running: boolean
   authority_epoch: number
@@ -4936,6 +4938,12 @@ export interface CanonicalSnapshot {
   prompts: CanonicalPendingPrompt[]
   open_requests?: Record<string, unknown>[] | null
   info: CanonicalSnapshotInfo
+}
+export interface PanelHistoryCursor {
+  native: true
+  total: number
+  before: number
+  has_more: boolean
 }
 export interface CanonicalPendingAdmission {
   admission_id: string
@@ -5010,6 +5018,18 @@ export interface CanonicalResumeParams {
   omit_messages?: boolean
   cols?: number | null
   display_projection?: boolean
+  history_native?: boolean
+}
+export interface PanelHistoryParams {
+  profile?: string | null
+  session_id: string
+  before?: number | null
+  limit?: number
+}
+export interface PanelHistoryResult {
+  session_id: string
+  messages: TranscriptMessage[]
+  history: PanelHistoryCursor
 }
 export interface CanonicalListParams {
   profile?: string | null
@@ -6774,6 +6794,7 @@ export interface CanonicalRpcMethods {
   'image.attach_bytes': { params: ImageAttachBytesParams; result: CanonicalAttachedImageResult }
   /** Native-owner only: admit the dispatcher's current claim on a kanban task. */
   'kanban.run': { params: KanbanRunParams; result: KanbanRunResult }
+  'panel.history.before': { params: PanelHistoryParams; result: PanelHistoryResult }
   'panel.subagents.history': { params: PanelSubagentHistoryParams; result: PanelSubagentHistoryResult }
   'panel.subagents.list': { params: PanelSubagentListParams; result: PanelSubagentListResult }
   'profiles.list': { params: CanonicalProfilesParams; result: CanonicalProfilesResult }
@@ -6836,6 +6857,7 @@ export const CANONICAL_RPC_METHODS = [
   'groups.retry',
   'image.attach_bytes',
   'kanban.run',
+  'panel.history.before',
   'panel.subagents.history',
   'panel.subagents.list',
   'profiles.list',
