@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.16.2",
+  "defaultRuntimeVersion": "2026.11.16.3",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -4431,6 +4431,45 @@
         "productionMailSentForTest": false
       },
       "description": "Run Workspace commands inside Firecracker as nobody using the guest-local runuser command."
+    },
+    "2026.11.16.3": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:a6374de0f8a3a0c604b1c7486593480235fcd72d5347cc2d5a9a64fd1f4aa071",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.16.3",
+      "configDigest": "sha256:e6a56526fd88ec6e2270c12a1a0311235dfb596c2e0f918fb5eaaa94015d1597",
+      "platform": "linux/amd64",
+      "sourceRevision": "928f086bf3a1c84bf2d5e42bf0ac4e3e5f68e0ff",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:a6374de0f8a3a0c604b1c7486593480235fcd72d5347cc2d5a9a64fd1f4aa071",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.16.3",
+        "digest": "sha256:a6374de0f8a3a0c604b1c7486593480235fcd72d5347cc2d5a9a64fd1f4aa071",
+        "configDigest": "sha256:e6a56526fd88ec6e2270c12a1a0311235dfb596c2e0f918fb5eaaa94015d1597",
+        "sourceRevision": "928f086bf3a1c84bf2d5e42bf0ac4e3e5f68e0ff",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 43834559218,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "profileCount": 6,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:36c2287b2ab1dd351aa94f58deae77c9f88e78397731fb2829e23b4bbdcf53d5",
+        "deployRunId": 43836611631
+      },
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml",
+      "validation": {
+        "runtimeReady": true,
+        "profileGatewaysReady": 6,
+        "futureDefaultConfigured": true,
+        "archivedChatPaginationVerified": true
+      },
+      "description": "Read archived main conversations in Panel with stable pagination across message compaction."
     }
   },
   "supersededRuntimeAttempts": {
