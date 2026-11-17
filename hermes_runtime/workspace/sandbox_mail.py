@@ -893,7 +893,10 @@ def main():
     except Exception as error:  # health: allow BLE001 -- the sandbox protocol boundary must never echo untrusted vendor diagnostics or credentials
         # A provider's text may repeat a username or credential. Codes only.
         code = str(error) if isinstance(error, MailError) else "INVALID_MAIL_SEND_OUTCOME_UNKNOWN" if operation == "send" else "INVALID_MAIL_IMAP_PROTOCOL_FAILED"
-        print(json.dumps({"ok": False, "error": code}))
+        reply = {"ok": False, "error": code}
+        if isinstance(error, MailError) and (diagnostic := getattr(error, "diagnostic", None)):
+            reply["diagnostic"] = diagnostic
+        print(json.dumps(reply))
 
 
 if __name__ == "__main__":

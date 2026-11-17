@@ -148,9 +148,8 @@ def _result_is_error(result) -> bool:
 
 
 def _record_call_outcome(server_name: str, result) -> Any:
-    """Breaker bookkeeping: an error payload from the tool itself still counts as a strike (#10447),
-    flagged as an application error so the open-breaker message stays truthful."""
-    if _result_is_error(result):
+    """Keep the transport breaker for Workspace, whose replies cover independent providers."""
+    if server_name != "agentsee-workspace" and _result_is_error(result):
         _core._bump_server_error(server_name, application=True)
     else:
         _core._reset_server_error(server_name)

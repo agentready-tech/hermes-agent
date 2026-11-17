@@ -1,12 +1,18 @@
 """Run fixed workspace programs through the selected network transport."""
 
 import json
+import re
 import subprocess
 import sys
 from contextlib import contextmanager
 from pathlib import Path
 
 from hermes_runtime.workspace.store import WorkspaceError
+
+
+GOOGLE_DIAGNOSTIC = re.compile(
+    r"(?:api|oauth|identity|discovery): (?:HTTP [1-5][0-9]{2}|timeout|DNS failure|TLS failure|connection failure|invalid response)"
+)
 
 
 @contextmanager
@@ -87,9 +93,14 @@ def run_request(command, environment, program, request, unavailable):
         raise WorkspaceError(failure_code(program, request, "INVALID_WORKSPACE_RESPONSE"))
     if value.get("ok") is not True:
         code = value.get("error", "")
+        diagnostic = None
         if not isinstance(code, str) or not code.startswith(("INVALID_", "FORBIDDEN", "NOT_FOUND")) or len(code) > 100 or any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ_" for c in code):
             code = failure_code(program, request, "INVALID_WORKSPACE_RESPONSE")
-        raise WorkspaceError(code)
+        elif program == "sandbox_google" and code.startswith("INVALID_GOOGLE_"):
+            detail = value.get("diagnostic")
+            if isinstance(detail, str) and GOOGLE_DIAGNOSTIC.fullmatch(detail):
+                diagnostic = detail
+        raise WorkspaceError(code, diagnostic=diagnostic)
     if not isinstance(value.get("value"), dict):
         raise WorkspaceError(failure_code(program, request, "INVALID_WORKSPACE_RESPONSE"))
     return value.get("value")
@@ -98,7 +109,25 @@ def run_request(command, environment, program, request, unavailable):
 def failure_code(program, request, ordinary):
     if program == "sandbox_mail" and request.get("operation") == "send":
         return "INVALID_MAIL_SEND_OUTCOME_UNKNOWN"
-    if program == "sandbox_google" and (request.get("operation") == "gws" or
-            (request.get("operation") == "request" and request.get("method") in {"POST", "PUT", "PATCH", "DELETE"})):
-        return "INVALID_GOOGLE_WRITE_OUTCOME_UNKNOWN"
+    if program == "sandbox_google":
+        operation = request.get("operation")
+        method = request.get("method")
+        if operation == "gws":
+            if request.get("service") == "sheets":
+                from hermes_runtime.workspace.sandbox_google import SHEETS_FILTER_READ
+                resource = request.get("resource")
+                if isinstance(resource, list) and all(isinstance(part, str) for part in resource):
+                    resource = tuple(resource)
+                    if method == SHEETS_FILTER_READ.get(resource) and method is not None:
+                        return ordinary
+                    if resource in SHEETS_FILTER_READ and method in ("get", "batchGet"):
+                        return ordinary
+            return "INVALID_GOOGLE_WRITE_OUTCOME_UNKNOWN"
+        if operation == "request" and method in ("POST", "PUT", "PATCH", "DELETE"):
+            if method == "POST" and request.get("service") == "sheets":
+                from hermes_runtime.workspace.sandbox_google import sheets_filter_path
+                path = request.get("path")
+                if isinstance(path, str) and sheets_filter_path(path.partition("?")[0]):
+                    return ordinary
+            return "INVALID_GOOGLE_WRITE_OUTCOME_UNKNOWN"
     return ordinary

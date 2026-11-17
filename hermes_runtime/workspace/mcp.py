@@ -49,7 +49,8 @@ def dispatch(request, workspace):
         value = workspace.tool(name, arguments)
         return {"content": [{"type": "text", "text": json.dumps(value, ensure_ascii=False)}], "isError": False}
     except WorkspaceError as error:
-        return {"content": [{"type": "text", "text": str(error)}], "isError": True}
+        message = f"{error} ({error.diagnostic})" if error.diagnostic else str(error)
+        return {"content": [{"type": "text", "text": message}], "isError": True}
     except Exception:  # health: allow BLE001 -- vendor failures may contain credentials and private message data
         return {"content": [{"type": "text", "text": "INVALID_WORKSPACE_REQUEST"}], "isError": True}
 

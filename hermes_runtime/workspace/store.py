@@ -16,7 +16,11 @@ FIELDS = {"id", "environmentId", "provider", "name", "address", "services", "inb
 
 
 class WorkspaceError(Exception):
-    """Only stable codes from this class are suitable for external errors."""
+    """Stable code with optional validated, non-sensitive diagnostics."""
+
+    def __init__(self, code, *, diagnostic=None):
+        super().__init__(code)
+        self.diagnostic = diagnostic
 
 
 def now():

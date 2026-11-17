@@ -6,6 +6,34 @@ from hermes_runtime.workspace import sandbox_google as google
 from hermes_runtime.workspace.sandbox_mail import MailError
 
 
+@pytest.mark.parametrize(("path", "method", "code"), [
+    ("spreadsheets/fixture/values/A1:C3", "GET", "INVALID_GOOGLE_REQUEST_FAILED"),
+    ("spreadsheets/fixture/values:batchGetByDataFilter", "POST", "INVALID_GOOGLE_REQUEST_FAILED"),
+    ("spreadsheets/fixture/values:batchUpdateByDataFilter", "POST", "INVALID_GOOGLE_WRITE_OUTCOME_UNKNOWN"),
+])
+def test_http_error_reports_status_without_provider_body(monkeypatch, path, method, code):
+    class Response:
+        status = 503
+
+        def read(self, _size):
+            pytest.fail("A failing Google response body must stay private")
+
+    class Connection:
+        def request(self, *_args, **_kwargs):
+            pass
+
+        def getresponse(self):
+            return Response()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(google, "PublicHTTPS", lambda *_args, **_kwargs: Connection())
+    with pytest.raises(MailError, match=f"^{code}$") as caught:
+        google.json_http(google.APIS["sheets"] + path, method)
+    assert caught.value.diagnostic == "api: HTTP 503"
+
+
 def document():
     return {"rootUrl": "https://sheets.googleapis.com/", "servicePath": "v4/", "parameters": {"fields": {"location": "query"}},
         "resources": {"spreadsheets": {"resources": {"values": {"methods": {"update": {"httpMethod": "PUT",

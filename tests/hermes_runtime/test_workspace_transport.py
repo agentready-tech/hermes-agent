@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from hermes_runtime.workspace.store import WorkspaceError
-from hermes_runtime.workspace.transport import poll_request, sandbox_request
+from hermes_runtime.workspace.transport import poll_request, run_request, sandbox_request
 
 
 def home(tmp_path):
@@ -58,6 +58,35 @@ def test_vendor_error_cannot_cross_transport_as_raw_private_text(monkeypatch, tm
     monkeypatch.setattr("subprocess.run", lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout=b'{"ok":false,"error":"private user and password response"}'))
     with pytest.raises(WorkspaceError, match="^INVALID_WORKSPACE_RESPONSE$"):
         sandbox_request(home(tmp_path), "sandbox_google", {"operation": "verify"})
+
+
+@pytest.mark.parametrize(("diagnostic", "expected"), [
+    ("api: HTTP 429", " (api: HTTP 429)"),
+    ("oauth: timeout", " (oauth: timeout)"),
+    ("api: HTTP 400 with private provider response", ""),
+])
+def test_mcp_shows_only_controlled_google_diagnostics(monkeypatch, diagnostic, expected):
+    from hermes_runtime.workspace.mcp import dispatch
+
+    code = "INVALID_GOOGLE_REQUEST_FAILED"
+    output = json.dumps({"ok": False, "error": code, "diagnostic": diagnostic}).encode()
+    monkeypatch.setattr("subprocess.run", lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout=output))
+    workspace = SimpleNamespace(tool=lambda *_: run_request(["synthetic"], {}, "sandbox_google", {}, "UNAVAILABLE"))
+    request = {"method": "tools/call", "params": {"name": "workspace_connections", "arguments": {}}}
+    result = dispatch(request, workspace)
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == code + expected
+
+
+@pytest.mark.parametrize("request_args", [
+    {"operation": "gws", "service": "sheets", "resource": ["spreadsheets", "values"], "method": "get"},
+    {"operation": "gws", "service": "sheets", "resource": ["spreadsheets", "values"], "method": "batchGetByDataFilter"},
+    {"operation": "request", "service": "sheets", "method": "POST", "path": "spreadsheets/fixture/values:batchGetByDataFilter"},
+])
+def test_lost_sheet_read_receipt_is_not_a_possible_write(monkeypatch, request_args):
+    monkeypatch.setattr("subprocess.run", lambda *_args, **_kwargs: SimpleNamespace(returncode=125, stdout=b""))
+    with pytest.raises(WorkspaceError, match="^INVALID_WORKSPACE_RESPONSE$"):
+        run_request(["synthetic"], {}, "sandbox_google", request_args, "UNAVAILABLE")
 
 
 @pytest.mark.parametrize("output,exit_code", [(b"not-json", 0), (b"[]", 0), (b"", 1), (b'{"ok":false,"error":"private provider text"}', 0)])

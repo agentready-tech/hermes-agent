@@ -608,3 +608,34 @@ def test_breaker_opened_by_tool_errors_says_rejected_not_unreachable(monkeypatch
     finally:
         _cleanup(mcp_tool, "srv")
         mcp_tool._server_errors_all_application.pop("srv", None)
+
+
+def test_workspace_tool_rejections_leave_mail_available(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    from tools import mcp_tool
+    from tools.mcp_tool_handlers import _make_tool_handler
+
+    async def call_tool(name, *_args, **_kwargs):
+        is_google = name == "google_gws"
+        return MagicMock(
+            is_error=is_google,
+            content=[MagicMock(text="INVALID_GOOGLE_PARAMETERS" if is_google else '{"messages": []}')],
+            structured_content=None,
+        )
+
+    server = "agentsee-workspace"
+    _install_stub_server(mcp_tool, server, call_tool)
+    _mcp_loop._ensure_mcp_loop()
+    try:
+        google = _make_tool_handler(server, "google_gws", 10.0)
+        mail = _make_tool_handler(server, "mail_search", 10.0)
+        for _ in range(mcp_tool._CIRCUIT_BREAKER_THRESHOLD):
+            assert "INVALID_GOOGLE_PARAMETERS" in json.loads(google({}))["error"]
+        assert json.loads(json.loads(mail({}))["result"]) == {"messages": []}
+
+        for _ in range(mcp_tool._CIRCUIT_BREAKER_THRESHOLD):
+            mcp_tool._bump_server_error(server)
+        assert "unreachable" in json.loads(mail({}))["error"]
+    finally:
+        _cleanup(mcp_tool, server)
+        mcp_tool._server_errors_all_application.pop(server, None)

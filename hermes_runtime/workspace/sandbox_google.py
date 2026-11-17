@@ -1,6 +1,7 @@
 """Google JSON operations on the selected workspace network."""
 
 import http.client
+import socket
 from urllib.parse import quote, urlencode, urlsplit
 
 if __name__ != "__main__":
@@ -15,6 +16,31 @@ SCOPES = {"mailRead": "https://www.googleapis.com/auth/gmail.readonly", "mailSen
           "docs": "https://www.googleapis.com/auth/documents", "slides": "https://www.googleapis.com/auth/presentations",
           "calendar": "https://www.googleapis.com/auth/calendar"}
 
+SHEETS_FILTER_READ = {("spreadsheets",): "getByDataFilter",
+                      ("spreadsheets", "values"): "batchGetByDataFilter"}
+
+
+def sheets_filter_path(path):
+    return re.fullmatch(
+        r"spreadsheets/[A-Za-z0-9_-]+(?::getByDataFilter|/values:batchGetByDataFilter)", path
+    ) is not None
+
+
+def google_stage(parsed):
+    if parsed.hostname == "oauth2.googleapis.com":
+        return "oauth"
+    if parsed.hostname == "openidconnect.googleapis.com":
+        return "identity"
+    if parsed.hostname == "www.googleapis.com" and parsed.path.startswith("/discovery/v1/apis/"):
+        return "discovery"
+    return "api"
+
+
+class GoogleRequestError(MailError):
+    def __init__(self, code, stage, reason):
+        super().__init__(code)
+        self.diagnostic = f"{stage}: {reason}"
+
 
 class PublicHTTPS(http.client.HTTPSConnection):
     def connect(self):
@@ -25,6 +51,12 @@ def json_http(url, method="GET", body=None, *, token=None, form=False):
     parsed = urlsplit(url)
     if parsed.scheme != "https" or parsed.hostname not in {"oauth2.googleapis.com", "openidconnect.googleapis.com", "www.googleapis.com", "gmail.googleapis.com", "sheets.googleapis.com", "docs.googleapis.com", "slides.googleapis.com", "calendar.googleapis.com"} or parsed.port not in {None, 443} or parsed.username or parsed.password:
         raise MailError("INVALID_GOOGLE_OPERATION")
+    stage = google_stage(parsed)
+    read_only = method == "GET" or form or (
+        method == "POST" and parsed.hostname == "sheets.googleapis.com"
+        and parsed.path.startswith("/v4/") and sheets_filter_path(parsed.path[4:])
+    )
+    failure = "INVALID_GOOGLE_REQUEST_FAILED" if read_only else "INVALID_GOOGLE_WRITE_OUTCOME_UNKNOWN"
     headers = {"Accept": "application/json"}
     if token:
         headers["Authorization"] = "Bearer " + token
@@ -37,20 +69,25 @@ def json_http(url, method="GET", body=None, *, token=None, form=False):
     try:
         client.request(method, parsed.path + ("?" + parsed.query if parsed.query else ""), body=body, headers=headers)
         response = client.getresponse()
-        if response.status == 404:
-            raise MailError("INVALID_GOOGLE_NOT_FOUND")
-        if response.status in {401, 403}:
-            raise MailError("INVALID_GOOGLE_RECONNECT_OR_PERMISSIONS")
         if not 200 <= response.status < 300:
-            raise MailError("INVALID_GOOGLE_REQUEST_FAILED" if method == "GET" or form else "INVALID_GOOGLE_WRITE_OUTCOME_UNKNOWN")
+            code = {404: "INVALID_GOOGLE_NOT_FOUND",
+                    401: "INVALID_GOOGLE_RECONNECT_OR_PERMISSIONS",
+                    403: "INVALID_GOOGLE_RECONNECT_OR_PERMISSIONS"}.get(response.status, failure)
+            raise GoogleRequestError(code, stage, f"HTTP {response.status}")
         data = response.read(MAX_MAIL + 1)
         if len(data) > MAX_MAIL:
             raise MailError("INVALID_GOOGLE_TOO_LARGE")
         return json.loads(data) if data else {}
-    except MailError:
-        raise
-    except (OSError, ValueError, http.client.HTTPException):
-        raise MailError("INVALID_GOOGLE_REQUEST_FAILED" if method == "GET" or form else "INVALID_GOOGLE_WRITE_OUTCOME_UNKNOWN") from None
+    except TimeoutError:
+        raise GoogleRequestError(failure, stage, "timeout") from None
+    except socket.gaierror:
+        raise GoogleRequestError(failure, stage, "DNS failure") from None
+    except ssl.SSLError:
+        raise GoogleRequestError(failure, stage, "TLS failure") from None
+    except (http.client.HTTPException, OSError):
+        raise GoogleRequestError(failure, stage, "connection failure") from None
+    except ValueError:
+        raise GoogleRequestError(failure, stage, "invalid response") from None
     finally:
         client.close()
 
