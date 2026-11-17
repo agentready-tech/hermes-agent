@@ -74,13 +74,21 @@ def test_request_waits_for_old_ready_pod_to_disappear(sandbox, monkeypatch):
     lifecycle, state, pod = sandbox
     old = pod("old")
     pod_reads = iter((old, {}))
-    monkeypatch.setattr(lifecycle, "_pod", lambda: next(pod_reads, state["pod"]))
+
+    def read_pod():
+        current = next(pod_reads, None)
+        if current == {}:
+            # The StatefulSet controller can update status as the former Pod goes away.
+            state["version"] += 1
+        return state["pod"] if current is None else current
+
+    monkeypatch.setattr(lifecycle, "_pod", read_pod)
     with pytest.raises(EnvironmentConnectionError, match="stopping"):
         with lifecycle.active(wake=False, expected_uid="old"):
             pytest.fail("should not admit a command to the old pod")
     assert state["scales"] == []
     with lifecycle.active() as (identity, _):
-        assert identity["uid"] == "generation-1"
+        assert identity["uid"] == "generation-2"
     assert state["scales"] == [1]
 
 
@@ -117,6 +125,19 @@ def test_status_never_wakes_and_active_exec_or_human_use_defers_stop(sandbox):
     assert state["scales"] == [1, 0]
 
 
+@pytest.mark.parametrize("spec", ({"spec": None}, {"spec": []}, {}))
+def test_scale_requires_a_valid_spec(tmp_path, monkeypatch, spec):
+    from types import SimpleNamespace
+
+    namespace = "agentsee-a-" + "a" * 32
+    lifecycle = SandboxLifecycle(tmp_path / ("env_" + "a" * 32), "/usr/bin/kubectl", namespace, 300)
+    response = json.dumps({"metadata": {"resourceVersion": "1"}, **spec})
+    monkeypatch.setattr("tools.environments.kubernetes_lifecycle.run_capture",
+                        lambda *args, **kwargs: SimpleNamespace(stdout=response))
+    with pytest.raises(EnvironmentConnectionError, match="Cannot read the managed Kubernetes sandbox scale"):
+        lifecycle._scale()
+
+
 def test_cached_terminal_wakes_after_retirement_but_stream_probe_does_not(tmp_path, monkeypatch):
     from tools.environments import streams
     from tools.environments.kubernetes import KubernetesEnvironment
@@ -137,7 +158,8 @@ def test_cached_terminal_wakes_after_retirement_but_stream_probe_does_not(tmp_pa
         "args = sys.argv[1:]\n"
         "if args[0] == 'get':\n"
         "    assert args[2].endswith('/statefulsets/sandbox/scale')\n"
-        "    print(json.dumps({'spec':{'replicas':s['replicas']},'metadata':{'resourceVersion':str(s['version'])}}))\n"
+        "    spec = {'replicas': s['replicas']} if s['replicas'] else {}\n"
+        "    print(json.dumps({'spec':spec,'metadata':{'resourceVersion':str(s['version'])}}))\n"
         "elif args[0] == 'replace':\n"
         "    data = json.load(sys.stdin)\n"
         "    assert args[2].endswith('/statefulsets/sandbox/scale')\n"

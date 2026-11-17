@@ -57,7 +57,11 @@ class SandboxLifecycle:
         try:
             response = run_capture([self.executable, "get", "--raw", self.scale_path], timeout=8, check=True)
             data = json.loads(response.stdout)
-            replicas, version = data["spec"]["replicas"], data["metadata"]["resourceVersion"]
+            spec = data["spec"]
+            if not isinstance(spec, dict):
+                raise ValueError("Invalid sandbox scale")
+            # Kubernetes omits the zero-valued ScaleSpec.replicas field.
+            replicas, version = spec.get("replicas", 0), data["metadata"]["resourceVersion"]
             if type(replicas) is not int or replicas not in (0, 1) or not isinstance(version, str) or not version:
                 raise ValueError("Invalid sandbox scale")
         except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
