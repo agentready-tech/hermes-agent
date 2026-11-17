@@ -13,6 +13,7 @@ import queue as queue_mod
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
 
 from gateway.config import Platform
 from gateway.session import SessionSource
@@ -52,6 +53,39 @@ class TestTurnRunner:
         ctx = TurnContext(progress_queue=queue_mod.Queue())
         runner = _make_runner(ctx)  # stub adapter resolver returns None
         assert asyncio.run(runner.send_progress_messages()) is None
+
+    @pytest.mark.parametrize("platform_name", ["agentready", "telegram", "local"])
+    def test_native_turn_discovers_http_tools_before_agent_selection(self, platform_name, monkeypatch):
+        from gateway.run_turn_runner import TurnRunner
+        from hermes_runtime.adapters.main_transport import register_platform
+
+        register_platform()
+        source = SessionSource(platform=Platform(platform_name), chat_id="test", user_id="test")
+        ctx = TurnContext(source=source, enabled_toolsets=["test-mcp"], user_config={})
+        gateway = MagicMock()
+        turn = TurnRunner(gateway, ctx)
+        steps = []
+
+        class ReachedAgentSelection(Exception):
+            pass
+
+        def select_agent(*_args):
+            steps.append("select agent")
+            raise ReachedAgentSelection
+
+        monkeypatch.setattr(turn, "_combined_ephemeral_prompt", lambda: "")
+        monkeypatch.setattr(turn, "_setup_stream_consumer", lambda _platform: (None, None, None, False))
+        monkeypatch.setattr(turn, "_resolve_turn_agent", select_agent)
+        monkeypatch.setattr("hermes_runtime.adapters.main_model.resolve_turn_runtime",
+                            lambda *_args: ("test-model", {}))
+        monkeypatch.setattr("tools.mcp_tool_discovery.discover_turn_http_mcp",
+                            lambda allowed, disabled: steps.append((allowed, disabled)))
+
+        with pytest.raises(ReachedAgentSelection):
+            turn.run_sync()
+
+        expected = [] if platform_name == "local" else [(["test-mcp"], None)]
+        assert steps == [*expected, "select agent"]
 
     def test_normal_response_preserves_compression_exhausted(self):
         """A non-empty exhaustion response must still reach auto-reset consumers."""

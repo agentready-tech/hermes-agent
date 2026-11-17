@@ -1230,6 +1230,12 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         runner._reasoning_config = reasoning_config
         stream_consumer, stream_delta_cb, interim_cb, want_interim = self._setup_stream_consumer(platform_key)
         turn_route = runner._resolve_turn_agent_config(ctx.message, model, runtime_kwargs)
+        if ctx.source.platform != Platform.LOCAL:
+            try:
+                from tools.mcp_tool_discovery import discover_turn_http_mcp
+                discover_turn_http_mcp(ctx.enabled_toolsets, ctx.disabled_toolsets)
+            except Exception:
+                logger.warning("HTTP MCP discovery before a gateway turn failed", exc_info=True)
         agent, reused_cached_agent = self._resolve_turn_agent(
             turn_route, platform_key, combined_ephemeral, max_iterations, reasoning_config, pr,
         )

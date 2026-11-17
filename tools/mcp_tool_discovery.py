@@ -606,6 +606,8 @@ def register_mcp_servers(servers: dict[str, dict], *, explicit=True, bootstrap=F
 
 
 def _register_mcp_servers(servers: dict[str, dict], *, explicit=False, bootstrap=False) -> list[str]:
+    from tools.environments.base import EnvironmentConnectionError
+
     scoped_healed = _registration.register_connected_into_current_scope(servers)
     if not servers:
         logger.debug("No explicit MCP servers provided")
@@ -623,10 +625,15 @@ def _register_mcp_servers(servers: dict[str, dict], *, explicit=False, bootstrap
         return _registration._existing_tool_names()
     if not (explicit or bootstrap):
         new_servers = _defer_uncached_http_servers(new_servers)
-    with http_sandbox_activity(new_servers.values()) if bootstrap else nullcontext():
-        if new_servers:
-            _loop._ensure_mcp_loop()
-            _run_discovery_pass(new_servers)
+    try:
+        with http_sandbox_activity(new_servers.values()) if bootstrap else nullcontext():
+            if new_servers:
+                _loop._ensure_mcp_loop()
+                _run_discovery_pass(new_servers)
+    except EnvironmentConnectionError as exc:
+        for name in new_servers:
+            _note_connect_failure(name, exc)
+        raise
     _log_summary("MCP: registered", new_servers, lazy_tools=lazy_registered, lazy_servers=lazy_server_count)
     return _registration._existing_tool_names()
 
@@ -781,6 +788,28 @@ def mcp_servers_awaiting_connect() -> list[str]:
         servers = _config._load_mcp_config()
     wanted = {name for name, cfg in servers.items() if mcp_server_enabled(cfg)}
     return _awaiting_connect(wanted, _core._mcp_registry_scope())
+
+
+def discover_turn_http_mcp(allowed_mcp_names: list[str] | None, disabled_toolsets: list[str] | None = None) -> None:
+    """Register missing HTTP schemas before a native turn builds its tool list."""
+    from tools.environments.network_transport import on_demand_sandbox_lifecycle
+
+    if (allowed_mcp_names is not None and not allowed_mcp_names) or on_demand_sandbox_lifecycle() is None:
+        return
+    with _owner_secret_scope():
+        servers = _config._load_mcp_config()
+    wanted = {name for name, config in servers.items() if 'url' in config and mcp_server_enabled(config)}
+    if allowed_mcp_names is not None:
+        wanted.intersection_update(allowed_mcp_names)
+    if disabled_toolsets:
+        disabled = set(disabled_toolsets)
+        wanted = {name for name in wanted if name not in disabled and f'mcp-{name}' not in disabled}
+    pending = _awaiting_connect(wanted, _core._mcp_registry_scope())
+    if pending:
+        from tools.mcp_oauth import suppress_interactive_oauth
+
+        with suppress_interactive_oauth():
+            discover_mcp_tools(allowed_mcp_names=pending, bootstrap=True)
 
 
 def _forget_lazy_server(key) -> None:

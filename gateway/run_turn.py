@@ -685,7 +685,7 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
             # a browser OAuth flow either: an expired token parks with a `hermes mcp login` hint.
             from tools.mcp_oauth import suppress_interactive_oauth
             with suppress_interactive_oauth():
-                new_tools = await self._run_in_executor_with_context(discover_mcp_tools)
+                new_tools = await self._run_in_executor_with_context(lambda: discover_mcp_tools(explicit=True))
 
             connected_servers = _scoped_server_names()
             if reload_scope is not None:

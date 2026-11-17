@@ -371,10 +371,18 @@ class TestLazyMcpStatus:
         assert status["live"]["status"] == "connected" and status["live"]["tools"] == 2
 
 
-def test_uncached_remote_discovery_is_deferred_until_a_real_turn(monkeypatch):
+@pytest.mark.parametrize('cached', [True, False])
+def test_native_turn_loads_missing_http_schemas_without_reconnecting_known_servers(monkeypatch, cached):
     from contextlib import contextmanager
+    from tools.mcp_tool_scope import _server_key
 
     stages = []
+    config = {
+        'remote-fixture': {'url': 'https://example.test/mcp'},
+        'unselected-fixture': {'url': 'https://other.example.test/mcp'},
+        'disabled-fixture': {'url': 'https://disabled.example.test/mcp'},
+        'stdio-fixture': {'command': 'local-tool'},
+    }
 
     @contextmanager
     def active():
@@ -384,14 +392,57 @@ def test_uncached_remote_discovery_is_deferred_until_a_real_turn(monkeypatch):
 
     monkeypatch.setattr('tools.environments.network_transport.on_demand_sandbox_lifecycle',
                         lambda: SimpleNamespace(active=active))
-    monkeypatch.setattr('tools.mcp_schema_cache.get_cached_entry', lambda *_: None)
+    monkeypatch.setattr('tools.mcp_tool_config._load_mcp_config', lambda: config)
+    monkeypatch.setattr('tools.mcp_schema_cache.get_cached_entry', lambda *_: _fake_cache_entry() if cached else None)
     monkeypatch.setattr(_mcp_loop, '_ensure_mcp_loop', lambda: None)
-    monkeypatch.setattr(_mcp_discovery, '_run_discovery_pass', lambda servers: stages.extend(servers))
-    config = {'remote-fixture': {'url': 'https://example.test/mcp'}}
-    _mcp_discovery.register_mcp_servers(config, explicit=False)
-    assert stages == []
-    _mcp_discovery.register_mcp_servers(config, explicit=False, bootstrap=True)
-    assert stages == ['start', 'remote-fixture', 'release']
+    monkeypatch.setattr(_mcp_loop, '_try_acquire_mcp_discovery_lock', lambda: mcp._LOCK_UNAVAILABLE)
+    monkeypatch.setattr(mcp, '_MCP_AVAILABLE', True)
+    key = _server_key('remote-fixture')
+
+    def register_cache(name, settings, _entry):
+        mcp._lazy_server_configs[_server_key(name)] = settings
+        return ['browser_navigate']
+
+    def connect(servers):
+        stages.extend(servers)
+        mcp._server_connecting.remove(key)
+        mcp._servers[key] = SimpleNamespace(name='remote-fixture', session=object(), _tools=[])
+
+    monkeypatch.setattr(_mcp_registration, '_register_from_cache_sync', register_cache)
+    monkeypatch.setattr(_mcp_discovery, '_run_discovery_pass', connect)
+    if not cached:
+        _mcp_discovery.discover_mcp_tools(['remote-fixture'])
+        assert stages == []
+
+    for _ in range(2):
+        _mcp_discovery.discover_turn_http_mcp(['remote-fixture', 'disabled-fixture', 'stdio-fixture'],
+                                             ['mcp-disabled-fixture'])
+    assert stages == ([] if cached else ['start', 'remote-fixture', 'release'])
+    assert key in (mcp._lazy_server_configs if cached else mcp._servers)
+
+
+def test_failed_http_bootstrap_clears_in_flight_server(monkeypatch):
+    from tools.environments.base import EnvironmentConnectionError
+    from tools.mcp_tool_scope import _server_key
+
+    unavailable = MagicMock()
+    unavailable.__enter__.side_effect = EnvironmentConnectionError('sandbox not ready')
+
+    monkeypatch.setattr('tools.environments.network_transport.on_demand_sandbox_lifecycle',
+                        lambda: SimpleNamespace(active=lambda: unavailable))
+    monkeypatch.setattr('tools.mcp_schema_cache.get_cached_entry', lambda *_: None)
+    monkeypatch.setattr(mcp, '_MCP_AVAILABLE', True)
+    monkeypatch.setattr(mcp, '_server_connect_errors', {})
+    monkeypatch.setattr(mcp, '_server_connect_failures', {})
+    monkeypatch.setattr(mcp, '_server_connect_retry_after', {})
+    config = {'unavailable-fixture': {'url': 'https://example.test/mcp'}}
+
+    with pytest.raises(EnvironmentConnectionError, match='sandbox not ready'):
+        _mcp_discovery.register_mcp_servers(config, explicit=False, bootstrap=True)
+
+    key = _server_key('unavailable-fixture')
+    assert key not in mcp._server_connecting
+    assert key in mcp._server_connect_retry_after
 
 
 @pytest.mark.asyncio

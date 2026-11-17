@@ -76,8 +76,8 @@ async def test_reload_mcp_only_touches_requesting_profile(
     def fake_shutdown(*, scope=None) -> None:
         seen.append(("shutdown", scope, get_hermes_home()))
 
-    def fake_discover() -> list[str]:
-        seen.append(("discover", get_hermes_home()))
+    def fake_discover(*, explicit: bool) -> list[str]:
+        seen.append(("discover", get_hermes_home(), explicit))
         return []
 
     monkeypatch.setattr(_mcp_lifecycle, "shutdown_mcp_servers", fake_shutdown)
@@ -97,7 +97,7 @@ async def test_reload_mcp_only_touches_requesting_profile(
     # "removed").
     assert seen == [
         ("shutdown", worker_scope, worker_home),
-        ("discover", worker_home),
+        ("discover", worker_home, True),
     ]
     assert "default-srv" not in result
 
@@ -133,7 +133,7 @@ async def test_reload_mcp_formats_scoped_connection_keys_before_refreshing_cache
         {launch_key: launch_scope, worker_key: worker_scope},
     )
     monkeypatch.setattr(_mcp_lifecycle, "shutdown_mcp_servers", lambda **_kwargs: None)
-    monkeypatch.setattr(_mcp_discovery, "discover_mcp_tools", list)
+    monkeypatch.setattr(_mcp_discovery, "discover_mcp_tools", lambda **_kwargs: [])
 
     event = MessageEvent(
         text="/reload-mcp", message_id="m1",
@@ -189,7 +189,7 @@ async def test_reload_mcp_reports_a_shared_server_to_a_non_owner_profile(
     monkeypatch.setattr(mcp_tool, "_lazy_server_configs", {})
     monkeypatch.setattr(mcp_tool, "_mcp_registry_scope", lambda: worker_scope)
 
-    def fake_discover() -> list[str]:
+    def fake_discover(**_kwargs) -> list[str]:
         from tools import mcp_tool_registration as _mcp_registration
         _mcp_registration.register_connected_into_current_scope({"shared": {}})
         return ["mcp__shared__tool"]
