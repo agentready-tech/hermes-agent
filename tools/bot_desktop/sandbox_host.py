@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import math
 import shlex
 import subprocess
 import time
@@ -259,9 +260,12 @@ def chromium_executable(env: Any) -> Optional[str]:
     cached = getattr(env, "_bd_chromium", "unset")
     if cached != "unset":
         return cached
-    proc = streams.run_in(env, ["bash", "-c", _CHROMIUM_PROBE], user=_user_for(env), timeout=20)
-    exe = proc.stdout.decode("utf-8", "replace").strip() if proc.returncode == 0 else ""
-    env._bd_chromium = exe or None
+    proc = streams.run_in(env, ["bash", "-c", 'printf "%s\\n" "$HOME"; ' + _CHROMIUM_PROBE],
+                          user=_user_for(env), timeout=20)
+    home, _, exe = proc.stdout.decode("utf-8", "replace").partition("\n")
+    if home.startswith("/"):
+        env._bd_desktop_home = home
+    env._bd_chromium = (exe.strip() or None) if proc.returncode == 0 else None
     return env._bd_chromium
 
 
@@ -310,24 +314,31 @@ def _user_for(env: Any) -> Optional[str]:
     return user
 
 
+_CHECK_BINARIES = "for b in " + " ".join(_REQUIRED) + '; do command -v "$b" >/dev/null 2>&1 || echo "$b"; done'
+
+
 def missing_binaries(env: Any) -> list[str]:
-    script = "for b in " + " ".join(_REQUIRED) + '; do command -v "$b" >/dev/null 2>&1 || echo "$b"; done'
-    proc = streams.probe_in(env, ["bash", "-c", script], user=_user_for(env), timeout=20)
+    proc = streams.probe_in(env, ["bash", "-c", _CHECK_BINARIES], user=_user_for(env), timeout=20)
     return [b for b in proc.stdout.decode("utf-8", "replace").split() if b]
 
 
-def _published(env: Any, rdir: str) -> dict[str, str]:
-    proc = streams.probe_in(env, ["bash", "-c", f"kill -0 $(cat {shlex.quote(rdir)}/launcher.pid 2>/dev/null) 2>/dev/null "
-                                             f"&& test -S {shlex.quote(rdir)}/rfb.sock && cat {shlex.quote(rdir)}/env"],
-                          user=_user_for(env), timeout=15)
-    if proc.returncode != 0:
-        return {}
+def _published_command(rdir: str) -> str:
+    path = shlex.quote(rdir)
+    return f'kill -0 "$(cat {path}/launcher.pid 2>/dev/null)" 2>/dev/null && test -S {path}/rfb.sock && cat {path}/env'
+
+
+def _parse_published(raw: bytes) -> dict[str, str]:
     out: dict[str, str] = {}
-    for line in proc.stdout.decode("utf-8", "replace").splitlines():
+    for line in raw.decode("utf-8", "replace").splitlines():
         k, sep, v = line.partition("=")
         if sep:
             out[k.strip()] = v.strip()
     return out
+
+
+def _published(env: Any, rdir: str) -> dict[str, str]:
+    proc = streams.probe_in(env, ["bash", "-c", _published_command(rdir)], user=_user_for(env), timeout=15)
+    return _parse_published(proc.stdout) if proc.returncode == 0 else {}
 
 
 def published_env(env: Any, profile: str) -> dict[str, str]:
@@ -353,13 +364,7 @@ def start(env: Any, profile: str, *, geometry: str, wait_seconds: float = 20.0,
         # Adopting a screen the sandbox kept while this host's state was lost (fresh HERMES_HOME, a stop()
         # whose kill missed): without the marker, status/thumbnail/stop would not know it is ours.
         return _record(env, rdir, profile, live)
-    stop(env, profile)  # a dead launcher may have left Xvnc holding :20; the relaunch needs it gone
-    missing = missing_binaries(env)
-    if missing:
-        raise RuntimeError(
-            f"Bot Desktop needs {', '.join(missing)} inside the terminal backend's sandbox. The configured image "
-            f"does not have them; use {SANDBOX_IMAGE_HINT} (the default sandbox base plus the desktop stack) as "
-            f"terminal.docker_image / modal_image / singularity_image, or set bot_desktop.placement: gateway.")
+    _marker().unlink(missing_ok=True)
     user = _user_for(env)
     launcher = (Path(__file__).with_name("launcher.sh").read_bytes())
     wallpaper = Path(__file__).with_name("wallpaper.png").read_bytes()
@@ -373,9 +378,6 @@ def start(env: Any, profile: str, *, geometry: str, wait_seconds: float = 20.0,
         f" echo {shlex.quote(base64.b64encode(wallpaper).decode())} | base64 -d > wallpaper.png;"
         " chmod 0700 . launcher.sh"
     )
-    proc = streams.run_in(env, ["bash", "-c", seed], user=user, timeout=30)
-    if proc.returncode != 0:
-        raise RuntimeError(f"could not seed the sandbox desktop dir: {proc.stderr.decode('utf-8', 'replace')[-500:]}")
     num = 20  # one profile per sandbox; the launcher's stale-lock logic handles a leftover :20
     child_env = {
         "HERMES_BD_PROFILE": profile, "HERMES_BD_DISPLAY_NUM": str(num), "HERMES_BD_SOCKET": f"{rdir}/rfb.sock",
@@ -391,20 +393,42 @@ def start(env: Any, profile: str, *, geometry: str, wait_seconds: float = 20.0,
     spawn = (f"cd {shlex.quote(rdir)} && setsid -f bash -c "
              f"'echo $$ > launcher.pid; exec bash launcher.sh' > launcher.log 2>&1 < /dev/null; "
              f"for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s launcher.pid ] && break; sleep 0.1; done; [ -s launcher.pid ]")
-    proc = streams.run_in(env, ["bash", "-c", spawn], child_env=child_env, user=user, timeout=30)
-    if proc.returncode != 0:
-        raise RuntimeError(f"sandbox desktop launcher did not start: {proc.stderr.decode('utf-8', 'replace')[-500:]}")
-    deadline = time.monotonic() + wait_seconds
-    while time.monotonic() < deadline:
-        live = _published(env, rdir)
-        if live.get("DISPLAY"):
-            logger.info("Bot Desktop for profile %s up inside %s on %s", profile, type(env).__name__, live["DISPLAY"])
-            return _record(env, rdir, profile, live)
-        time.sleep(0.25)
-    tail = streams.run_in(env, ["tail", "-c", "2000", f"{rdir}/launcher.log"], user=user, timeout=10).stdout
-    stop(env, profile)
-    raise RuntimeError(f"sandbox desktop did not publish its display within {wait_seconds:.0f}s:\n"
-                       f"{tail.decode('utf-8', 'replace')}")
+    # Transmit the script via stdin so the stale-process scan cannot match the exec command itself.
+    # Keep one exec lease across seeding, launch, and readiness polling.
+    cleanup = _stop_command(rdir)
+    script = f"""
+set -e
+missing=$({_CHECK_BINARIES})
+if [ -n "$missing" ]; then printf '%s\\n' "$missing"; exit 2; fi
+if [ -d {shlex.quote(rdir)} ]; then ( {cleanup} ) || true; fi
+{seed}
+{spawn}
+deadline=$((SECONDS + {math.ceil(wait_seconds)}))
+while (( SECONDS < deadline )); do
+    if ready=$({_published_command(rdir)}); then
+        printf '%s\\n' "$ready"
+        exit 0
+    fi
+    sleep 0.1
+done
+tail -c 2000 launcher.log >&2 || true
+( {cleanup} ) || true
+exit 1
+"""
+    proc = streams.run_in(env, ["bash", "-s"], stdin=script.encode(), child_env=child_env, user=user,
+                          timeout=max(30, wait_seconds + 10))
+    if proc.returncode == 2 and proc.stdout:
+        missing = ", ".join(proc.stdout.decode("utf-8", "replace").split())
+        raise RuntimeError(
+            f"Bot Desktop needs {missing} inside the terminal backend's sandbox. The configured image "
+            f"does not have them; use {SANDBOX_IMAGE_HINT} (the default sandbox base plus the desktop stack) as "
+            f"terminal.docker_image / modal_image / singularity_image, or set bot_desktop.placement: gateway.")
+    live = _parse_published(proc.stdout) if proc.returncode == 0 else {}
+    if not live.get("DISPLAY"):
+        raise RuntimeError(f"sandbox desktop could not start or did not publish its display within {wait_seconds:.0f}s:\n"
+                           f"{proc.stderr.decode('utf-8', 'replace')[-2000:]}")
+    logger.info("Bot Desktop for profile %s up inside %s on %s", profile, type(env).__name__, live["DISPLAY"])
+    return _record(env, rdir, profile, live)
 
 
 def _record(env: Any, rdir: str, profile: str, live: dict[str, str]) -> dict[str, str]:
@@ -414,23 +438,24 @@ def _record(env: Any, rdir: str, profile: str, live: dict[str, str]) -> dict[str
     return live
 
 
-def stop(env: Any, profile: str) -> bool:
-    """Kill the launcher's session (Xvnc, dbus, Xfce, anything the desktop spawned) and, as a backstop, every
-    process still holding this profile's rfb.sock or Xauthority path (a launcher that lost its pid file left
-    an Xvnc that 'Server is already active for display 20' on the next start). True when something was live."""
-    rdir = _remote_dir(env, profile)
+def _stop_command(rdir: str) -> str:
     q = shlex.quote(rdir)
-    script = f"""
+    return f"""
 live=0
-p=$(cat {q}/launcher.pid 2>/dev/null)
+p=$(cat {q}/launcher.pid 2>/dev/null) || p=
 if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then live=1; kill -TERM -- -"$p" 2>/dev/null || kill -TERM "$p" 2>/dev/null; fi
 for pid in $(pgrep -f -- {shlex.quote(rdir + "/")} 2>/dev/null); do [ "$pid" != "$$" ] && {{ live=1; kill -TERM "$pid" 2>/dev/null; }}; done
-sleep 0.5
+[ "$live" = 0 ] || sleep 0.5
 for pid in $(pgrep -f -- {shlex.quote(rdir + "/")} 2>/dev/null); do [ "$pid" != "$$" ] && kill -KILL "$pid" 2>/dev/null; done
 rm -f {q}/env {q}/launcher.pid {q}/rfb.sock
 [ "$live" = 1 ]
 """
-    proc = streams.run_in(env, ["bash", "-c", script], user=_user_for(env), timeout=30, passive=True)
+
+
+def stop(env: Any, profile: str) -> bool:
+    """Kill the launcher's session and any process still holding this screen's own socket or Xauthority."""
+    script = _stop_command(_remote_dir(env, profile))
+    proc = streams.run_in(env, ["bash", "-s"], stdin=script.encode(), user=_user_for(env), timeout=30, passive=True)
     _marker().unlink(missing_ok=True)
     return proc.returncode == 0
 

@@ -1,9 +1,10 @@
 """Sandbox restart removes runtime scratch while preserving the user's Xfce configuration."""
 
 import shutil
+import shlex
 import subprocess
 
-from tools.bot_desktop import sandbox_host
+from tools.bot_desktop import browser_memory, sandbox_host
 
 
 def test_xfce_config_moves_out_of_scratch_and_survives_recreation(tmp_path, monkeypatch):
@@ -22,25 +23,30 @@ def test_xfce_config_moves_out_of_scratch_and_survives_recreation(tmp_path, monk
     old_config.mkdir(parents=True)
     (old_config / "user-theme.xml").write_text("original user choice")
     monkeypatch.setattr(sandbox_host, "_user_for", lambda _env: None)
-    monkeypatch.setattr(sandbox_host, "stop", lambda *_args: True)
-    monkeypatch.setattr(sandbox_host, "missing_binaries", lambda *_args: [])
+    monkeypatch.setattr(browser_memory, "configure", lambda _env: None)
+    monkeypatch.setattr(sandbox_host, "_CHECK_BINARIES", ":")
+    monkeypatch.setattr(sandbox_host, "_marker", lambda: tmp_path / "sandbox.json")
+    monkeypatch.setattr(sandbox_host, "_published", lambda *_args: {})
     monkeypatch.setattr(sandbox_host, "_record", lambda _env, _dir, _profile, live: live)
     invocations = []
 
-    def run_in(_env, argv, **_kwargs):
+    def run_in(_env, argv, *, stdin, child_env, **_kwargs):
         invocations.append(argv)
-        if argv[:2] == ["bash", "-c"] and argv[2].startswith("set -e;"):
-            return subprocess.run(argv, capture_output=True, check=False)
-        return subprocess.CompletedProcess(argv, 0, b"", b"")
+        assert argv == ["bash", "-s"]
+        # Run the real preparation without starting Xvnc on the test machine.
+        run_dir = str(old_config.parent)
+        prepare, launch, wait = stdin.decode().partition(f"\ncd {shlex.quote(run_dir)} && setsid")
+        assert launch and "while (( SECONDS < deadline ))" in wait
+        assert child_env["HERMES_BD_ENV_FILE"] == f"{run_dir}/env"
+        subprocess.run(argv, input=prepare.encode(), capture_output=True, check=True)
+        return subprocess.CompletedProcess(argv, 0, b"DISPLAY=:20\n", b"")
 
     monkeypatch.setattr(sandbox_host.streams, "run_in", run_in)
     for expected in ("original user choice", "customized later"):
-        responses = iter(({}, {"DISPLAY": ":20"}))
-        monkeypatch.setattr(sandbox_host, "_published", lambda *_args: next(responses))
         sandbox_host.start(env, "default", geometry="1280x800")
         persisted = home / ".hermes/bot-desktop/config/default/user-theme.xml"
         assert persisted.read_text() == expected
         assert not (scratch / "hermes-bot-desktop/default/xdg").exists()
         persisted.write_text("customized later")
         shutil.rmtree(scratch)
-    assert invocations
+    assert invocations == [["bash", "-s"], ["bash", "-s"]]

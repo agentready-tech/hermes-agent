@@ -73,6 +73,8 @@ def terminal_environment(*, create: bool = True) -> Optional[Any]:
         env = tt._lookup_active_env(task_id, None)
     if env is not None or not create:
         return env
+    if _terminal_backend() == "kubernetes":
+        return tt.ensure_task_env()
     # Acquire through the same planner the terminal tool uses so the container carries the same mounts,
     # limits and identity label; a trivial command warms it.
     tt.terminal_tool("true", task_id=None)

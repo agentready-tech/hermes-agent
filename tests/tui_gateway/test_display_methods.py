@@ -266,3 +266,17 @@ def test_switch_sandbox_image_decides_only_a_pending_switch(monkeypatch, tmp_pat
     assert decided == [(switch, False)]
     assert resp["result"]["docker_image"] == "nousresearch/hermes-sandbox:desktop"
     assert resp["result"]["running"] is False and "lease" in resp["result"]
+
+def test_start_returns_the_status_already_read_during_launch(monkeypatch, _fresh_lease):
+    from tools.bot_desktop import runtime
+    from tui_gateway import server
+
+    started = runtime.DesktopStatus(
+        profile="default", supported=True, installed=True, missing=[], running=True, pid=None,
+        display=":20", socket=None, geometry="1280x800", install_command=None, browser=None,
+        placement="terminal:kubernetes",
+    )
+    monkeypatch.setattr(runtime, "start", lambda: started)
+    monkeypatch.setattr(runtime, "status", lambda: pytest.fail("Start must not probe the sandbox again"))
+    snapshot = _call(server, "display.start", {})["result"]
+    assert snapshot["running"] and snapshot["lease"]["holder"] == _fresh_lease.AGENT

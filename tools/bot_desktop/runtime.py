@@ -646,18 +646,21 @@ def status(profile: Optional[str] = None) -> DesktopStatus:
     )
 
 
-def _sandbox_status(profile: Optional[str], where) -> DesktopStatus:
+def _sandbox_status(profile: Optional[str], where, *, published: Optional[dict[str, str]] = None) -> DesktopStatus:
     """Status of a sandbox-placed screen. Package presence is only known once the sandbox exists; before
     that the pane shows "installed" with the image hint carried in ``install_command`` so Start can explain."""
     from tools.bot_desktop import sandbox_host
-    marker = sandbox_host._read_marker()
-    if marker.get("firecracker") or where.backend == "firecracker":
-        env = _firecracker_screen_env(marker)
-    else:
-        env = _owned_sandbox_env(passive=True) if marker.get("kubernetes") else (
-            _owned_sandbox_env() or _sandbox_env(create=False))
-    missing = sandbox_host.missing_binaries(env) if env is not None else []
-    published = sandbox_host.published_env(env, profile or _profile_name()) if env is not None else {}
+    missing = []
+    if published is None:
+        marker = sandbox_host._read_marker()
+        if marker.get("firecracker") or where.backend == "firecracker":
+            env = _firecracker_screen_env(marker)
+        else:
+            env = _owned_sandbox_env(passive=True) if marker.get("kubernetes") else (
+                _owned_sandbox_env() or _sandbox_env(create=False))
+        published = sandbox_host.published_env(env, profile or _profile_name()) if env is not None else {}
+        if env is not None and not published.get("DISPLAY"):
+            missing = sandbox_host.missing_binaries(env)
     running = bool(published.get("DISPLAY"))
     # No install_command: the pane's Install button runs apt on the HOST, which is the wrong machine here.
     # A sandbox missing the stack is a blocker (shown in place of Start) naming the image that has it.
@@ -889,7 +892,7 @@ def _start_in_sandbox(wait_seconds: float) -> DesktopStatus:
                                        browser_exec=browser[0], browser_exec_line=browser[1])
     (sd / "env").write_text("".join(f"{k}={v}\n" for k, v in published.items()), encoding="utf-8")
     touch_activity()
-    return status()
+    return _sandbox_status(None, placement.resolve(), published=published)
 
 
 def _sandbox_published_env(marker) -> dict[str, str]:

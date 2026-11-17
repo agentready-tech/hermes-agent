@@ -28,10 +28,11 @@ _DISPLAY_ERR = 5300
 _lease_listener_installed = threading.Event()
 
 
-def _display_snapshot() -> dict:
+def _display_snapshot(st=None) -> dict:
     from hermes_constants import hermes_home_key
     from tools.bot_desktop import lease as _bd_lease, runtime as _bd_runtime
-    st = _bd_runtime.status()
+    if st is None:
+        st = _bd_runtime.status()
     return {**st.as_dict(), "lease": _bd_lease.public_view(_bd_lease.get()), "profile_key": hermes_home_key()}
 
 
@@ -84,8 +85,7 @@ def _(rid, params: dict) -> dict:
     _install_lease_listener()
     from tools.bot_desktop import runtime as _bd_runtime
     try:
-        _bd_runtime.start()
-        return _ok(rid, _display_snapshot())
+        return _ok(rid, _display_snapshot(_bd_runtime.start()))
     except Exception as e:
         return _err(rid, _DISPLAY_ERR, str(e))
 
@@ -179,14 +179,15 @@ def _(rid, params: dict) -> dict:
     from hermes_cli.dashboard_auth.ws_tickets import mint_ticket
     from tools.bot_desktop import runtime as _bd_runtime
     try:
-        # The bridge dials either the host RFB socket or the sandbox relay; neither exists before start.
-        if _bd_runtime.rfb_socket_path() is None and not _bd_runtime.sandbox_screen_running():
+        snapshot = _display_snapshot()
+        sandbox_running = snapshot["running"] and snapshot.get("placement", "").startswith("terminal:")
+        if not sandbox_running and _bd_runtime.rfb_socket_path() is None:
             return _err(rid, _DISPLAY_ERR, "this profile's Bot Desktop is not running; call display.start first")
         viewer_id = _mint_viewer_id(str(params.get("viewer_id") or "").strip())
         ticket = mint_ticket(user_id=f"display:{viewer_id}", provider="bot-desktop",
                              extra={"hermes_home": str(get_hermes_home()), "viewer_id": viewer_id})
         return _ok(rid, {"ticket": ticket, "path": "/api/display/ws", "viewer_id": viewer_id,
-                         **_display_snapshot()})
+                         **snapshot})
     except Exception as e:
         return _err(rid, _DISPLAY_ERR, str(e))
 
