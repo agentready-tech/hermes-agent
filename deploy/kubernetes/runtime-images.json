@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.17.7",
+  "defaultRuntimeVersion": "2026.11.18.1",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -4694,6 +4694,43 @@
         "panelAndSandboxLifecycleRegressionTestsPassed": 101
       },
       "description": "Keep on-demand Kubernetes sandboxes asleep when the Panel connector starts."
+    },
+    "2026.11.18.1": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:630ec8fd4e108aff38d55b346bdcb9374c5bbd12efc3db42f042010e70efdce8",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.18.1",
+      "configDigest": "sha256:8209755dbe363fcd509c45350f98e2ad5fa536bf4dc4b745e366d7b73803715f",
+      "platform": "linux/amd64",
+      "sourceRevision": "b488b45e4dd5a5aa920190fffb99fafa4c462aaa",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:630ec8fd4e108aff38d55b346bdcb9374c5bbd12efc3db42f042010e70efdce8",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.18.1",
+        "digest": "sha256:630ec8fd4e108aff38d55b346bdcb9374c5bbd12efc3db42f042010e70efdce8",
+        "configDigest": "sha256:8209755dbe363fcd509c45350f98e2ad5fa536bf4dc4b745e366d7b73803715f",
+        "sourceRevision": "b488b45e4dd5a5aa920190fffb99fafa4c462aaa",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 44175631192,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:c5f4329275f1bf0658489a318e3bd5f653ecfad9997255ba39faa04c5fb653c9",
+        "deployRunId": 44177693295
+      },
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml",
+      "validation": {
+        "runtimeReady": true,
+        "futureDefaultConfigured": true,
+        "desktopRegressionTestsPassed": 65
+      },
+      "description": "Reduce Kubernetes exec round trips on cold and warm Desktop startup."
     }
   },
   "supersededRuntimeAttempts": {
