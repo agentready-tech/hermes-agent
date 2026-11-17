@@ -288,8 +288,12 @@ async def _worker(home):
     if not panel.get("url") or not credential or (with_dashboard and not dashboard_token):
         raise ValueError("Panel connection is not registered for this Hermes home")
     if config.get("computer", {}).get("enabled"):
-        from tools.bot_desktop import placement
-        if placement.resolve().backend != "firecracker":
+        from tools.terminal_tool import _get_env_config
+
+        terminal = _get_env_config()
+        backend = terminal["env_type"]
+        kubernetes_on_demand = backend == "kubernetes" and terminal["kubernetes_idle_seconds"] > 0
+        if backend != "firecracker" and not kubernetes_on_demand:
             await asyncio.to_thread(start_desktop)
     port = config["port"] if with_dashboard else None
     if with_dashboard:

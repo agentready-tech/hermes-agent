@@ -88,14 +88,22 @@ def test_new_employee_admits_one_hidden_introduction_without_a_viewer(monkeypatc
 
 
 @pytest.mark.parametrize("dashboard", [True, False])
-@pytest.mark.parametrize("backend", ["kubernetes", "firecracker"])
-def test_panel_worker_binds_its_home_before_choosing_chat_transport(monkeypatch, tmp_path, dashboard, backend):
+@pytest.mark.parametrize(("backend", "idle_seconds", "starts_desktop"), [
+    ("docker", 0, True),
+    ("kubernetes", 0, True),
+    ("kubernetes", 300, False),
+    ("firecracker", 0, False),
+])
+def test_panel_worker_binds_its_home_before_choosing_chat_transport(
+    monkeypatch, tmp_path, dashboard, backend, idle_seconds, starts_desktop,
+):
     from hermes_runtime.adapters import hermes, state
     from hermes_runtime.standalone import computer, panel, config
-    from tools.bot_desktop import placement
     desktop_starts = []
     monkeypatch.setattr(computer, "start_desktop", lambda: desktop_starts.append(backend))
-    monkeypatch.setattr(placement, "resolve", lambda: placement.Placement(placement.TERMINAL, backend))
+    monkeypatch.setattr("tools.terminal_tool._get_env_config", lambda: {
+        "env_type": backend, "kubernetes_idle_seconds": idle_seconds,
+    })
     monkeypatch.setattr(hermes, "_home", None)
     monkeypatch.setattr(config, "settings", lambda home: {
         "dashboard": {"enabled": dashboard}, **({"port": 1} if dashboard else {}),
@@ -119,7 +127,7 @@ def test_panel_worker_binds_its_home_before_choosing_chat_transport(monkeypatch,
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(panel.worker(tmp_path))
-    assert desktop_starts == ([backend] if backend == "kubernetes" else [])
+    assert desktop_starts == ([backend] if starts_desktop else [])
 
 
 @pytest.mark.asyncio
