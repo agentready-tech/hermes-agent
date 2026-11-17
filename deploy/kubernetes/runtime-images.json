@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.16.4",
+  "defaultRuntimeVersion": "2026.11.17.1",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -4508,6 +4508,44 @@
         "productionBackgroundReviewTested": false
       },
       "description": "Keep automatic background memory and skill reviews quiet, with scoped memory consolidation for managed profiles."
+    },
+    "2026.11.17.1": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:f9396d918ea34836c73141315d790a5261ef3551b487407a84f290d01b02a735",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.17.1",
+      "configDigest": "sha256:810543469d7f7db16729307d3f5e2276e02528fa48c4271328f745d0e9138da8",
+      "platform": "linux/amd64",
+      "sourceRevision": "b2a34edd735e26c214ec0c9f8e863cdef39303cf",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:f9396d918ea34836c73141315d790a5261ef3551b487407a84f290d01b02a735",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.17.1",
+        "digest": "sha256:f9396d918ea34836c73141315d790a5261ef3551b487407a84f290d01b02a735",
+        "configDigest": "sha256:810543469d7f7db16729307d3f5e2276e02528fa48c4271328f745d0e9138da8",
+        "sourceRevision": "b2a34edd735e26c214ec0c9f8e863cdef39303cf",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 44071344504,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:6ef55e5f3e7a4f2b41b491bfefb42e03356b20f301041c3f4a51fdc5e4087d68",
+        "deployRunId": 44074227219
+      },
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml",
+      "validation": {
+        "runtimeReady": true,
+        "futureDefaultConfigured": true,
+        "workspaceRegressionTestsPassed": 60,
+        "productionWorkspaceTested": false
+      },
+      "description": "Preserve bounded Google HTTP diagnostics, classify Sheets filter reads accurately, and keep mail available after Sheets errors."
     }
   },
   "supersededRuntimeAttempts": {
