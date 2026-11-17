@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.17.6",
+  "defaultRuntimeVersion": "2026.11.17.7",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -4657,6 +4657,43 @@
         "gatewayTurnAndSandboxMcpRegressionTestsPassed": 40
       },
       "description": "Use passive HTTP MCP sessions for idle Kubernetes sandboxes and reconnect on demand."
+    },
+    "2026.11.17.7": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:c5f4329275f1bf0658489a318e3bd5f653ecfad9997255ba39faa04c5fb653c9",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.17.7",
+      "configDigest": "sha256:d6ce6afbcb3838cc388b38c055d89dca7915b68c8bd9050db5238de7f6082663",
+      "platform": "linux/amd64",
+      "sourceRevision": "394176c267120197654eeb0ec9e70cde6c69ee62",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:c5f4329275f1bf0658489a318e3bd5f653ecfad9997255ba39faa04c5fb653c9",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.17.7",
+        "digest": "sha256:c5f4329275f1bf0658489a318e3bd5f653ecfad9997255ba39faa04c5fb653c9",
+        "configDigest": "sha256:d6ce6afbcb3838cc388b38c055d89dca7915b68c8bd9050db5238de7f6082663",
+        "sourceRevision": "394176c267120197654eeb0ec9e70cde6c69ee62",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 44099487891,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:2b2f4394118775c3435e3cb3d0fe2e4d598bd5c5d491d31987a1a37de4cf2a99",
+        "deployRunId": 44102434560
+      },
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml",
+      "validation": {
+        "runtimeReady": true,
+        "futureDefaultConfigured": true,
+        "panelAndSandboxLifecycleRegressionTestsPassed": 101
+      },
+      "description": "Keep on-demand Kubernetes sandboxes asleep when the Panel connector starts."
     }
   },
   "supersededRuntimeAttempts": {
