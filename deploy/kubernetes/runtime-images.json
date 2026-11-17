@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.17.4",
+  "defaultRuntimeVersion": "2026.11.17.6",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -4620,6 +4620,43 @@
         "sandboxLifecycleAndWatchdogRegressionTestsPassed": 31
       },
       "description": "Keep browser watchdog polling passive for on-demand Kubernetes sandboxes."
+    },
+    "2026.11.17.6": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:2b2f4394118775c3435e3cb3d0fe2e4d598bd5c5d491d31987a1a37de4cf2a99",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.17.6",
+      "configDigest": "sha256:cfe017ba94c601325665defecaaa0941072249cfa57e04983c7c658bebbea594",
+      "platform": "linux/amd64",
+      "sourceRevision": "49461eb4083d2cca0613598b34dcd1d7639802dd",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:2b2f4394118775c3435e3cb3d0fe2e4d598bd5c5d491d31987a1a37de4cf2a99",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.17.6",
+        "digest": "sha256:2b2f4394118775c3435e3cb3d0fe2e4d598bd5c5d491d31987a1a37de4cf2a99",
+        "configDigest": "sha256:cfe017ba94c601325665defecaaa0941072249cfa57e04983c7c658bebbea594",
+        "sourceRevision": "49461eb4083d2cca0613598b34dcd1d7639802dd",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 44095230186,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:f4675341dc3bdef7e53129f92fd1d1de7247569c3f4cf8962ecb0d9868858b19",
+        "deployRunId": 44097178409
+      },
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml",
+      "validation": {
+        "runtimeReady": true,
+        "futureDefaultConfigured": true,
+        "gatewayTurnAndSandboxMcpRegressionTestsPassed": 40
+      },
+      "description": "Use passive HTTP MCP sessions for idle Kubernetes sandboxes and reconnect on demand."
     }
   },
   "supersededRuntimeAttempts": {
