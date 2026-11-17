@@ -88,6 +88,7 @@ class KubernetesEnvironment(BaseEnvironment):
         self._kubectl_exe = command[0]
         self.namespace, self.pod, self.container = namespace, pod, container
         self._persistent = True
+        self._probe_only = probe_only
         self.lifecycle = None
         if idle_seconds:
             from hermes_constants import get_hermes_home
@@ -106,6 +107,8 @@ class KubernetesEnvironment(BaseEnvironment):
     def activate(self) -> None:
         """A real use may wake an idle sandbox, even when an environment is cached."""
         if self.lifecycle:
+            if self._probe_only:
+                raise EnvironmentConnectionError("The probe cannot activate a Kubernetes sandbox")
             with self.lifecycle.active() as (identity, _):
                 current = {**identity, "kubectl": self._kubectl_exe}
                 self._refresh_identity(current)
@@ -136,6 +139,8 @@ class KubernetesEnvironment(BaseEnvironment):
         if user:
             argv.extend(["runuser", "-u", user, "--"])
         if self.lifecycle:
+            # A probe-only handle stays tied to the same existing Pod.
+            passive = passive or self._probe_only
             if (passive or require_current) and not expected_uid:
                 expected_uid = self.kubernetes_identity["uid"]
             return [sys.executable, "-m", "tools.environments.kubernetes_lifecycle", str(self.lifecycle.home),

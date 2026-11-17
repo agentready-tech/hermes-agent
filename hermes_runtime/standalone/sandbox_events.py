@@ -73,21 +73,31 @@ def admit(home, event):
 
 def poll(home):
     from tools.bot_desktop.browser_memory_guard import configuration, deliver_events, marker, receive
-    from tools.bot_desktop.placement import _terminal_backend
+    from tools.environments.base import EnvironmentConnectionError
     from tools.environments.network_transport import sandbox_environment
     from tools.terminal_scope import install_and_reset_profile_terminal_scope
 
     require_owner(home)
-    if configuration(home)['enabled'] or marker().exists():
-        with install_and_reset_profile_terminal_scope(home):
-            if _terminal_backend() == 'firecracker':
-                from tools.environments.firecracker import acknowledge_watchdog_event, watchdog_events
-                return deliver_events(watchdog_events(), lambda event: admit(home, event), acknowledge_watchdog_event)
-        environment = sandbox_environment()
-        if environment is None:
-            raise RuntimeError('Sandbox watchdog requires the agent sandbox, never host execution')
-        return receive(environment, lambda event: admit(home, event))
-    return 0
+    if not (configuration(home)['enabled'] or marker().exists()):
+        return 0
+    with install_and_reset_profile_terminal_scope(home):
+        from tools.terminal_tool import _get_env_config
+
+        config = _get_env_config()
+        if config['env_type'] == 'firecracker':
+            from tools.environments.firecracker import acknowledge_watchdog_event, watchdog_events
+            return deliver_events(watchdog_events(), lambda event: admit(home, event), acknowledge_watchdog_event)
+        if config['env_type'] == 'kubernetes' and config['kubernetes_idle_seconds']:
+            from tools.terminal_tool_backends import _build_kubernetes_env
+            try:
+                environment = _build_kubernetes_env(cwd='/workspace', timeout=15, cc=config, probe_only=True)
+            except EnvironmentConnectionError:
+                return 0  # No Ready Pod; the durable watchdog receipts remain on its volume.
+            return receive(environment, lambda event: admit(home, event))
+    environment = sandbox_environment()
+    if environment is None:
+        raise RuntimeError('Sandbox watchdog requires the agent sandbox, never host execution')
+    return receive(environment, lambda event: admit(home, event))
 
 
 async def watch(home):

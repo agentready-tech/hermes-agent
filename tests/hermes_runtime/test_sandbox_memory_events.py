@@ -163,6 +163,32 @@ def test_firecracker_admits_persistent_events_without_waking_and_retries_ack(hom
     assert acknowledgments == ['a' * 32, 'a' * 32]
 
 
+@pytest.mark.parametrize('ready', (False, True))
+def test_on_demand_kubernetes_receipts_only_use_a_ready_probe(home, monkeypatch, ready):
+    from tools.environments.base import EnvironmentConnectionError
+    from tools import terminal_tool_backends
+
+    (home / 'config.yaml').write_text('terminal:\n  backend: kubernetes\n  kubernetes_idle_seconds: 300\n'
+                                     'browser:\n  memory_guard:\n    enabled: true\n')
+    monkeypatch.setattr('tools.environments.network_transport.sandbox_environment',
+                        lambda: pytest.fail('A watchdog poll must not wake an on-demand sandbox'))
+    probe = object()
+    attempts = []
+
+    def probe_environment(*, cc, probe_only, **_kwargs):
+        assert probe_only and cc['kubernetes_idle_seconds'] == 300
+        attempts.append(probe_only)
+        if not ready:
+            raise EnvironmentConnectionError('no ready sandbox')
+        return probe
+
+    monkeypatch.setattr(terminal_tool_backends, '_build_kubernetes_env', probe_environment)
+    calls = []
+    monkeypatch.setattr(bridge, 'receive', lambda environment, callback: calls.append(environment) or 1)
+    assert events.poll(home) == int(ready)
+    assert attempts == [True] and calls == ([probe] if ready else [])
+
+
 def test_foreign_home_is_refused_before_sandbox_or_native_queue_access(home, tmp_path, monkeypatch):
     monkeypatch.setattr('tools.environments.network_transport.sandbox_environment',
                         lambda: pytest.fail('Foreign profile must never reach a sandbox'))

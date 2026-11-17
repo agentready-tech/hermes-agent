@@ -193,7 +193,14 @@ def test_cached_terminal_wakes_after_retirement_but_stream_probe_does_not(tmp_pa
     assert env.execute("printf first")["output"].strip() == "first"
     old_uid = env.kubernetes_identity["uid"]
     _age(env.lifecycle.activity, 301)
+    last_use = env.lifecycle.activity.stat().st_mtime_ns
+    probe = make_env(probe_only=True)
+    assert streams.run_in(probe, ["printf", "watchdog receipt"]).stdout == b"watchdog receipt"
+    assert env.lifecycle.activity.stat().st_mtime_ns == last_use
+    with pytest.raises(EnvironmentConnectionError, match="cannot activate"):
+        probe.activate()
     assert env.lifecycle.stop_if_idle()
+    assert streams.run_in(probe, ["printf", "forbidden"]).returncode == 125
     assert streams.probe_in(env, ["printf", "forbidden"]).returncode == 125
     assert json.loads(state.read_text())["scales"] == [1, 0]
     assert env.execute("printf next")["output"].strip() == "next"
