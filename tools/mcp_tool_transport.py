@@ -265,6 +265,8 @@ class MCPServerTransportMixin:
         self.session = session
         if mark_lifecycle:
             self._mark_lifecycle_started()
+        elif self._recycled_reason == 'sandbox_idle':
+            self._recycled_reason = None
         await self._discover_tools()
         self._ready.set()
         self._ever_connected = True
@@ -622,6 +624,9 @@ class MCPServerTransportMixin:
         # Hash the endpoint this attempt connects to: a second read of the runtime file could
         # publish another endpoint's identity alongside this session.
         self._resolved_identity = _registration._identity_digest(inputs)
+        sandbox = inputs[2] if len(inputs) > 2 else {}
+        target = sandbox.get('target', {}).get('kubernetes_identity') or {}
+        self._http_sandbox_uid = target.get('uid')
         url, headers = inputs[:2]
         logger.debug("MCP server '%s': connecting to %s", self.name, url)
         self._http_rejection = {}  # last 4xx/5xx the owned client saw this attempt (recorder hook)

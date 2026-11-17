@@ -466,6 +466,11 @@ def _adopter_identity_digest(server_name: str, config: dict) -> str | None:
     if "url" not in config and not config.get("command"):  # the transport refuses it before resolving
         return None
     try:
+        if "url" in config:
+            from tools.environments.network_transport import on_demand_sandbox_lifecycle
+
+            if on_demand_sandbox_lifecycle() is not None:
+                return None  # The HTTP route is profile-owned and cannot be adopted across profiles.
         inputs, _ = _connect_inputs(server_name, config)
     except LiveEndpointUnavailable:  # the transport cannot connect either; never equal to a live one
         return None

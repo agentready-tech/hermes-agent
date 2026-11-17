@@ -273,7 +273,7 @@ def discover_profile_mcp(policy):
     from tools.mcp_oauth import suppress_interactive_oauth
     from tools.mcp_tool_discovery import discover_mcp_tools
     with suppress_interactive_oauth():
-        discover_mcp_tools(allowed_mcp_names=list(policy.toolsets))
+        discover_mcp_tools(allowed_mcp_names=list(policy.toolsets), bootstrap=True)
 
 
 def retire_agent(agent):

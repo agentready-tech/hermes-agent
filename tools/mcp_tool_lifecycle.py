@@ -142,7 +142,7 @@ def _reregister_orphaned_adopters() -> None:
             secret_token = set_secret_scope(build_profile_secret_scope(Path(adopter)), profile_home=adopter)
             servers = {n: c for n, c in (_load_mcp_config() or {}).items() if n in names}
             if servers:
-                _discovery.register_mcp_servers(servers)
+                _discovery.register_mcp_servers(servers, explicit=False)
         except Exception:
             logger.debug("MCP: re-registration for profile scope %s failed", adopter, exc_info=True)
         finally:

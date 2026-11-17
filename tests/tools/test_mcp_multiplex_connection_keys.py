@@ -418,11 +418,20 @@ def test_adopter_scope_setup_failure_leaks_no_override_and_continues(two_profile
     monkeypatch.setattr("tools.mcp_tool_config._load_mcp_config",
                         lambda: {"x": {"url": "https://mcp.example/x"}})
     registered = []
-    monkeypatch.setattr(disc, "register_mcp_servers", lambda servers: registered.append(dict(servers)))
+    monkeypatch.setattr(disc, "register_mcp_servers", lambda servers, *, explicit: registered.append((dict(servers), explicit)))
 
     lifecycle._reregister_orphaned_adopters()
 
     from hermes_constants import get_hermes_home_override
     assert get_hermes_home_override() is None
     assert ss.current_secret_scope() is None
-    assert registered == [{"x": {"url": "https://mcp.example/x"}}]
+    assert registered == [({"x": {"url": "https://mcp.example/x"}}, False)]
+
+
+def test_managed_http_adoption_probe_never_resolves_or_starts_sandbox(monkeypatch):
+    from tools import mcp_tool_registration, mcp_tool_transport
+
+    monkeypatch.setattr('tools.environments.network_transport.on_demand_sandbox_lifecycle', lambda: object())
+    monkeypatch.setattr(mcp_tool_transport, '_connect_inputs',
+                        lambda *_: pytest.fail('A cross-profile adoption probe must never start a sandbox'))
+    assert mcp_tool_registration._adopter_identity_digest('remote', {'url': 'https://example.test/mcp'}) is None

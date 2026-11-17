@@ -8,6 +8,7 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Optional
+from tools.environments.network_transport import SandboxNetworkDormant, passive_sandbox_connections
 from tools.mcp_tool_common import _core, _get_lifecycle_seconds, _jittered, _resolve_tool_timeout
 from tools import mcp_tool_errors as _errors
 from tools import mcp_tool_registration as _registration
@@ -288,11 +289,14 @@ class MCPServerRunMixin:
             if (config.get("transport") != "sse" and not config.get("skip_preflight")
                     and liveness_for(self.name).kind != "server_json"
                     and not self._ready.is_set() and self._auth_type != "oauth"):
-                await self._preflight_content_type(
-                    config["url"], headers=dict(config.get("headers") or {}),
-                    ssl_verify=config.get("ssl_verify", True),
-                    client_cert=_errors._resolve_client_cert(self.name, config),
-                    strict_redirect_headers=bool(config.get("strict_redirect_headers")))
+                async with passive_sandbox_connections():
+                    await self._preflight_content_type(
+                        config["url"], headers=dict(config.get("headers") or {}),
+                        ssl_verify=config.get("ssl_verify", True),
+                        client_cert=_errors._resolve_client_cert(self.name, config),
+                        strict_redirect_headers=bool(config.get("strict_redirect_headers")))
+        except SandboxNetworkDormant:
+            return True  # The run loop defers connection until the sandbox is Ready.
         except (_errors.InvalidMcpUrlError, _errors.NonMcpEndpointError) as exc:
             logger.warning("%s", exc)
             self._publish_error(exc)  # fail fast and non-retryably
@@ -326,6 +330,12 @@ class MCPServerRunMixin:
         self._sse_fallback = False  # latched for the old endpoint
         return fresh
 
+    async def _serve_connection(self, config: dict):
+        if not self._is_http():
+            return await self._run_stdio(config)
+        async with passive_sandbox_connections():
+            return await self._run_http(config)
+
     async def run(self, config: dict):
         """Long-lived: connecting -> connected -> (degraded -> parked -> revived)*. Unproven drops
         and transport errors charge a rapid-drop budget with jittered backoff; exhausting it (or
@@ -353,10 +363,19 @@ class MCPServerRunMixin:
                             reset_secret_scope(scope_token)
                 rebuild = True
                 self._auth_park = None
-                run_transport = self._run_http if self._is_http() else self._run_stdio
                 self._resolved_identity = None  # the transport publishes the inputs it connects with
-                if not await self._on_clean_return(await run_transport(config), budget):
+                if not await self._on_clean_return(await self._serve_connection(config), budget):
                     break
+            except SandboxNetworkDormant as exc:
+                self._recycled_reason = 'sandbox_idle'
+                self.session = None
+                self._ready.clear()
+                if not self._ever_connected:
+                    self._publish_error(exc)
+                if await self._wait_for_reconnect_or_shutdown(timeout=_core._PARKED_RETRY_INTERVAL) == 'shutdown':
+                    break
+                self._error = None
+                self._ready.clear()
             except asyncio.CancelledError:
                 # Not a connection failure: re-raise so shutdown()'s ``await self._task`` completes.
                 # Task was cancelled (shutdown, gateway restart, explicit task.cancel()). Don't treat this

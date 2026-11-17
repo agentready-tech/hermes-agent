@@ -211,3 +211,112 @@ def test_cached_terminal_wakes_after_retirement_but_stream_probe_does_not(tmp_pa
     result = streams.run_in(env, ["printf", "workspace request"])
     assert result.stdout == b"workspace request"
     assert json.loads(state.read_text())["scales"] == [1, 0, 1, 0, 1]
+
+
+def test_mcp_tool_dispatch_wakes_new_pod_and_holds_it_through_rpc(sandbox, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    from tools import mcp_tool, mcp_tool_discovery, mcp_tool_handlers, mcp_tool_loop
+    from tools.mcp_tool_scope import _resolve_server_key
+
+    lifecycle, state, _ = sandbox
+    with lifecycle.active() as (old, _):
+        old_uid = old['uid']
+    _age(lifecycle.activity, 301)
+    assert lifecycle.stop_if_idle()
+    server = mcp_tool.MCPServerTask('remote-pilot')
+    server._config = {'url': 'https://example.test/mcp'}
+    server._http_sandbox_uid = old_uid
+    server._recycled_reason = 'sandbox_idle'
+    monkeypatch.setitem(mcp_tool._servers, _resolve_server_key(server.name), server)
+    monkeypatch.setattr('tools.environments.network_transport.on_demand_sandbox_lifecycle', lambda: lifecycle)
+    monkeypatch.setattr(mcp_tool_handlers, '_trust_gate_check', lambda *_: None)
+    monkeypatch.setattr(mcp_tool_handlers, '_check_circuit_breaker', lambda *_: None)
+    monkeypatch.setattr(mcp_tool_loop, '_run_on_mcp_loop', lambda factory, **_: asyncio.run(factory()))
+    calls = []
+
+    async def call_tool(tool, *, arguments):
+        _age(lifecycle.activity, 301)
+        assert not lifecycle.stop_if_idle()  # The registered handler still owns the lifecycle lease.
+        calls.append((tool, arguments))
+        return SimpleNamespace(isError=False, content=[], structuredContent={'ok': True})
+
+    def reconnect(name, task, *, sandbox_uid):
+        assert name == server.name and task is server and state['replicas'] == 1
+        assert sandbox_uid == state['pod']['metadata']['uid'] != old_uid
+        server._http_sandbox_uid = sandbox_uid
+        server._recycled_reason = None
+        server.session = SimpleNamespace(call_tool=call_tool)
+        server._ready.set()
+        return True
+
+    monkeypatch.setattr(mcp_tool_discovery, '_request_lazy_reconnect', reconnect)
+    assert mcp_tool_handlers._make_check_fn(server.name)()  # Known schemas stay available while asleep.
+    assert state['scales'] == [1, 0]
+    handler = mcp_tool_handlers._make_tool_handler(server.name, 'run', 20)
+    assert 'error' not in json.loads(handler({'message': 'fixture'}))
+    assert calls == [('run', {'message': 'fixture'})]
+    assert state['scales'] == [1, 0, 1]
+    assert not lifecycle.stop_if_idle()  # Completing the real RPC restarted the idle clock.
+    _age(lifecycle.activity, 301)
+    assert lifecycle.stop_if_idle()
+    assert state['scales'] == [1, 0, 1, 0]
+
+
+@pytest.mark.asyncio
+async def test_mcp_connection_loop_is_passive_and_releases_its_forwarding_listener(sandbox, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    from tools import mcp_tool
+    from tools.environments import network_transport, streams
+
+    lifecycle, state, _ = sandbox
+    server = mcp_tool.MCPServerTask('remote-receipts-fixture')
+    config = {'url': 'https://example.test/mcp'}
+    connected = asyncio.Event()
+    closed = []
+    env = SimpleNamespace(lifecycle=SimpleNamespace(home=None))
+    from hermes_constants import get_hermes_home
+    env.lifecycle.home = get_hermes_home()
+    relay_key = (id(env), 'fixture', 443, 1.0, None)
+    monkeypatch.setattr(streams, '_forwards', {})
+
+    async def prepare(task, value):
+        task._config = value
+        return True
+
+    def probe():
+        if not state['replicas']:
+            raise network_transport.SandboxNetworkDormant('no pod')
+        return env
+
+    async def serve(task, value):
+        assert value == config and network_transport.sandbox_environment() is env
+        streams._forwards[relay_key] = SimpleNamespace(close=lambda: closed.append(True))
+        connected.set()
+        await task._shutdown_event.wait()
+        return 'shutdown'
+
+    monkeypatch.setattr(mcp_tool.MCPServerTask, '_prepare_run', prepare)
+    monkeypatch.setattr(mcp_tool.MCPServerTask, '_run_http', serve)
+    monkeypatch.setattr(network_transport, '_probe_on_demand_environment', probe)
+    worker = asyncio.create_task(server.run(config))
+    try:
+        await asyncio.wait_for(server._ready.wait(), 3)
+        assert server._recycled_reason == 'sandbox_idle' and state['scales'] == []
+        assert network_transport._passive_environment.get() is None
+        with lifecycle.active():
+            last_use = lifecycle.activity.stat().st_mtime_ns
+            server._reconnect_event.set()
+            await asyncio.wait_for(connected.wait(), 3)
+            assert lifecycle.activity.stat().st_mtime_ns == last_use
+            server._shutdown_event.set()
+            await asyncio.wait_for(worker, 3)
+        assert state['scales'] == [1] and not streams._forwards and closed == [True]
+    finally:
+        if not worker.done():
+            worker.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await worker

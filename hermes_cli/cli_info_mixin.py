@@ -954,7 +954,7 @@ class CLIInfoMixin:
 
             shutdown_mcp_servers()
             reprobe_tool_availability()  # explicit reload also re-probes check_fn availability
-            new_tools = discover_mcp_tools()  # reads config.yaml fresh
+            new_tools = discover_mcp_tools(explicit=True)  # reads config.yaml fresh
 
             with _lock:
                 connected_servers = set(_servers.keys())

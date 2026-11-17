@@ -322,6 +322,8 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
         "_error",
         "_ever_connected",
         "_idle_timeout_seconds",
+        "_http_sandbox_uid",
+        "_http_reconnect_uid",
         "_inflight_tasks",
         "_last_park_line",
         "_last_tool_call_at",
@@ -434,6 +436,8 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
         self._pending_call_context: Optional[contextvars.Context] = None
         self._lifecycle_started_at = self._last_tool_call_at = time.monotonic()
         self._idle_timeout_seconds = self._max_lifetime_seconds = self._recycled_reason = None
+        self._http_sandbox_uid: str | None = None
+        self._http_reconnect_uid: str | None = None
         # Handshake InitializeResult: the server's REAL advertised capabilities.
         # Captures the ``InitializeResult`` returned by ``await session.initialize()`` so downstream code
         # can inspect the server's real advertised capabilities (``.capabilities.resources``,

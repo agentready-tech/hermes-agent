@@ -3072,7 +3072,7 @@ class TestMCPDiscoveryCrossProcessLock:
              patch("tools.mcp_tool_registration._existing_tool_names", return_value=[]):
             discover_mcp_tools()
         # Must still run local discovery
-        reg_spy.assert_called_once_with(mock_config)
+        reg_spy.assert_called_once_with(mock_config, explicit=False, bootstrap=False)
 
 
 

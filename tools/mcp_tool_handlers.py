@@ -106,7 +106,7 @@ def _check_circuit_breaker(server_name: str) -> Optional[str]:
                       f"this tool yet — use alternative approaches or ask the user to check the MCP server.")
 
 
-def _acquire_call_server(server_name: str, tool_timeout: float):
+def _acquire_call_server(server_name: str, tool_timeout: float, *, sandbox_uid=None):
     """``(server, None)`` when a call may be dispatched, else ``(None, error)``. No session: a
     reconnect may be completing, so wait briefly before a breaker strike; still down -> ask the
     server task to rebuild (probing a dead transport would re-arm the breaker forever)."""
@@ -128,7 +128,8 @@ def _acquire_call_server(server_name: str, tool_timeout: float):
             user_action=current.user_action,
             retry=current.retry,
         )
-    server = _discovery._get_connected_server_for_call(server_name)
+    server = _discovery._get_connected_server_for_call(server_name, sandbox_uid=sandbox_uid) if sandbox_uid else (
+        _discovery._get_connected_server_for_call(server_name))
     wait = min(5.0, float(tool_timeout or 5.0))
     if server and (server.session or _loop._wait_for_server_session_ready(server, timeout=wait)):
         return server, None
@@ -562,6 +563,18 @@ def _render_call_tool_result(result, server_name: str, image_paths: Optional[lis
         return json.dumps({"result": text_result}, ensure_ascii=False)
 
 
+def _with_sandbox_call(server_name, callback):
+    from tools import mcp_tool_discovery as _discovery  # lazy: discovery uses registration and these handlers
+    from tools.environments.base import EnvironmentConnectionError
+    from tools.environments.network_transport import SandboxTransportUnavailable
+
+    try:
+        with _discovery.mcp_call_sandbox_activity(server_name) as uid:
+            return callback(uid)
+    except (EnvironmentConnectionError, SandboxTransportUnavailable):
+        return tool_error(f"The sandbox for MCP server '{server_name}' is unavailable")
+
+
 def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *, native_images: bool = False):
     """Sync handler (``handler(args_dict, **kwargs)``) calling an MCP tool via the background loop. Always a JSON
     string, except with ``native_images`` (the registry handler the agent loop dispatches): a result carrying
@@ -574,7 +587,11 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
         error = _trust_gate_check(server_name, tool_name) or _check_circuit_breaker(server_name)
         if error is not None:
             return error
-        server, error = _acquire_call_server(server_name, tool_timeout)
+        return _with_sandbox_call(server_name, lambda uid: _invoke(args, uid))
+
+    def _invoke(args, sandbox_uid):
+        options = {'sandbox_uid': sandbox_uid} if sandbox_uid else {}
+        server, error = _acquire_call_server(server_name, tool_timeout, **options)
         if server is None:
             return error
         # Only a tool annotated readOnlyHint=True is replayed after session expiry; a 401 is always
@@ -613,12 +630,17 @@ def _make_utility_handler(op: str, log_label: str, rpc, render, required: Option
     payload, ``required`` validated before any transport work."""
     def _factory(server_name: str, tool_timeout: float):
         def _handler(args: dict, **kwargs) -> str:
-            from tools import mcp_tool_discovery as _discovery  # lazy: import cycle
-            server = _discovery._get_connected_server_for_call(server_name)
-            if not server or not server.session:
-                return tool_error(f"MCP server '{server_name}' is not connected")
             if required and not args.get(required):
                 return tool_error(f"Missing required parameter '{required}'")
+            return _with_sandbox_call(server_name, lambda uid: _invoke(args, uid))
+
+        def _invoke(args, sandbox_uid):
+            from tools import mcp_tool_discovery as _discovery  # lazy: import cycle
+
+            options = {'sandbox_uid': sandbox_uid} if sandbox_uid else {}
+            server = _discovery._get_connected_server_for_call(server_name, **options)
+            if not server or not server.session:
+                return tool_error(f"MCP server '{server_name}' is not connected")
 
             async def _call():
                 async with server._rpc_lock:
@@ -711,13 +733,14 @@ def _make_check_fn(server_name: str):
     stale connection lingers. With no declaration registered the check is the connection check
     alone. Returns a plain bool: the registry caches ``bool(fn())``.
     """
+    from tools.mcp_tool_discovery import _can_lazy_reconnect
     from tools.mcp_tool_scope import _resolve_server_key
 
     def _connected() -> bool:
         with _core._lock:
             key = _resolve_server_key(server_name)
             server = _core._servers.get(key)
-            return ((server is not None and (server.session is not None or server._is_recycled_stdio()))
+            return ((server is not None and (server.session is not None or _can_lazy_reconnect(server)))
                     or key in _core._lazy_server_configs)
 
     def _check() -> bool:

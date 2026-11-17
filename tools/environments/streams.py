@@ -269,6 +269,14 @@ class PortForward:
             self._server.close()
 
 
+def close_port_forwards(env: BaseEnvironment) -> None:
+    """Release the listeners owned by a short-lived transport environment."""
+    with _forwards_lock:
+        owned = [_forwards.pop(key) for key in list(_forwards) if key[0] == id(env)]
+    for forward in owned:
+        forward.close()
+
+
 def forward_port(env: BaseEnvironment, remote_port: int, *, remote_host: str = "127.0.0.1",
                  user: Optional[str] = None, close_grace: Optional[float] = None,
                  browser_cdp: bool = False) -> int:

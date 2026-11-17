@@ -4,6 +4,10 @@ The SDK keeps TLS, SNI, authentication and streaming. Only TCP connection establ
 changes: the existing exec-stream relay resolves and connects from inside the sandbox.
 """
 
+import asyncio
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
+
 from tools.environments import streams
 
 
@@ -11,21 +15,85 @@ class SandboxTransportUnavailable(RuntimeError):
     """A non-local terminal backend cannot provide the requested sandbox transport."""
 
 
+class SandboxNetworkDormant(SandboxTransportUnavailable):
+    """A background connection has no Ready on-demand sandbox to connect through."""
+
+
+_passive_environment = ContextVar('passive_sandbox_environment', default=None)
+
+
+def _probe_on_demand_environment():
+    from hermes_constants import get_hermes_home
+    from tools.environments.base import EnvironmentConnectionError
+    from tools.terminal_scope import install_and_reset_profile_terminal_scope
+    from tools.terminal_tool import _get_env_config
+    from tools.terminal_tool_backends import _build_kubernetes_env
+
+    with install_and_reset_profile_terminal_scope(get_hermes_home()):
+        config = _get_env_config()
+        if not _on_demand(config):
+            return None
+        try:
+            return _build_kubernetes_env(cwd='/workspace', timeout=15, cc=config, probe_only=True)
+        except EnvironmentConnectionError as exc:
+            raise SandboxNetworkDormant('The on-demand sandbox is not ready') from exc
+
+
+@asynccontextmanager
+async def passive_sandbox_connections():
+    """Bind one existing Pod to a client's connection attempt and own its forwarding listeners."""
+    env = await asyncio.to_thread(_probe_on_demand_environment)
+    token = _passive_environment.set(env)
+    try:
+        yield
+    finally:
+        _passive_environment.reset(token)
+        if env is not None:
+            streams.close_port_forwards(env)
+
+
+def _on_demand(config):
+    return config['env_type'] == 'kubernetes' and bool(config['kubernetes_idle_seconds'])
+
+
+def on_demand_sandbox_lifecycle():
+    """Return the current profile's managed controller without accessing the cluster."""
+    from hermes_constants import get_hermes_home
+    from hermes_platform.resolver import locate_command
+    from tools.environments.kubernetes_lifecycle import SandboxLifecycle
+    from tools.terminal_scope import install_and_reset_profile_terminal_scope
+    from tools.terminal_tool import _get_env_config
+
+    home = get_hermes_home()
+    with install_and_reset_profile_terminal_scope(home):
+        config = _get_env_config()
+    if not _on_demand(config):
+        return None
+    if (config['kubernetes_pod'], config['kubernetes_container']) != ('sandbox-0', 'sandbox'):
+        raise SandboxTransportUnavailable('The on-demand Kubernetes sandbox target is invalid')
+    executable = locate_command('kubectl').command
+    if not executable:
+        raise SandboxTransportUnavailable('kubectl is required for the on-demand sandbox')
+    return SandboxLifecycle(home, executable[0], config['kubernetes_namespace'], config['kubernetes_idle_seconds'])
+
+
 def sandbox_environment():
     """Return the current profile's sandbox; None means an explicitly local backend."""
     from hermes_constants import get_hermes_home
-    from tools.terminal_scope import install_profile_terminal_scope, reset_terminal_scope
+    from tools.terminal_scope import install_and_reset_profile_terminal_scope
     from tools.terminal_tool import _get_env_config, ensure_task_env
-    token = install_profile_terminal_scope(get_hermes_home())
-    try:
-        if _get_env_config()["env_type"] == "local":
+    probe = _passive_environment.get()
+    if probe is not None:
+        if probe.lifecycle.home != get_hermes_home():
+            raise SandboxTransportUnavailable('The sandbox network probe belongs to another profile')
+        return probe
+    with install_and_reset_profile_terminal_scope(get_hermes_home()):
+        if _get_env_config()['env_type'] == 'local':
             return None
-        environment = ensure_task_env("agentready_home")
+        environment = ensure_task_env('agentready_home')
         if environment is None or not streams.supports_streams(environment):
-            raise SandboxTransportUnavailable("The configured sandbox cannot host this connection; host execution is disabled")
+            raise SandboxTransportUnavailable('The configured sandbox cannot host this connection; host execution is disabled')
         return environment
-    finally:
-        reset_terminal_scope(token)
 
 
 class _SyncSandboxBackend:

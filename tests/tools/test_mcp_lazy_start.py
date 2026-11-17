@@ -369,3 +369,60 @@ class TestLazyMcpStatus:
                 status["playwright"]["connected"]) == ("lazy", len(cached), False)
         assert status["eager"]["status"] == "configured" and status["eager"]["tools"] == 0
         assert status["live"]["status"] == "connected" and status["live"]["tools"] == 2
+
+
+def test_uncached_remote_discovery_is_deferred_until_a_real_turn(monkeypatch):
+    from contextlib import contextmanager
+
+    stages = []
+
+    @contextmanager
+    def active():
+        stages.append('start')
+        yield
+        stages.append('release')
+
+    monkeypatch.setattr('tools.environments.network_transport.on_demand_sandbox_lifecycle',
+                        lambda: SimpleNamespace(active=active))
+    monkeypatch.setattr('tools.mcp_schema_cache.get_cached_entry', lambda *_: None)
+    monkeypatch.setattr(_mcp_loop, '_ensure_mcp_loop', lambda: None)
+    monkeypatch.setattr(_mcp_discovery, '_run_discovery_pass', lambda servers: stages.extend(servers))
+    config = {'remote-fixture': {'url': 'https://example.test/mcp'}}
+    _mcp_discovery.register_mcp_servers(config, explicit=False)
+    assert stages == []
+    _mcp_discovery.register_mcp_servers(config, explicit=False, bootstrap=True)
+    assert stages == ['start', 'remote-fixture', 'release']
+
+
+@pytest.mark.asyncio
+async def test_parallel_calls_share_one_reconnect_for_new_sandbox_generation(monkeypatch):
+    import asyncio
+    from threading import Event
+
+    loop = asyncio.get_running_loop()
+    server = mcp.MCPServerTask('remote')
+    server._http_sandbox_uid = 'old'
+    server._ready.set()
+    started = Event()
+
+    def run(factory, *, timeout):
+        started.set()
+        return asyncio.run_coroutine_threadsafe(factory(), loop).result(timeout)
+
+    monkeypatch.setattr(_mcp_loop, '_running_loop', lambda: loop)
+    monkeypatch.setattr(_mcp_loop, '_run_on_mcp_loop', run)
+    first = asyncio.create_task(asyncio.to_thread(_mcp_discovery._request_lazy_reconnect, 'remote', server,
+                                                 sandbox_uid='new'))
+    await asyncio.wait_for(server._reconnect_event.wait(), 3)
+    server._reconnect_event.clear()  # The first reconnect is still negotiating.
+    assert started.is_set()
+    started.clear()
+    second = asyncio.create_task(asyncio.to_thread(_mcp_discovery._request_lazy_reconnect, 'remote', server,
+                                                  sandbox_uid='new'))
+    assert await asyncio.to_thread(started.wait, 3)
+    await asyncio.sleep(0)
+    assert not server._reconnect_event.is_set()
+    server._http_sandbox_uid = 'new'
+    server.session = object()
+    server._ready.set()
+    assert await asyncio.wait_for(asyncio.gather(first, second), 3) == [True, True]

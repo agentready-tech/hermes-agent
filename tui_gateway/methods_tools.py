@@ -385,12 +385,16 @@ def _(rid, params: dict) -> dict:
         # child env, ``${VAR}`` header refs) go through ``get_secret``, which fails closed once this
         # process multiplexes — an unscoped rediscovery parked every launch-profile stdio server
         # with UnscopedSecretError while the RPC still answered "reloaded" (#113746).
+        requested_home = session.get("profile_home") if session else None
         with _session_profile_runtime_scope({"profile_home": None}):
             loaded = _compute_mcp_rev()
             for _ in range(_MCP_RELOAD_MAX_PASSES):
                 _mcp_lifecycle.shutdown_mcp_servers()
                 _mcp_agent.reprobe_tool_availability()
-                _mcp_discovery.discover_mcp_tools()
+                if requested_home is None:
+                    _mcp_discovery.discover_mcp_tools(explicit=True)
+                else:
+                    _mcp_discovery.discover_mcp_tools()
                 after = _compute_mcp_rev()
                 if after == loaded:
                     break
@@ -403,7 +407,10 @@ def _(rid, params: dict) -> dict:
         for home in sorted(homes - {None}):
             try:
                 with _session_profile_runtime_scope({"profile_home": home}):
-                    _mcp_discovery.discover_mcp_tools()
+                    if home == requested_home:
+                        _mcp_discovery.discover_mcp_tools(explicit=True)
+                    else:
+                        _mcp_discovery.discover_mcp_tools()
             except Exception as _exc:
                 logger.warning("MCP rediscovery failed for profile %s: %s", home, _exc)
         _refresh_session_agent()

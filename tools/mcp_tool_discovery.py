@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext, suppress
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 from tools.mcp_tool_common import _core, _parse_boolish, mcp_server_enabled
@@ -179,31 +179,73 @@ async def _connect_server(name: str, config: dict) -> _core.MCPServerTask:
     return server
 
 
-def _request_lazy_reconnect(server_name: str, server: _core.MCPServerTask) -> bool:
-    """Wake a recycled stdio server and wait briefly for a fresh session."""
-    loop = _loop._running_loop() if server._is_recycled_stdio() else None
+def _can_lazy_reconnect(server) -> bool:
+    return server._is_recycled_stdio() or getattr(server, '_recycled_reason', None) == 'sandbox_idle'
+
+
+def _request_lazy_reconnect(server_name: str, server: _core.MCPServerTask, *, sandbox_uid=None) -> bool:
+    """Wait for a session after recycle or after its owning sandbox generation changed."""
+    loop = _loop._running_loop() if sandbox_uid or _can_lazy_reconnect(server) else None
     if loop is None:
         return False
+    timeout = (float(server._config.get('connect_timeout', _core._DEFAULT_CONNECT_TIMEOUT))
+               if sandbox_uid else _core._RECYCLED_RECONNECT_TIMEOUT)
+
+    def ready() -> bool:
+        return server.session is not None and server._ready.is_set() and (
+            not sandbox_uid or server._http_sandbox_uid == sandbox_uid)
 
     def _wake() -> None:
+        if ready() or (sandbox_uid and server._http_reconnect_uid == sandbox_uid):
+            return
+        if sandbox_uid:
+            server._http_reconnect_uid = sandbox_uid
         server._ready.clear()
         server._reconnect_event.set()
 
     loop.call_soon_threadsafe(_wake)
 
     async def _await_ready() -> bool:
-        deadline = time.monotonic() + _core._RECYCLED_RECONNECT_TIMEOUT
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if server.session is not None and server._ready.is_set():
+            if ready():
                 return True
             await asyncio.sleep(0.05)
         return False
 
+    def _clear_request() -> None:
+        if server._http_reconnect_uid == sandbox_uid:
+            server._http_reconnect_uid = None
+
     try:
-        return bool(_loop._run_on_mcp_loop(_await_ready, timeout=_core._RECYCLED_RECONNECT_TIMEOUT))
+        return bool(_loop._run_on_mcp_loop(_await_ready, timeout=timeout))
     except Exception as exc:
-        logger.warning("MCP server '%s': lazy reconnect after stdio recycle failed: %s", server_name, exc)
+        logger.warning("MCP server '%s': lazy reconnect failed: %s", server_name, exc)
         return False
+    finally:
+        if sandbox_uid:
+            with suppress(RuntimeError):  # Shutdown may already have stopped the MCP event loop.
+                loop.call_soon_threadsafe(_clear_request)
+
+
+def http_sandbox_activity(configs):
+    """Use the profile's sandbox for an explicitly requested HTTP MCP connection or RPC."""
+    if not any(isinstance(config, dict) and 'url' in config and mcp_server_enabled(config) for config in configs):
+        return nullcontext()
+    from tools.environments.network_transport import on_demand_sandbox_lifecycle
+
+    lifecycle = on_demand_sandbox_lifecycle()
+    return lifecycle.active() if lifecycle is not None else nullcontext()
+
+
+@contextmanager
+def mcp_call_sandbox_activity(server_name):
+    with _core._lock:
+        key = _resolve_server_key(server_name)
+        server = _core._servers.get(key)
+        config = getattr(server, '_config', None) or _core._lazy_server_configs.get(key)
+    with http_sandbox_activity([config]) as activity:
+        yield activity[0]['uid'] if activity is not None else None
 
 
 def _resolve_server_lazy(name: str, config: dict) -> bool:
@@ -302,7 +344,7 @@ def _ensure_lazy_server_connected(server_name: str) -> bool:
     return server is not None and server.session is not None
 
 
-def _get_connected_server_for_call(server_name: str) -> Optional[_core.MCPServerTask]:
+def _get_connected_server_for_call(server_name: str, *, sandbox_uid=None) -> Optional[_core.MCPServerTask]:
     """Return a connected server; the single first-use connect point for lazy servers and
     the wake-up point for recycled stdio ones.
 
@@ -315,7 +357,11 @@ def _get_connected_server_for_call(server_name: str) -> Optional[_core.MCPServer
         is_lazy = key in _core._lazy_server_configs
     if is_lazy and (server is None or server.session is None):
         _ensure_lazy_server_connected(server_name)
-    elif server is not None and server.session is None and server._is_recycled_stdio():
+    elif server is not None and sandbox_uid and (server.session is None or not server._ready.is_set()
+            or getattr(server, '_http_sandbox_uid', None) != sandbox_uid):
+        if not _request_lazy_reconnect(server_name, server, sandbox_uid=sandbox_uid):
+            return None
+    elif server is not None and server.session is None and _can_lazy_reconnect(server):
         _request_lazy_reconnect(server_name, server)
     else:
         return server
@@ -398,7 +444,7 @@ def _select_new_servers(servers: dict[str, dict]) -> dict[str, dict]:
     return new_servers
 
 
-def _register_lazy_from_cache(new_servers: dict[str, dict]) -> tuple[dict[str, dict], int, int]:
+def _register_lazy_from_cache(new_servers: dict[str, dict], *, explicit=False) -> tuple[dict[str, dict], int, int]:
     """Register ``lazy: true`` servers from a valid schema-cache entry without connecting
     (missing/stale entry or failed registration -> eager). Returns (eager servers, lazy tool
     count, lazy server count)."""
@@ -411,8 +457,11 @@ def _register_lazy_from_cache(new_servers: dict[str, dict]) -> tuple[dict[str, d
         from tools.mcp_schema_cache import config_fingerprint, get_cached_entry
     except Exception:  # pragma: no cover - cache module missing
         return eager_servers, 0, 0
+    from tools.environments.network_transport import on_demand_sandbox_lifecycle
+    managed_http = not explicit and any('url' in cfg for cfg in new_servers.values()) and (
+        on_demand_sandbox_lifecycle() is not None)
     for name, cfg in new_servers.items():
-        if not _resolve_server_lazy(name, cfg):
+        if not ((managed_http and 'url' in cfg) or _resolve_server_lazy(name, cfg)):
             continue
         entry = get_cached_entry(name, config_fingerprint(cfg))
         if not entry:
@@ -535,7 +584,7 @@ def _log_summary(prefix: str, names, **lazy) -> None:
         logger.info(summary)
 
 
-def register_mcp_servers(servers: dict[str, dict]) -> list[str]:
+def register_mcp_servers(servers: dict[str, dict], *, explicit=True, bootstrap=False) -> list[str]:
     """Connect ``{name: config}`` servers and register their tools; idempotent for connected
     names, ``enabled: false`` skipped without disconnecting. Returns every MCP tool name."""
     from agent.safe_worker_policy import safe_worker_enabled
@@ -548,14 +597,15 @@ def register_mcp_servers(servers: dict[str, dict]) -> list[str]:
         return []
     servers = _config._filter_suspicious_mcp_servers(servers)
     try:
-        return _register_mcp_servers(servers)
+        with http_sandbox_activity(servers.values()) if explicit else nullcontext():
+            return _register_mcp_servers(servers, explicit=explicit, bootstrap=bootstrap)
     finally:
         # An owner's scoped reload orphaned adopters of its shared connections: now that this
         # pass (its rediscovery) is done, give them their tools back under their own scope.
         _lifecycle._reregister_orphaned_adopters()
 
 
-def _register_mcp_servers(servers: dict[str, dict]) -> list[str]:
+def _register_mcp_servers(servers: dict[str, dict], *, explicit=False, bootstrap=False) -> list[str]:
     scoped_healed = _registration.register_connected_into_current_scope(servers)
     if not servers:
         logger.debug("No explicit MCP servers provided")
@@ -565,16 +615,32 @@ def _register_mcp_servers(servers: dict[str, dict]) -> list[str]:
         logger.info("MCP: registered %d already-connected server(s) into this profile scope", scoped_healed)
     if not new_servers:
         return _registration._existing_tool_names()
-    new_servers, lazy_registered, lazy_server_count = _register_lazy_from_cache(new_servers)
+    new_servers, lazy_registered, lazy_server_count = _register_lazy_from_cache(new_servers, explicit=explicit)
     if not new_servers:
         if lazy_registered:
             logger.info("MCP: registered %d lazy tool(s) from schema cache (no processes spawned)",
                         lazy_registered)
         return _registration._existing_tool_names()
-    _loop._ensure_mcp_loop()
-    _run_discovery_pass(new_servers)
+    if not (explicit or bootstrap):
+        new_servers = _defer_uncached_http_servers(new_servers)
+    with http_sandbox_activity(new_servers.values()) if bootstrap else nullcontext():
+        if new_servers:
+            _loop._ensure_mcp_loop()
+            _run_discovery_pass(new_servers)
     _log_summary("MCP: registered", new_servers, lazy_tools=lazy_registered, lazy_servers=lazy_server_count)
     return _registration._existing_tool_names()
+
+
+def _defer_uncached_http_servers(new_servers):
+    from tools.environments.network_transport import on_demand_sandbox_lifecycle
+
+    remote = {name for name, config in new_servers.items() if 'url' in config}
+    if not remote or on_demand_sandbox_lifecycle() is None:
+        return new_servers
+    with _core._lock:
+        for name in remote:
+            _core._server_connecting.discard(_server_key(name))
+    return {name: config for name, config in new_servers.items() if name not in remote}
 
 
 def _acquire_discovery_lock_with_retry():
@@ -600,7 +666,7 @@ def _acquire_discovery_lock_with_retry():
     return cookie
 
 
-def discover_mcp_tools(allowed_mcp_names: Optional[list[str]] = None) -> list[str]:
+def discover_mcp_tools(allowed_mcp_names: Optional[list[str]] = None, *, explicit=False, bootstrap=False) -> list[str]:
     """Entry point: load config, connect servers, register tools. [] without the ``mcp``
     package; idempotent (only servers missing from a previous call are retried).
 
@@ -639,7 +705,7 @@ def discover_mcp_tools(allowed_mcp_names: Optional[list[str]] = None) -> list[st
                                 if keys[name] not in _core._servers and keys[name] not in _core._server_connecting
                                 and mcp_server_enabled(cfg)]
             prior_lazy = set(_core._lazy_server_configs)
-        tool_names = register_mcp_servers(servers)
+        tool_names = register_mcp_servers(servers, explicit=explicit, bootstrap=bootstrap)
         if new_server_names:
             # A lazily registered server never connected, so it must not be counted as failed
             # (the old summary read "N failed" for a healthy all-lazy config, #111717). Reporting
@@ -840,7 +906,8 @@ def probe_mcp_server_tools() -> dict[str, list[tuple]]:
         await asyncio.gather(*(s.shutdown() for s in probed_servers), return_exceptions=True)
 
     try:
-        _loop._run_on_mcp_loop(_probe_all, timeout=120)
+        with http_sandbox_activity(enabled.values()):
+            _loop._run_on_mcp_loop(_probe_all, timeout=120)
     except Exception as exc:
         logger.debug("MCP probe failed: %s", exc)
     finally:
