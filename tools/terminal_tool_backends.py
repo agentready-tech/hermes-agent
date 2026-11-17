@@ -69,6 +69,7 @@ _CONTAINER_KEYS = (
     ("docker_image_pinned", False), ("docker_container", ""),
     ("kubernetes_namespace", ""), ("kubernetes_pod", "sandbox-0"),
     ("kubernetes_container", "sandbox"), ("kubernetes_persistent", True),
+    ("kubernetes_idle_seconds", 0),
     ("firecracker_persistent", True),
 )
 _DOCKER_KWARGS = (
@@ -190,7 +191,8 @@ def _build_kubernetes_env(*, cwd, timeout, cc, probe_only=False, **_):
     from tools.environments.kubernetes import KubernetesEnvironment
     return KubernetesEnvironment(namespace=cc.get("kubernetes_namespace", ""),
         pod=cc.get("kubernetes_pod", "sandbox-0"), container=cc.get("kubernetes_container", "sandbox"),
-        cwd=cwd, timeout=timeout, persistent=cc.get("kubernetes_persistent", True), probe_only=probe_only)
+        cwd=cwd, timeout=timeout, persistent=cc.get("kubernetes_persistent", True), probe_only=probe_only,
+        idle_seconds=cc.get("kubernetes_idle_seconds", 0))
 
 
 def _build_firecracker_env(*, cwd, timeout, cc, probe_only=False, **_):

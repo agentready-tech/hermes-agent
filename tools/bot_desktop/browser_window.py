@@ -288,7 +288,7 @@ def open_stream(viewer, epoch, nonce):
     env=_sandbox();request={'profile':sandbox_host.browser_profile_dir(env),'target':value['target']}
     _helper_dir(env)
     relay=streams.open_stream(env,isolated_command('browser_window_stream',desktop_environment(env)),
-        child_env={},user=sandbox_host.DESKTOP_USER)
+        child_env={},user=sandbox_host.DESKTOP_USER,passive=True)
     try:
         relay.stdin.write((json.dumps(request)+'\n').encode());relay.stdin.flush()
     except BaseException:

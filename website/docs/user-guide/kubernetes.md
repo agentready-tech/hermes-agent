@@ -7,8 +7,7 @@ description: Run terminal, browser and desktop tools in a platform-managed sandb
 
 The `kubernetes` backend uses the Kubernetes API through `kubectl` to execute in
 one existing sandbox Pod. The platform owns creation, images, resources, storage,
-networking and restart policy. Hermes never creates, deletes or stops that Pod,
-including on cleanup or idle timeout. Docker and other backends remain available.
+networking and restart policy. By default Hermes only executes in a running Pod.
 
 ```yaml
 terminal:
@@ -54,6 +53,20 @@ non-root desktop user (the shipped image uses `pn`). Chromium's sandbox stays
 enabled; the platform must provide a compatible seccomp/AppArmor/user-namespace
 policy. Computer installation preserves an explicitly configured Kubernetes
 target; its default remains Docker.
+
+An already enrolled AgentSee sandbox can use `terminal.kubernetes_idle_seconds: 300`.
+The existing `sandbox` StatefulSet in the profile's namespace can stay at zero
+replicas. The first terminal, browser or Desktop request raises it to one and
+waits for the Pod to become ready. Gateway housekeeping scales it back to zero
+once 300 seconds have elapsed without work or Desktop usage. It respects active
+commands and manual Desktop control. Readiness and Desktop status probes do not
+wake the Pod. The existing persistent volumes keep the workspace and browser
+profile, and starting the Pod does not launch Chrome.
+
+For this option the shared Hermes ServiceAccount also needs the tenant Role's
+`get` and `update` permissions on the named `sandbox` StatefulSet's
+`statefulsets/scale` subresource. Update existing tenant Roles which only grant
+Pod access before enabling the option. The setting is off by default.
 
 For the inactive two-Pod deployment template, optional NetBird/TUN setup,
 private control plane on Panel, preservation checks and rollback sequence, see

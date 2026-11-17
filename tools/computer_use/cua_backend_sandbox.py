@@ -23,7 +23,7 @@ class _SandboxDaemonTransport:
     def invocation(self, argv: list[str]) -> list[str]:
         from tools.environments import streams
         command = streams.remote_command(self.env, argv, child_env=self.published,
-                                         user=self.user, interactive=True)
+                                         user=self.user, interactive=True, passive=True)
         if command is None:
             raise RuntimeError("the selected sandbox cannot host a private cua-driver daemon")
         return command
@@ -45,7 +45,8 @@ class _SandboxDaemonTransport:
     def close(self) -> None:
         from tools.environments import streams
         script = "import shutil,sys; shutil.rmtree(sys.argv[1],ignore_errors=True)"
-        streams.run_in(self.env, ["python3", "-c", script, self.directory], user=self.user, timeout=10)
+        streams.run_in(self.env, ["python3", "-c", script, self.directory], user=self.user, timeout=10,
+                       passive=True)
 
 
 def sandbox_daemon_transport(permission_mode: str) -> _SandboxDaemonTransport | None:

@@ -58,8 +58,9 @@ def terminal_defaults(sandbox_image, vercel_image):
         "docker_image": sandbox_image,
         "docker_container": "",  # Operator-managed sandbox; never create a replacement.
         "kubernetes_namespace": "",  # Explicit client namespace; uses ServiceAccount/KUBECONFIG auth.
-        "kubernetes_pod": "sandbox-0",  # Platform-owned StatefulSet Pod; Hermes only executes in it.
+        "kubernetes_pod": "sandbox-0",  # Platform-owned StatefulSet Pod.
         "kubernetes_container": "sandbox",
+        "kubernetes_idle_seconds": 0,  # AgentSee enrolled sandbox: set 300 for wake on demand.
         "docker_forward_env": [],
         # Exact key-value env pairs set inside Docker containers (unlike docker_forward_env, which
         # reads host values) — useful under systemd without the user's shell env. Example:
@@ -111,7 +112,7 @@ def terminal_config_env_map():
             for key in (
                 "modal_mode", "degraded_mode", "cwd", "temp_dir", "timeout", "lifetime_seconds",
                 "docker_image", "docker_container", "docker_forward_env", "singularity_image", "modal_image",
-                "kubernetes_namespace", "kubernetes_pod", "kubernetes_container",
+                "kubernetes_namespace", "kubernetes_pod", "kubernetes_container", "kubernetes_idle_seconds",
                 "daytona_image", "vercel_runtime", "vercel_image", "ssh_host", "ssh_user", "ssh_port", "ssh_key",
                 "container_cpu", "container_memory", "container_disk", "container_persistent",
                 "docker_volumes", "docker_env", "docker_mount_cwd_to_workspace", "docker_network",

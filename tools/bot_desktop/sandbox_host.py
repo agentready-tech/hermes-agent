@@ -304,7 +304,7 @@ def _user_for(env: Any) -> Optional[str]:
     cached = getattr(env, "_bd_desktop_user", "unset")
     if cached != "unset":
         return cached
-    probe = streams.run_in(env, ["id", "-u", DESKTOP_USER], timeout=15)
+    probe = streams.run_in(env, ["id", "-u", DESKTOP_USER], timeout=15, passive=True)
     user = DESKTOP_USER if probe.returncode == 0 else None
     env._bd_desktop_user = user
     return user
@@ -430,7 +430,7 @@ for pid in $(pgrep -f -- {shlex.quote(rdir + "/")} 2>/dev/null); do [ "$pid" != 
 rm -f {q}/env {q}/launcher.pid {q}/rfb.sock
 [ "$live" = 1 ]
 """
-    proc = streams.run_in(env, ["bash", "-c", script], user=_user_for(env), timeout=30)
+    proc = streams.run_in(env, ["bash", "-c", script], user=_user_for(env), timeout=30, passive=True)
     _marker().unlink(missing_ok=True)
     return proc.returncode == 0
 
@@ -438,14 +438,15 @@ rm -f {q}/env {q}/launcher.pid {q}/rfb.sock
 def open_rfb_stream(env: Any, profile: str) -> subprocess.Popen:
     """Popen whose stdin/stdout carry the RFB bytes of the sandbox's Xvnc."""
     rdir = _remote_dir(env, profile)
-    return streams.open_stream(env, ["python3", "-c", _RELAY, f"{rdir}/rfb.sock"], user=_user_for(env))
+    return streams.open_stream(env, ["python3", "-c", _RELAY, f"{rdir}/rfb.sock"],
+                               user=_user_for(env), passive=True)
 
 
 def cua_mcp_invocation(env: Any, profile: str, published: dict[str, str]) -> tuple[str, list[str]]:
     """``(command, args)`` for ``StdioServerParameters``: the backend's exec prefix running ``cua-driver mcp`` on
     the sandbox display."""
     argv = streams.remote_command(env, ["cua-driver", "mcp", "--no-overlay"], child_env=published,
-                                  user=_user_for(env), interactive=True)
+                                  user=_user_for(env), interactive=True, passive=True)
     if argv is None:
         raise RuntimeError(f"{type(env).__name__} cannot host cua-driver")
     return argv[0], argv[1:]

@@ -524,6 +524,16 @@ def profile_scoped_chore(runner, chore):
     return lambda: _for_each_served_profile(runner, lambda _label: chore())
 
 
+def profile_reconciliation_chores(runner):
+    """Reconcile runtime services for each served profile from gateway housekeeping."""
+    from tools.environments.kubernetes_lifecycle import stop_profile_sandbox_if_idle
+
+    return (
+        (1, "MCP config reconcile", _mcp_config_reconciler(runner)),
+        (1, "Idle Kubernetes sandbox stop", profile_scoped_chore(runner, stop_profile_sandbox_if_idle)),
+    )
+
+
 def migrate_profile_identity_verb(runner):
     """Build the ``migrate-profile-identity`` control-verb handler for ``hermes profile rename``
     (#111926). The live multiplexer owns the routing index in memory and writes it back

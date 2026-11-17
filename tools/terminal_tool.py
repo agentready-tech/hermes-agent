@@ -745,6 +745,8 @@ def _get_env_config() -> dict[str, Any]:
         "kubernetes_namespace": _tenv("TERMINAL_KUBERNETES_NAMESPACE", "").strip(),
         "kubernetes_pod": _tenv("TERMINAL_KUBERNETES_POD", "sandbox-0").strip(),
         "kubernetes_container": _tenv("TERMINAL_KUBERNETES_CONTAINER", "sandbox").strip(),
+        "kubernetes_idle_seconds": (_parse_env_var("TERMINAL_KUBERNETES_IDLE_SECONDS", "0", int, "integer")
+                                    if env_type == "kubernetes" else 0),
         "kubernetes_persistent": _tenv_bool("TERMINAL_PERSISTENT_SHELL", "true"),
         "firecracker_persistent": _tenv_bool("TERMINAL_PERSISTENT_SHELL", "true"),
         "docker_forward_env": docker_forward_env,

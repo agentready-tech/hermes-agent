@@ -109,7 +109,9 @@ def render(*, client, worker, root, home, hermes_image, sandbox_image, panel_ip,
         container = item["spec"]["template"]["spec"]["containers"][0]
         container["command"] = ["/usr/local/bin/agentsee-init", "-g", "--", *container["command"]]
     rules = [{"apiGroups": [""], "resources": ["pods"], "resourceNames": ["sandbox-0"], "verbs": ["get"]},
-             {"apiGroups": [""], "resources": ["pods/exec"], "resourceNames": ["sandbox-0"], "verbs": ["get", "create"]}]
+             {"apiGroups": [""], "resources": ["pods/exec"], "resourceNames": ["sandbox-0"], "verbs": ["get", "create"]},
+             {"apiGroups": ["apps"], "resources": ["statefulsets/scale"], "resourceNames": ["sandbox"],
+              "verbs": ["get", "update"]}]
     pv_name = namespace + "-data"
     objects = [
         object_("Namespace", namespace),

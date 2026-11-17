@@ -324,6 +324,7 @@ def handle_computer_use(args: dict[str, Any], **kwargs) -> Any:
     # Bot Desktop lease: while a human drives the screen every action, capture included, is refused.
     from tools.bot_desktop import lease as _bd_lease
     from tools.bot_desktop.runtime import ensure_started_for_tool as _bd_ensure_started
+    from tools.bot_desktop.runtime import sandbox_command_activity
     def _refused(e: Exception) -> str:
         return json.dumps({"ok": False, "action": action, "code": "human_has_control", "error": str(e)})
     try:
@@ -342,7 +343,10 @@ def handle_computer_use(args: dict[str, Any], **kwargs) -> Any:
     # releases the admitted call lock on every dispatch return or exception.
     call = contextlib.ExitStack()
     try:
-        backend = call.enter_context(_backend_for_call(session_id))
+        with call:
+            call.enter_context(sandbox_command_activity())
+            backend = call.enter_context(_backend_for_call(session_id))
+            call = call.pop_all()
     except Exception as e:
         from plugins.computer_use import DEFAULT_BACKEND, configured_backend_name
         hint = ({"hint": "If the cua-driver binary is missing, run `hermes computer-use install`. If a Python "

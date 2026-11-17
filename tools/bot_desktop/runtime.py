@@ -525,7 +525,7 @@ def sandbox_screen_running() -> bool:
     marker = sandbox_host._read_marker()
     if not marker:
         return False
-    if marker.get("firecracker"):
+    if marker.get("firecracker") or marker.get("kubernetes"):
         return sandbox_host.marker_sandbox_alive(marker)
     if _sandbox_env(create=False) is not None:
         return True
@@ -545,6 +545,8 @@ def _owned_sandbox_env(*, passive: bool = False):
         return None
     if passive and marker.get("firecracker"):
         return _firecracker_screen_env(marker)
+    if passive and marker.get("kubernetes"):
+        return _kubernetes_screen_env(marker)
     env = _sandbox_env(create=False)
     if env is not None:
         return env
@@ -567,6 +569,25 @@ def _firecracker_screen_env(marker):
     return None
 
 
+def _kubernetes_screen_env(marker):
+    from tools.environments.base import EnvironmentConnectionError
+    from tools.terminal_tool import _get_env_config
+    from tools.terminal_tool_backends import _build_kubernetes_env
+
+    config = _get_env_config()
+    if config["env_type"] != "kubernetes":
+        return None
+    env = _sandbox_env(create=False)
+    try:
+        if env is None or getattr(env, "kubernetes_identity", None) != marker["kubernetes"]:
+            env = _build_kubernetes_env(cwd="/workspace", timeout=15, cc=config, probe_only=True)
+            return env if marker["kubernetes"] == env.kubernetes_identity else None
+        identity = env._identity()
+    except EnvironmentConnectionError:
+        return None
+    return env if marker["kubernetes"] == identity else None
+
+
 def is_running() -> bool:
     return bool(published_env().get("DISPLAY"))
 
@@ -574,7 +595,13 @@ def is_running() -> bool:
 def open_rfb_stream() -> subprocess.Popen:
     """Popen whose stdin/stdout carry RFB bytes for a sandbox-hosted screen (``in_sandbox()`` only)."""
     from tools.bot_desktop import sandbox_host
-    env = _owned_sandbox_env() if sandbox_host._read_marker().get("firecracker") else _sandbox_env(create=False)
+    marker = sandbox_host._read_marker()
+    if marker.get("firecracker"):
+        env = _owned_sandbox_env()
+    elif marker.get("kubernetes"):
+        env = _kubernetes_screen_env(marker)
+    else:
+        env = _sandbox_env(create=False)
     if env is None:
         raise RuntimeError("the sandbox hosting this screen is not running")
     return sandbox_host.open_rfb_stream(env, _profile_name())
@@ -627,7 +654,8 @@ def _sandbox_status(profile: Optional[str], where) -> DesktopStatus:
     if marker.get("firecracker") or where.backend == "firecracker":
         env = _firecracker_screen_env(marker)
     else:
-        env = _owned_sandbox_env() or _sandbox_env(create=False)
+        env = _owned_sandbox_env(passive=True) if marker.get("kubernetes") else (
+            _owned_sandbox_env() or _sandbox_env(create=False))
     missing = sandbox_host.missing_binaries(env) if env is not None else []
     published = sandbox_host.published_env(env, profile or _profile_name()) if env is not None else {}
     running = bool(published.get("DISPLAY"))
@@ -817,7 +845,24 @@ def _spawn_and_wait(sd: Path, wait_seconds: float) -> DesktopStatus:
 def _sandbox_env(*, create: bool):
     """The terminal environment hosting this profile's screen, or None. ``create=False`` for status probes
     (a status call must never build a container)."""
-    return placement.terminal_environment(create=create)
+    env = placement.terminal_environment(create=create)
+    if create and getattr(env, "lifecycle", None):
+        env.activate()
+    return env
+
+
+@contextlib.contextmanager
+def sandbox_command_activity():
+    """Hold a Kubernetes sandbox for the actual tool call, independent of cached relays."""
+    from hermes_constants import get_hermes_home
+
+    configured = (get_hermes_home() / "kubernetes-sandbox").is_dir()
+    env = _sandbox_env(create=False) if configured and placement.resolve().backend == "kubernetes" else None
+    if not getattr(env, "lifecycle", None):
+        yield
+        return
+    with env.lifecycle.active(wake=False, expected_uid=env.kubernetes_identity["uid"]):
+        yield
 
 
 def _start_in_sandbox(wait_seconds: float) -> DesktopStatus:
@@ -850,7 +895,10 @@ def _start_in_sandbox(wait_seconds: float) -> DesktopStatus:
 def _sandbox_published_env(marker) -> dict[str, str]:
     """Published env of a sandbox-hosted screen (the caller saw the host-side marker written at start)."""
     from tools.bot_desktop import sandbox_host
-    env = _firecracker_screen_env(marker) if marker.get("firecracker") else _sandbox_env(create=False)
+    if marker.get("firecracker") or marker.get("kubernetes"):
+        env = _owned_sandbox_env(passive=True)
+    else:
+        env = _sandbox_env(create=False)
     if env is None:
         return {}
     return sandbox_host.published_env(env, _profile_name())
@@ -863,7 +911,7 @@ def stop() -> bool:
     if sandbox_host._read_marker() or placement.resolve().where == placement.TERMINAL:
         # The marker names the sandbox that owns the screen; stop THAT one (re-attaching after a restart),
         # whatever the placement setting says now. A marker whose sandbox is gone is simply dropped.
-        env = _owned_sandbox_env()
+        env = _owned_sandbox_env(passive=bool(sandbox_host._read_marker().get("kubernetes")))
         stopped = sandbox_host.stop(env, _profile_name()) if env is not None else False
         sandbox_host._marker().unlink(missing_ok=True)
         for name in ("env", "activity"):

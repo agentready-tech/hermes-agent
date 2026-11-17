@@ -34,7 +34,8 @@ def client_environment() -> dict[str, str]:
     return {key: os.environ[key] for key in keys if key in os.environ}
 
 
-def exec_prefix(env: BaseEnvironment, *, user: Optional[str] = None, interactive: bool = True) -> Optional[list[str]]:
+def exec_prefix(env: BaseEnvironment, *, user: Optional[str] = None, interactive: bool = True,
+                passive: bool = False) -> Optional[list[str]]:
     """Local argv that runs its remainder inside ``env``, or None for backends without one.
 
     ``user`` selects the sandbox-side account (Docker/Kubernetes; ssh runs as the configured login, apptainer as
@@ -46,7 +47,9 @@ def exec_prefix(env: BaseEnvironment, *, user: Optional[str] = None, interactive
     from tools.environments.singularity import SingularityEnvironment
     from tools.environments.ssh import SSHEnvironment
 
-    if isinstance(env, (KubernetesEnvironment, FirecrackerEnvironment)):
+    if isinstance(env, KubernetesEnvironment):
+        return env.exec_prefix(user=user, interactive=interactive, passive=passive)
+    if isinstance(env, FirecrackerEnvironment):
         return env.exec_prefix(user=user, interactive=interactive)
     if isinstance(env, DockerEnvironment):
         container = getattr(env, "_container_id", None)
@@ -95,20 +98,21 @@ def shell_joined(env: BaseEnvironment) -> bool:
 
 
 def remote_command(env: BaseEnvironment, argv: Sequence[str], *, child_env: Optional[dict] = None,
-                   user: Optional[str] = None, interactive: bool = True) -> Optional[list[str]]:
+                   user: Optional[str] = None, interactive: bool = True,
+                   passive: bool = False) -> Optional[list[str]]:
     """Full local argv running ``argv`` inside ``env`` with ``child_env`` exported, quoted for that backend's
     client; None for a backend without an exec prefix."""
-    prefix = exec_prefix(env, user=user, interactive=interactive)
+    prefix = exec_prefix(env, user=user, interactive=interactive, passive=passive)
     if prefix is None:
         return None
     return remote_argv(prefix, argv, env=child_env, shell_joined=shell_joined(env))
 
 
 def open_stream(env: BaseEnvironment, argv: Sequence[str], *, child_env: Optional[dict] = None,
-                user: Optional[str] = None, stderr=subprocess.DEVNULL) -> subprocess.Popen:
+                user: Optional[str] = None, stderr=subprocess.DEVNULL, passive: bool = False) -> subprocess.Popen:
     """Spawn ``argv`` inside ``env`` with stdin and stdout as pipes (bytes). Raises ``RuntimeError`` for a
     backend that cannot host a stream."""
-    command = remote_command(env, argv, child_env=child_env, user=user, interactive=True)
+    command = remote_command(env, argv, child_env=child_env, user=user, interactive=True, passive=passive)
     if command is None:
         raise RuntimeError(f"{type(env).__name__} cannot host a long-lived stdio stream")
     return subprocess.Popen(  # windows-footgun: ok — the prefix is a Linux sandbox's client (docker/ssh/apptainer)
@@ -116,9 +120,10 @@ def open_stream(env: BaseEnvironment, argv: Sequence[str], *, child_env: Optiona
 
 
 def run_in(env: BaseEnvironment, argv: Sequence[str], *, child_env: Optional[dict] = None, user: Optional[str] = None,
-           timeout: float = 30.0, stdin: Optional[bytes] = None) -> subprocess.CompletedProcess:
+           timeout: float = 30.0, stdin: Optional[bytes] = None, passive: bool = False) -> subprocess.CompletedProcess:
     """One short command inside ``env`` with captured bytes output (probes: ``command -v``, ``cat env``)."""
-    command = remote_command(env, argv, child_env=child_env, user=user, interactive=stdin is not None)
+    command = remote_command(env, argv, child_env=child_env, user=user,
+                             interactive=stdin is not None, passive=passive)
     if command is None:
         raise RuntimeError(f"{type(env).__name__} cannot exec argv")
     return subprocess.run(  # windows-footgun: ok — Linux sandbox client
@@ -130,9 +135,11 @@ def probe_in(env: BaseEnvironment, argv: Sequence[str], *, child_env: Optional[d
              stdin: Optional[bytes] = None) -> subprocess.CompletedProcess:
     """Inspect the existing Firecracker generation without waking or keeping it alive."""
     from tools.environments.firecracker import FirecrackerEnvironment
+    from tools.environments.kubernetes import KubernetesEnvironment
 
     if not isinstance(env, FirecrackerEnvironment):
-        return run_in(env, argv, child_env=child_env, user=user, timeout=timeout, stdin=stdin)
+        return run_in(env, argv, child_env=child_env, user=user, timeout=timeout, stdin=stdin,
+                      passive=isinstance(env, KubernetesEnvironment) and bool(getattr(env, "lifecycle", None)))
     command = remote_argv(env.probe_prefix(user=user, interactive=stdin is not None), argv, env=child_env)
     return subprocess.run(command, input=stdin, capture_output=True, timeout=timeout, check=False)
 
@@ -205,6 +212,11 @@ class PortForward:
                 argv.append(str(self.close_grace))
             if self.passive_generation is None:
                 proc = open_stream(self.env, argv, user=self.user)
+            elif self.passive_generation.startswith("kubernetes:"):
+                uid = self.passive_generation.split(":", 1)[1]
+                prefix = self.env.exec_prefix(user=self.user, passive=True, expected_uid=uid)
+                proc = subprocess.Popen(remote_argv(prefix, argv), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL, close_fds=True)
             else:
                 prefix = self.env.relay_prefix(self.passive_generation, user=self.user)
                 proc = subprocess.Popen(remote_argv(prefix, argv), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -263,6 +275,7 @@ def forward_port(env: BaseEnvironment, remote_port: int, *, remote_host: str = "
     """Local port on 127.0.0.1 that reaches ``remote_host:remote_port`` inside ``env``; one listener per
     (env, host, port) is kept for the process lifetime (daemon threads, nothing to clean up)."""
     from tools.environments.firecracker import FirecrackerEnvironment
+    from tools.environments.kubernetes import KubernetesEnvironment
 
     # Browser CDP connections are cached and may stay open beyond the last tool request.
     passive = None
@@ -270,6 +283,8 @@ def forward_port(env: BaseEnvironment, remote_port: int, *, remote_host: str = "
         passive = env.instance_id
         if not passive:
             raise RuntimeError("Cannot forward CDP for an inactive Firecracker generation")
+    if browser_cdp and isinstance(env, KubernetesEnvironment) and env.lifecycle:
+        passive = "kubernetes:" + env.kubernetes_identity["uid"]
     key = (id(env), remote_host, int(remote_port), close_grace, passive)
     with _forwards_lock:
         if passive:

@@ -839,6 +839,14 @@ def run_fenced(session_info: dict[str, Any], fn: Callable[[], dict[str, Any]]) -
             except EnvironmentConnectionError:
                 return {"success": False, "code": "browser_unavailable",
                         "error": "The Firecracker browser is no longer running. Reopen it before continuing."}
+        if target.where == placement.TERMINAL and target.backend == "kubernetes":
+            from tools.bot_desktop.runtime import sandbox_command_activity
+
+            try:
+                stack.enter_context(sandbox_command_activity())
+            except EnvironmentConnectionError:
+                return {"success": False, "code": "browser_unavailable",
+                        "error": "The Kubernetes browser is no longer running. Reopen it before continuing."}
         result = fn()
     if _bd_lease.get().epoch != admitted.epoch:
         return {"success": False, "code": "human_has_control",

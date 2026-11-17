@@ -129,16 +129,21 @@ def _write(path: Path, lease: Lease) -> None:
 class _locked:
     """Cross-process critical section over the lease file (fcntl on a sibling lock file)."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, blocking: bool = True):
         self._lockfile = path.with_suffix(".lock")
         self._fh = None
+        self._blocking = blocking
 
     def __enter__(self):
         if fcntl is None:
             return self
         _private_dir(self._lockfile)
         self._fh = open(self._lockfile, "a+", encoding="utf-8", opener=_open_private)
-        fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX)
+        try:
+            fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX | (0 if self._blocking else fcntl.LOCK_NB))
+        except BaseException:
+            self._fh.close()
+            raise
         return self
 
     def __exit__(self, *exc):
