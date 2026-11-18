@@ -1,10 +1,12 @@
-"""A real native gateway sends a scheduled main-session answer through its original transport."""
+"""A native gateway publishes main-session answers through the committed route."""
 
 import asyncio
+from datetime import datetime
 from http.server import ThreadingHTTPServer
 import json
 import sqlite3
 import threading
+import time
 
 import pytest
 
@@ -13,12 +15,14 @@ from tests.waiting import async_wait_until
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("main_route", ["telegram", "agentready"])
 @pytest.mark.parametrize("producer", ["timer", "timer-autonomous", "timer-autonomous-busy", "mail", "mail-busy", "panel-queue"])
-async def test_main_event_replies_through_telegram_and_shared_history(tmp_path, monkeypatch, producer):
+async def test_main_event_replies_through_committed_route_and_shared_history(tmp_path, monkeypatch, producer, main_route):
     from gateway.config import Platform, PlatformConfig
     from gateway.platforms.base import BasePlatformAdapter, SendResult
     from gateway.platforms.event import MessageEvent
     from gateway.run import GatewayRunner
+    from gateway.session import SessionEntry
     from gateway.session_authority import initialize_session_authority
     from gateway.session_context import set_session_vars, clear_session_vars
     from hermes_runtime.adapters import hermes
@@ -55,6 +59,7 @@ async def test_main_event_replies_through_telegram_and_shared_history(tmp_path, 
     home.mkdir()
     provider = ThreadingHTTPServer(('127.0.0.1', 0), Provider)
     provider.calls = []
+    expected = 'Delivery reviewed in the same main session.'
     threading.Thread(target=provider.serve_forever, daemon=True).start()
     url = f'http://127.0.0.1:{provider.server_address[1]}/v1'
     monkeypatch.setenv('HERMES_HOME', str(home))
@@ -74,18 +79,30 @@ async def test_main_event_replies_through_telegram_and_shared_history(tmp_path, 
         'auxiliary':{'title_generation':{'enabled':False}}}))
     activate_home(home)
     runner = GatewayRunner()
-    authority = await initialize_session_authority(runner, profile_id=str(home), instance_id='scheduled-reply-fixture')
     adapter = Adapter()
     adapter.gateway_runner = runner
     runner.adapters[Platform.TELEGRAM] = adapter
+    source = adapter.build_source(chat_id='schedule-chat', chat_type='dm', user_id='fixture-user')
+    if main_route == 'telegram':
+        # A previously bound main route survives owner startup. Sending an ordinary
+        # Telegram message only selects its own reply transport.
+        now = datetime.now()
+        entry = SessionEntry(HOME_SESSION_KEY, HOME_SESSION_ID, now, now, origin=source, platform=source.platform)
+        with sqlite3.connect(home / 'state.db') as db:
+            db.execute('INSERT INTO gateway_routing(scope,session_key,entry_json,updated_at) VALUES(?,?,?,?)',
+                       (str(runner.config.sessions_dir.resolve()), HOME_SESSION_KEY, json.dumps(entry.to_dict()), time.time()))
+    authority = await initialize_session_authority(runner, profile_id=str(home), instance_id='scheduled-reply-fixture')
     runner._wire_adapter_handlers(adapter)
     watcher = None
     try:
-        source = adapter.build_source(chat_id='schedule-chat', chat_type='dm', user_id='fixture-user')
+        from hermes_runtime.adapters.state import main_gateway_origin
+        assert main_gateway_origin()['platform'] == main_route
         await adapter.handle_message(MessageEvent(text='Remember this existing conversation', source=source, message_id='warm'))
-        expected = 'Delivery reviewed in the same main session.'
         await async_wait_until(lambda: any(expected in x['content'] for x in adapter.deliveries),
                                timeout=25, what='initial transport reply')
+        initial_deliveries = len(adapter.deliveries)
+        stream = authority.sessions[HOME_SESSION_ID].event_stream
+        epoch, cursor = stream.watermark()
         with sqlite3.connect(home / 'state.db') as db:
             before = db.execute('SELECT id FROM sessions ORDER BY id').fetchall()
         assert before == [(HOME_SESSION_ID,)]
@@ -108,7 +125,7 @@ async def test_main_event_replies_through_telegram_and_shared_history(tmp_path, 
             scheduled = authority._schedule
             monkeypatch.setattr(authority, '_schedule', lambda _ref: None)
             request = {'method': 'prompt.submit', 'params': {'session_id': HOME_SESSION_ID,
-                'submission_id': 'synthetic-panel-nonce', 'text': 'PANEL_TELEGRAM_ROUTE_PROOF'}}
+                'submission_id': 'synthetic-panel-nonce', 'text': 'PANEL_MAIN_ROUTE_PROOF'}}
             one = await chat.dispatch(request)
             two = await chat.dispatch(request)
             assert one['admission_id'] == two['admission_id']
@@ -125,7 +142,7 @@ async def test_main_event_replies_through_telegram_and_shared_history(tmp_path, 
                                       user_id='fixture-user', session_key=HOME_SESSION_KEY, session_id=HOME_SESSION_ID)
             try:
                 result = json.loads(registry.dispatch('cronjob_manage', {'action':'create', 'schedule':'every 1h',
-                    'prompt':'SCHEDULED_TELEGRAM_ROUTE_PROOF: continue this conversation and return the result.'},
+                    'prompt':'SCHEDULED_MAIN_ROUTE_PROOF: continue this conversation and return the result.'},
                     session_id=HOME_SESSION_ID))
             finally:
                 clear_session_vars(tokens)
@@ -144,7 +161,7 @@ async def test_main_event_replies_through_telegram_and_shared_history(tmp_path, 
             from hermes_runtime.adapters.turns import ActiveHomeTurn
             from hermes_runtime.standalone.workspace import admit_batches
             response = {'batches': [{'connectionId': 'mail-fixture', 'cursor': {'uid': 1}, 'events': [{
-                'id': 'mail-1', 'source': 'gmail:fixture', 'prompt': 'MAIL_TELEGRAM_ROUTE_PROOF', 'metadata': {}}]}]}
+                'id': 'mail-1', 'source': 'gmail:fixture', 'prompt': 'MAIL_MAIN_ROUTE_PROOF', 'metadata': {}}]}]}
             turn = ActiveHomeTurn() if producer == 'mail-busy' else None
             try:
                 admit_batches(home, response, {})
@@ -156,22 +173,27 @@ async def test_main_event_replies_through_telegram_and_shared_history(tmp_path, 
                     turn.finish(error='Synthetic foreground turn finished')
         runner._running = True
         watcher = asyncio.create_task(runner._async_delegation_watcher(interval=0.05))
-        try:
-            await async_wait_until(lambda: len([x for x in adapter.deliveries if expected in x['content']]) >= 2,
-                                   timeout=25, what='scheduled transport reply')
-        except AssertionError:
-            with sqlite3.connect(home / 'state.db') as db:
-                print('DELIVERY_ROWS', db.execute('SELECT origin_session,state,delivery_state,delivery_attempts FROM async_delegations').fetchall())
-                print('ADMISSIONS', db.execute('SELECT principal_id,status,outcome FROM session_admissions').fetchall())
-            print('WATCHER', watcher.done(), repr(watcher.exception()) if watcher.done() else 'running')
-            raise
+
+        def shared_reply():
+            return [frame for frame in stream.since(epoch, cursor)['events']
+                    if frame['type'] == 'message.complete' and frame['payload'].get('text') == expected]
+
+        await async_wait_until(shared_reply, timeout=25, what='reply in the shared main stream')
+        if main_route == 'telegram':
+            await async_wait_until(lambda: len(adapter.deliveries) > initial_deliveries,
+                                   timeout=25, what='proactive Telegram reply')
+        proactive = adapter.deliveries[initial_deliveries:]
+        assert [(row['chat_id'], row['content']) for row in proactive] == (
+            [('schedule-chat', expected)] if main_route == 'telegram' else []
+        )
+        assert len(shared_reply()) == 1
         marker = 'PANEL' if producer == 'panel-queue' else 'SCHEDULED' if producer.startswith('timer') else 'MAIL'
-        assert marker + '_TELEGRAM_ROUTE_PROOF' in json.dumps(provider.calls)
-        assert adapter.deliveries[-1]['chat_id'] == 'schedule-chat'
+        assert marker + '_MAIN_ROUTE_PROOF' in json.dumps(provider.calls)
         assert len([call for call in provider.calls if 'messages' in call]) == 2, 'A replay must not start another inference'
         with sqlite3.connect(home / 'state.db') as db:
             assert db.execute('SELECT id FROM sessions ORDER BY id').fetchall() == before
-            assert db.execute("SELECT count(*) FROM messages WHERE role='assistant' AND content=?", (expected,)).fetchone()[0] == 2
+            replies = db.execute("SELECT content FROM messages WHERE role='assistant' ORDER BY id").fetchall()
+            assert replies == [(expected,), (expected,)]
             assert db.execute("SELECT count(*) FROM agentready_inbox").fetchone()[0] == 0
             if producer != 'panel-queue':
                 assert db.execute("SELECT count(*) FROM session_admissions WHERE principal_id LIKE 'automation:%'").fetchone()[0] >= 1
