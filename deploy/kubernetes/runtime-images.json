@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.18.4",
+  "defaultRuntimeVersion": "2026.11.18.5",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -4842,6 +4842,43 @@
         "releaseRegressionTestsPassed": 71
       },
       "description": "Accept the current official Claude Code sign-in URL."
+    },
+    "2026.11.18.5": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:58c70e8a175f873f195b43e0eb2b00e6bed1df9176a8f8dc9b4aa2817c9e259a",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.18.5",
+      "configDigest": "sha256:f56aad5eb70f55623e087b52c5537cc1f813f14bec0bf92fe837b3be3e74b1fd",
+      "platform": "linux/amd64",
+      "sourceRevision": "e398a765a09080f738b3ab9459b1d98fb92b1c41",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:58c70e8a175f873f195b43e0eb2b00e6bed1df9176a8f8dc9b4aa2817c9e259a",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.18.5",
+        "digest": "sha256:58c70e8a175f873f195b43e0eb2b00e6bed1df9176a8f8dc9b4aa2817c9e259a",
+        "configDigest": "sha256:f56aad5eb70f55623e087b52c5537cc1f813f14bec0bf92fe837b3be3e74b1fd",
+        "sourceRevision": "e398a765a09080f738b3ab9459b1d98fb92b1c41",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 44327395923,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:846ef27215fd1d338f35f25aebf8a4d020e4a32b29599b7746c238cfd8b9751a",
+        "deployRunId": 44330227190
+      },
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml",
+      "validation": {
+        "runtimeReady": true,
+        "futureDefaultConfigured": true,
+        "releaseRegressionTestsPassed": 71
+      },
+      "description": "Preserve Claude Code confirmation across reconnects and accept opaque one-line codes."
     }
   },
   "supersededRuntimeAttempts": {
