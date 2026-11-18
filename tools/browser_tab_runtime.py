@@ -61,7 +61,9 @@ def prepare_native_tabs(code: str, task: str, cmd: list, env: dict, *, generatio
         # A later call after human takeover must not re-own the driver's startup tab.
         epoch, driver_before = previous[3:] if previous else (lease.get(home).epoch, _driver_process_snapshot())
         contexts[name] = (list(cmd), dict(env), browser, epoch, driver_before)
-    return wrap_code(code, home=home, endpoint=browser, task=task)
+    return wrap_code(code, home=home, endpoint=browser, task=task,
+                     driver_epoch=epoch if previous is None else None,
+                     driver_before=driver_before if previous is None else None)
 
 
 def finish_native_tabs(agent, task: str, *, completed: bool, interrupted: bool, failed: bool) -> None:

@@ -879,7 +879,8 @@ def _shares_bot_desktop_browser(session_info: dict[str, Any]) -> bool:
     return bool(_bd_runtime.published_env().get("DISPLAY")) or _bd_lease.human_holds()
 
 
-def _bot_desktop_endpoint(session_info: dict[str, Any], *, launch: bool, timeout: float = 20):
+def _bot_desktop_endpoint(session_info: dict[str, Any], *, launch: bool, timeout: float = 20,
+                          startup_window: bool = True):
     """Admit the owned Chrome, in the namespace where the shared profile and process live."""
     name = session_info['session_name']
     if _browser_in_sandbox():
@@ -888,12 +889,14 @@ def _bot_desktop_endpoint(session_info: dict[str, Any], *, launch: bool, timeout
         if env is None:
             return None
         if launch:
-            return sandbox_host.ensure_browser_endpoint(env, exclude_session=name, timeout=timeout)
+            return sandbox_host.ensure_browser_endpoint(env, exclude_session=name, timeout=timeout,
+                                                        startup_window=startup_window)
         return sandbox_host.browser_instance_endpoint(env, exclude_session=name)
     from tools.bot_desktop import browser
     profile = str(browser.profile_dir())
     if launch:
-        return browser.ensure_instance_endpoint(profile, exclude_session=name, timeout=timeout)
+        return browser.ensure_instance_endpoint(profile, exclude_session=name, timeout=timeout,
+                                                startup_window=startup_window)
     return browser.running_instance_endpoint(profile, exclude_session=name)
 
 
@@ -938,7 +941,7 @@ def _probe_native_client(task_id, session_info, browser_cmd, engine, timeout, en
     return bound, backend_args, result
 
 
-def _shared_browser_handshake(task_id, session_info, browser_cmd, command, engine, timeout):
+def _shared_browser_handshake(task_id, session_info, browser_cmd, command, engine, timeout, endpoint_only=False):
     """Serialize only admission and daemon handshake, never a page action or wait."""
     from tools.bot_desktop import runtime
     from tools.bot_desktop.browser_instance import BrowserStartupError
@@ -961,7 +964,14 @@ def _shared_browser_handshake(task_id, session_info, browser_cmd, command, engin
                 raise BrowserStartupError('cdp_timeout')
             return budget
 
-        endpoint = _bot_desktop_endpoint(session_info, launch=True, timeout=remaining())
+        endpoint = _bot_desktop_endpoint(session_info, launch=True, timeout=remaining(), startup_window=not endpoint_only)
+        if endpoint_only and endpoint is not None:
+            # The launcher verified the native CDP listener. Starting an
+            # agent-browser daemon just to discover it would open a second tab.
+            return session_info, [], {
+                'success': True, 'data': {'cdpUrl': f'http://127.0.0.1:{endpoint.port}'},
+                'native_browser_generation': endpoint.generation,
+            }
         bound, args, result = _probe_native_client(task_id, session_info, browser_cmd, engine, remaining(), endpoint)
         if endpoint is not None and not result.get('success'):
             current = _bot_desktop_endpoint(bound, launch=False)
@@ -979,9 +989,10 @@ def _dispatch_browser_command(
     if command != "close" and session_info.get("cdp_url"):
         _cdp._ensure_cdp_supervisor(task_id)
     engine = _engine_override or _cloud._get_browser_engine()
+    endpoint_only = command == 'get' and args == ['cdp-url']
     try:
         bound, backend_args, handshake = _shared_browser_handshake(
-            task_id, session_info, browser_cmd, command, engine, timeout)
+            task_id, session_info, browser_cmd, command, engine, timeout, endpoint_only)
     except ProfileUnavailable as error:
         return engine, {'success': False, 'code': 'browser_profile_unavailable',
                         'profileState': error.state, 'error': str(error)}
@@ -992,7 +1003,7 @@ def _dispatch_browser_command(
         if not str(error).startswith('BROWSER_MEMORY_'):
             raise
         return engine, {'success': False, 'code': 'browser_memory_pressure', 'error': str(error)}
-    if handshake is not None and (not handshake.get('success') or (command == 'get' and args == ['cdp-url'])):
+    if handshake is not None and (not handshake.get('success') or endpoint_only):
         return engine, {**handshake, '_shared_browser_command': True}
 
     argv = _agent_browser_argv(browser_cmd)

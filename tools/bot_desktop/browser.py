@@ -138,7 +138,8 @@ def dock_exec_line(exe: str, user_data_dir: str, *, sandbox_bypass: Optional[boo
     return "Exec=" + " ".join(quote(arg) for arg in command)
 
 
-def ensure_instance_endpoint(user_data_dir: str, *, exclude_session: Optional[str] = None, timeout: float = 20):
+def ensure_instance_endpoint(user_data_dir: str, *, exclude_session: Optional[str] = None, timeout: float = 20,
+                             startup_window: bool = True):
     """Agent-first and human-first use the same native headed browser, then attach."""
     import json
     import subprocess
@@ -151,8 +152,11 @@ def ensure_instance_endpoint(user_data_dir: str, *, exclude_session: Optional[st
         raise ProfileUnavailable('unknown')
     child = env_for_agent(served_profile_child_env(inherit_credentials=False))
     child.update(runtime.published_env())
+    argv = dock_argv(exe, user_data_dir)
+    if not startup_window:
+        argv.append('--no-startup-window')
     result = subprocess.run([sys.executable, str(Path(__file__).with_name('browser_launch.py'))],
-                            input=json.dumps({'argv': dock_argv(exe, user_data_dir),
+                            input=json.dumps({'argv': argv,
                                               'exclude_session': exclude_session,
                                               'timeout': launch_wait_budget(timeout)}).encode(),
                             env=child, capture_output=True, timeout=timeout, check=False)

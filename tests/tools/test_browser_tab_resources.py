@@ -15,6 +15,7 @@ class Browser:
     def __init__(self):
         self.tabs = {"human": {"targetId": "human", "type": "page"}}
         self.current = "human"
+        self.visible = "human"
         self.closed = []
         self.safe = {}
 
@@ -27,6 +28,9 @@ class Browser:
             return {"targetId": target}
         if method == "Target.attachToTarget":
             return {"sessionId": kw["targetId"]}
+        if method == "Target.activateTarget":
+            self.visible = kw["targetId"]
+            return {}
         if method == "Runtime.evaluate":
             return {"result": {"value": self.safe.get(kw["session_id"], True)}}
         if method == "Target.closeTarget":
@@ -43,13 +47,54 @@ def browser(monkeypatch):
     helpers = ModuleType("browser_harness.helpers")
     helpers.cdp = b.cdp
     helpers._send = lambda request: {"ok": True}
-    helpers.current_tab = lambda: {"targetId": b.current}
-    helpers.switch_tab = lambda target: setattr(b, "current", target)
+    helpers.current_tab = lambda: b.tabs[b.current]
+
+    def switch_tab(target, activate=False):
+        b.current = target.get("targetId") if isinstance(target, dict) else target
+        if activate:
+            helpers.cdp("Target.activateTarget", targetId=b.current)
+
+    helpers.switch_tab = switch_tab
+    def new_tab(url="about:blank"):
+        target = helpers.cdp("Target.createTarget", url=url, background=True)["targetId"]
+        helpers.switch_tab(target)
+        return target
+
+    helpers.new_tab = new_tab
     package = ModuleType("browser_harness")
     package.helpers = helpers
     monkeypatch.setitem(sys.modules, "browser_harness", package)
     monkeypatch.setitem(sys.modules, "browser_harness.helpers", helpers)
     return b, helpers
+
+
+def test_first_exec_reuses_fresh_driver_tab_and_shows_work(tmp_path, browser):
+    b, helpers = browser
+    b.tabs["driver"] = {"targetId": "driver", "type": "page", "url": "about:blank"}
+    b.current = "driver"
+    ns = {"switch_tab": helpers.switch_tab}
+
+    with managed_tabs(ns, str(tmp_path), "browser", "task", driver_epoch=0, driver_before={}):
+        assert set(b.tabs) == {"human", "driver"}
+        assert b.current == b.visible == "driver"
+        assert ns["new_tab"]() == "driver"
+        assert set(b.tabs) == {"human", "driver"}
+        extra = ns["cdp"]("Target.createTarget", background=True)["targetId"]
+        ns["switch_tab"](extra)
+        assert b.current == b.visible == extra
+
+    assert set(b.tabs) == {"human", "driver", extra}
+
+
+def test_existing_unowned_blank_is_not_reused_or_focused(tmp_path, browser):
+    b, _ = browser
+    b.tabs["human"]["url"] = "about:blank"
+
+    with managed_tabs({}, str(tmp_path), "browser", "task"):
+        assert b.current == b.visible
+        assert b.visible != "human"
+
+    assert "human" in b.tabs
 
 
 def test_harness_tracks_explicit_creation_and_owned_popups_only(tmp_path, browser):

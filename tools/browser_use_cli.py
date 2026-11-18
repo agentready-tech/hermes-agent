@@ -500,9 +500,8 @@ def _resolve_managed_chromium_cdp(env: dict, task_id: Optional[str], session_nam
     the same browser the built-in tools drive. Left alone, the harness discovers the user's INSTALLED
     Chrome on its default profile, which needs the chrome://inspect toggle + an Allow popup per run and
     is blocked outright on Chrome >=136; on a headless box it just reports ``chrome-not-running``.
-    ``get cdp-url`` runs through ``_run_browser_command`` (legacy cache, inactivity reaper, atexit, Chromium
-    preflight/auto-install) on EVERY call: it launches the browser cold, follows a relaunch, and refreshes
-    the agent-browser daemon's idle timer, which never sees the harness's direct CDP traffic."""
+    ``get cdp-url`` runs through ``_run_browser_command`` on every call to follow relaunches. On the
+    shared desktop it reads Chrome's own endpoint without starting another tab-owning client."""
     try:
         from tools.browser_tool_session import _run_browser_command
         from tools.browser_tool import _get_open_command_timeout
@@ -642,7 +641,7 @@ def _resolve_real_profile_cdp(env: dict, force_local: bool) -> Optional[str]:
     return err or None
 
 
-def _attach_vault_supervisor(env: dict, task_id: Optional[str]) -> None:
+def _attach_vault_supervisor(env: dict, task_id: Optional[str], create_initial_page: bool = True) -> None:
     """Attach the per-task CDP supervisor to the browser this exec drives so ``browser_vault`` fill has
     a secret-capable WebSocket (never argv) into the SAME browser. Only CDP-routed backends expose an
     endpoint; BU direct-cloud (BU_AUTOSPAWN) does not, and the vault tools report ``supervisor_required``."""
@@ -654,7 +653,8 @@ def _attach_vault_supervisor(env: dict, task_id: Optional[str]) -> None:
         from tools.browser_tool_cdp import _get_dialog_policy_config, _resolve_cdp_override
         policy, timeout_s = _get_dialog_policy_config()
         SUPERVISOR_REGISTRY.get_or_start(task_id=task_id or "default", cdp_url=_resolve_cdp_override(cdp),
-                                         dialog_policy=policy, dialog_timeout_s=timeout_s)
+                                         dialog_policy=policy, dialog_timeout_s=timeout_s,
+                                         create_initial_page=create_initial_page)
     except Exception as exc:
         logger.debug("browser_exec: CDP supervisor attach failed (non-fatal): %s", exc)
 
@@ -870,12 +870,13 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
                 configure_harness_runtime(env)
         except OSError:
             return {"error_result": tool_error("The browser harness needs a private runtime directory.")}
-        _attach_vault_supervisor(env, task_id)
+        if not bot_desktop_browser:
+            _attach_vault_supervisor(env, task_id)
         with _driven_daemons_lock:
             route = tuple((key, env[key]) for key in _DAEMON_ROUTE_KEYS if key in env)
             _driven_daemons.add((hermes_home_key(), route))
         try:
-            return {"proc": _run_cli_killing_process_group(cmd, code, env, timeout)}
+            proc = _run_cli_killing_process_group(cmd, code, env, timeout)
         except subprocess.TimeoutExpired:
             return {"error_result": tool_error(
                 f"browser-use exec timed out after {timeout}s. The daemon may still be working; retry "
@@ -884,6 +885,10 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
             )}
         except OSError as e:
             return {"error_result": tool_error(f"Failed to launch browser-use CLI: {e}")}
+        if bot_desktop_browser and proc.returncode == 0:
+            # On cold start, the task driver owns creation of the first page.
+            _attach_vault_supervisor(env, task_id, False)
+        return {"proc": proc}
 
     if bot_desktop_browser:
         from tools.browser_tool_session import run_fenced

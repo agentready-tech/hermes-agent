@@ -199,7 +199,8 @@ def browser_launch_path(env: Any) -> str:
     return target + '/browser_launch.py'
 
 
-def ensure_browser_endpoint(env: Any, *, exclude_session: Optional[str] = None, timeout: float = 20):
+def ensure_browser_endpoint(env: Any, *, exclude_session: Optional[str] = None, timeout: float = 20,
+                            startup_window: bool = True):
     """Allocate and launch as the browser owner inside its actual sandbox namespace."""
     from tools.bot_desktop import browser, browser_instance, runtime
     from tools.bot_desktop.browser_memory_guard import executable as guarded_executable
@@ -208,6 +209,8 @@ def ensure_browser_endpoint(env: Any, *, exclude_session: Optional[str] = None, 
         raise browser_instance.ProfileUnavailable('unknown')
     exe = guarded_executable(env, exe)
     argv = browser.dock_argv(exe, browser_profile_dir(env), sandbox_bypass=chromium_sandbox_bypass(env))
+    if not startup_window:
+        argv.append('--no-startup-window')
     request = json.dumps({'argv': argv, 'exclude_session': exclude_session,
                           'timeout': browser_instance.launch_wait_budget(timeout)}).encode()
     result = streams.run_in(env, ['python3', browser_launch_path(env)], stdin=request,

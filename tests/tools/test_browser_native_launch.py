@@ -32,6 +32,33 @@ def test_agent_first_launch_attaches_to_native_chrome(monkeypatch, tmp_path):
     assert info['session_name'] != 'own' and result['native_browser_generation'] == 'a' * 64
 
 
+def test_native_cdp_lookup_leaves_tab_creation_to_browser_exec(monkeypatch, tmp_path):
+    from tools import browser_tool_session as session
+
+    monkeypatch.setattr(runtime, 'state_dir', lambda: tmp_path)
+    monkeypatch.setattr(runtime, 'published_env', lambda: {'DISPLAY': ':20'})
+    monkeypatch.setattr(runtime, 'ensure_started_for_tool', lambda: None)
+    monkeypatch.setattr(session, '_browser_in_sandbox', lambda: False)
+    argv = []
+    monkeypatch.setattr(browser, 'executable', lambda: '/own/chrome')
+    monkeypatch.setattr(browser, 'dock_argv', lambda *args: ['/own/chrome'])
+    monkeypatch.setattr('tools.environments.local.served_profile_child_env', lambda **kwargs: {})
+
+    def launch(_command, *, input, **_options):
+        argv.extend(json.loads(input)['argv'])
+        return SimpleNamespace(returncode=0, stdout=json.dumps({
+            'state': 'attachable', 'port': 41327, 'generation': 'a' * 64,
+        }))
+
+    monkeypatch.setattr('subprocess.run', launch)
+    monkeypatch.setattr(session, '_spawn_and_collect', lambda *a, **kw: pytest.fail('CDP lookup opened a tab'))
+    info = {'session_name': 'own', 'features': {'local': True}}
+    _, result = session._dispatch_browser_command('task', info, 'agent-browser', 'get', ['cdp-url'], 5, 'auto')
+    assert result['data']['cdpUrl'] == 'http://127.0.0.1:41327'
+    assert result['native_browser_generation'] == 'a' * 64
+    assert '--no-startup-window' in argv
+
+
 def test_explicit_browser_request_grants_pressure_permit_before_native_launch(monkeypatch, tmp_path):
     from tools import browser_tool_session as session
     monkeypatch.setattr(runtime, 'state_dir', lambda: tmp_path)
@@ -81,7 +108,7 @@ def test_startup_uses_first_open_budget_and_only_dispatches_after_admission(monk
     monkeypatch.setattr(runtime, 'ensure_started_for_tool', lambda: None)
     monkeypatch.setattr(session._bt, '_get_open_command_timeout', lambda **kwargs: 25)
 
-    def launch(info, *, launch, timeout):
+    def launch(info, *, launch, timeout, startup_window):
         assert launch
         calls.append(('start', timeout))
         clock[0] = 16  # The new Chrome only exposes CDP after the former 15-second limit.

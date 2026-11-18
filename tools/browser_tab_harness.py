@@ -57,7 +57,9 @@ def managed_tabs(namespace: dict, home: str, endpoint: str, task: str, *, cleanu
     from browser_harness import helpers
     resources = TabResources(home, endpoint, task)
     original = helpers.cdp
-    old_globals = {key: namespace.get(key) for key in ("cdp", "keep_tab", "new_tab")}
+    original_new_tab = helpers.new_tab
+    original_switch_tab = helpers.switch_tab
+    old_globals = {key: namespace.get(key) for key in ("cdp", "keep_tab", "new_tab", "switch_tab")}
     admitted = None
     retired = False
 
@@ -76,6 +78,22 @@ def managed_tabs(namespace: dict, home: str, endpoint: str, task: str, *, cleanu
             target = target.get("targetId") or target.get("target_id")
         resources.keep(target or helpers.current_tab()["targetId"])
 
+    def switch_tab(target, activate=None):
+        target_id = (target.get("targetId") or target.get("target_id")) if isinstance(target, dict) else target
+        if activate is None:
+            activate = resources.tabs.get(target_id, {}).get("task") == task
+        return original_switch_tab(target, activate=activate)
+
+    def new_tab(url="about:blank"):
+        if url == "about:blank":
+            with contextlib.suppress(RuntimeError, OSError, KeyError, ValueError):
+                current = helpers.current_tab()
+                target = current["targetId"]
+                row = resources.tabs.get(target, {})
+                if row.get("task") == task and not row.get("keep") and current.get("url") == "about:blank":
+                    return target
+        return original_new_tab(url)
+
     with resources.locked():
         try:
             from tools.bot_desktop.lease import assert_agent_may_act
@@ -83,18 +101,29 @@ def managed_tabs(namespace: dict, home: str, endpoint: str, task: str, *, cleanu
             resources.admission_epoch = admitted.epoch
             helpers.cdp = namespace["cdp"] = tracked
             namespace["keep_tab"] = keep_tab
+            helpers.new_tab = namespace["new_tab"] = new_tab
+            helpers.switch_tab = namespace["switch_tab"] = switch_tab
             if cleanup:
                 close_finished_tabs(resources, original, close_unowned=close_user_tabs)
             else:
-                # Never steer the first call onto an existing human/sibling tab.
                 try:
-                    current = helpers.current_tab()["targetId"]
+                    current_tab = helpers.current_tab()
+                    current = current_tab["targetId"]
                 except (RuntimeError, OSError, KeyError, ValueError):
+                    current_tab = {}
                     current = None
                 row = resources.tabs.get(current, {})
-                if row.get("task") != task or row.get("keep"):
+                # The newly launched named daemon already created its own blank tab.
+                # An attached tab from an older daemon could belong to a human or sibling.
+                if (current and not row and current_tab.get("url") == "about:blank"
+                        and driver_epoch == admitted.epoch and _driver_started_since(helpers, driver_before)):
+                    resources.created(current, epoch=admitted.epoch)
+                    original("Target.activateTarget", targetId=current)
+                elif row.get("task") == task and not row.get("keep"):
+                    original("Target.activateTarget", targetId=current)
+                else:
                     target = tracked("Target.createTarget", url="about:blank", background=True)["targetId"]
-                    helpers.switch_tab(target)
+                    switch_tab(target)
             yield
             if cleanup:
                 retired = _retire_driver(resources, helpers, driver_epoch, driver_before, close_user_tabs)
@@ -108,6 +137,8 @@ def managed_tabs(namespace: dict, home: str, endpoint: str, task: str, *, cleanu
             except (RuntimeError, OSError, KeyError, ValueError) as error:
                 logging.getLogger(__name__).debug("Popup ownership reconciliation deferred (%s)", type(error).__name__)
             helpers.cdp = original
+            helpers.new_tab = original_new_tab
+            helpers.switch_tab = original_switch_tab
             for key, value in old_globals.items():
                 if value is None:
                     namespace.pop(key, None)
