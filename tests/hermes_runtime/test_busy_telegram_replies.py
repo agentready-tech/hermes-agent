@@ -17,6 +17,36 @@ from tests.hermes_runtime.test_standalone_service_e2e import Provider
 from tests.waiting import async_wait_until
 
 
+class _ToolProvider(Provider):
+    def do_POST(self):
+        step = len(self.server.calls)
+        if step >= 2:
+            return super().do_POST()
+        body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        self.server.calls.append(body)
+        text = ('Checking the requested delivery.', 'I received the clarification. Continuing the review.')[step]
+        command = ('review', 'continue-review')[step]
+        message = {'role': 'assistant', 'content': text,
+                   'tool_calls': [{'id': f'call_review_{step}', 'type': 'function',
+                                   'function': {'name': 'terminal', 'arguments': json.dumps({'command': command})}}]}
+        response = {'id': f'tool-boundary-fixture-{step}', 'created': 1, 'model': 'gpt-4.1'}
+        self.send_response(200)
+        if body.get('stream'):
+            self.send_header('Content-Type', 'text/event-stream')
+            self.end_headers()
+            message['tool_calls'][0]['index'] = 0
+            for delta, finish in [(message, None), ({}, 'tool_calls')]:
+                chunk = {**response, 'object': 'chat.completion.chunk',
+                         'choices': [{'index': 0, 'delta': delta, 'finish_reason': finish}]}
+                self.wfile.write(f'data: {json.dumps(chunk)}\n\n'.encode())
+            self.wfile.write(b'data: [DONE]\n\n')
+        else:
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({**response, 'object': 'chat.completion',
+                                        'choices': [{'index': 0, 'message': message, 'finish_reason': 'tool_calls'}]}).encode())
+
+
 class _Telegram(BasePlatformAdapter):
     def __init__(self):
         super().__init__(PlatformConfig(enabled=True, token='local-fixture'), Platform.TELEGRAM)
@@ -43,7 +73,9 @@ class _Telegram(BasePlatformAdapter):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('followup', ['ordinary', 'recover-follower', 'explicit-steer'])
+@pytest.mark.parametrize('followup', [
+    'at-tool-boundary', 'after-final-model-call', 'native-queue', 'recover-follower', 'explicit-steer',
+])
 async def test_busy_telegram_reply_boundary(tmp_path, monkeypatch, followup):
     from gateway import delivery_ledger
     from gateway.run import GatewayRunner
@@ -56,10 +88,26 @@ async def test_busy_telegram_reply_boundary(tmp_path, monkeypatch, followup):
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
     monkeypatch.setattr('hermes_state.DEFAULT_DB_PATH', tmp_path / 'state.db')
     monkeypatch.setattr(delivery_ledger, '_db_path', lambda: tmp_path / 'state.db')
-    provider = ThreadingHTTPServer(('127.0.0.1', 0), Provider)
+    with_tool = followup == 'at-tool-boundary'
+    provider = ThreadingHTTPServer(('127.0.0.1', 0), _ToolProvider if with_tool else Provider)
     provider.calls = []
-    provider.block_next = True
+    provider.block_next = not with_tool
+    if followup == 'after-final-model-call':
+        provider.replies_by_call = {1: 'First review complete.', 2: 'Follow-up reviewed.'}
     provider.entered, provider.release = threading.Event(), threading.Event()
+    next_tool_entered, next_tool_release = threading.Event(), threading.Event()
+    if with_tool:
+        def terminal(name, arguments, *_args, **_kwargs):
+            assert name == 'terminal'
+            entered, release = ((provider.entered, provider.release) if arguments['command'] == 'review'
+                                else (next_tool_entered, next_tool_release))
+            entered.set()
+            assert release.wait(timeout=15)
+            return '{"review":"tool finished"}'
+        monkeypatch.setattr('model_tools.handle_function_call', terminal)
+    if followup in {'native-queue', 'recover-follower'}:
+        # The authority can still be busy while its managed mailbox is closed.
+        monkeypatch.setattr('hermes_runtime.adapters.gateway.forward_to_active_turn', lambda *_: None)
     thread = threading.Thread(target=provider.serve_forever, daemon=True)
     thread.start()
     base = f'http://127.0.0.1:{provider.server_port}/v1'
@@ -72,6 +120,7 @@ async def test_busy_telegram_reply_boundary(tmp_path, monkeypatch, followup):
         'model': {'provider': 'custom', 'default': 'gpt-4.1', 'base_url': base, 'context_length': 128000},
         'terminal': {'cwd': str(tmp_path)}, 'compression': {'enabled': False},
         'streaming': {'enabled': False}, 'auxiliary': {'title_generation': {'enabled': False}},
+        'display': {'interim_assistant_messages': followup != 'after-final-model-call'},
     }))
     activate_home(tmp_path)
     runner = GatewayRunner()
@@ -94,15 +143,45 @@ async def test_busy_telegram_reply_boundary(tmp_path, monkeypatch, followup):
 
     try:
         await adapter.handle_message(first)
-        await async_wait_until(provider.entered.is_set, timeout=20, what='first model call')
+        await async_wait_until(provider.entered.is_set, timeout=20, what='running tool or first model call')
+        live = authority.sessions[HOME_SESSION_ID]
         await asyncio.wait_for(adapter.handle_message(second), timeout=5)
         before = rows('SELECT request_id, target_session_id, status FROM session_admissions ORDER BY seq')
         provider.release.set()
-        await async_wait_until(lambda: len(provider.calls) == 2 and authority.sessions[HOME_SESSION_ID].task.done(),
-                               timeout=20, what='two completed turns')
+        clarification_reply = 'I received the clarification. Continuing the review.'
+        if with_tool:
+            await async_wait_until(next_tool_entered.is_set, timeout=10, what='tool after clarification')
+            await async_wait_until(lambda: any(row[1] == clarification_reply for row in adapter.replies),
+                                   timeout=5, what='interim Telegram reply during the tool')
+            assert not live.task.done()
+            next_tool_release.set()
+        expected_calls = 3 if with_tool else 2
+        await async_wait_until(lambda: len(provider.calls) == expected_calls and live.task.done(),
+                               timeout=20, what='completed model calls')
         if adapter._background_tasks:
             await asyncio.wait_for(asyncio.gather(*tuple(adapter._background_tasks)), timeout=10)
         text = 'Delivery reviewed in the same main session.'
+        if with_tool:
+            assert before == [('101', HOME_SESSION_ID, 'started')]
+            followup_messages = provider.calls[1]['messages']
+            tool_index = next(i for i, row in enumerate(followup_messages) if row['role'] == 'tool')
+            assert 'tool finished' in followup_messages[tool_index]['content']
+            assert followup_messages[tool_index + 1]['role'] == 'user'
+            assert second_text in followup_messages[tool_index + 1]['content']
+            assert [item[1] for item in adapter.replies] == ['Checking the requested delivery.', clarification_reply, text]
+            assert rows('SELECT COUNT(*) FROM agentready_inbox WHERE delivered_at IS NOT NULL') == [(1,)]
+            frames = live.event_stream.since(live.event_stream.epoch, 0)['events']
+            commentary = [frame['payload']['text'] for frame in frames if frame['type'] == 'message.interim']
+            assert commentary == ['Checking the requested delivery.', clarification_reply]
+            visible_input = [frame['payload'] for frame in frames if frame['type'] == 'agentready.event.received']
+            assert len(visible_input) == 1 and second_text in visible_input[0]['text']
+            return
+        if followup == 'after-final-model-call':
+            assert before == [('101', HOME_SESSION_ID, 'started')]
+            await async_wait_until(lambda: len(adapter.replies) == 2, timeout=5, what='both completed replies')
+            assert [item[1] for item in adapter.replies] == ['First review complete.', 'Follow-up reviewed.']
+            assert rows("SELECT COUNT(*) FROM delivery_obligations WHERE state='delivered'") == [(2,)]
+            return
         if followup == 'explicit-steer':
             assert before == [('101', HOME_SESSION_ID, 'started')]
             assert any('Check the separate order' in json.dumps(call) for call in provider.calls)
@@ -134,6 +213,7 @@ async def test_busy_telegram_reply_boundary(tmp_path, monkeypatch, followup):
         assert len(adapter.replies) == len(provider.calls) == 2
     finally:
         provider.release.set()
+        next_tool_release.set()
         tasks = set(adapter._background_tasks) | {live.task for live in authority.sessions.values() if live.task}
         for task in tasks:
             task.cancel()

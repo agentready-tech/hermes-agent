@@ -159,6 +159,39 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
             return authority.publish_execution(session_id, generation, event_type, payload)
         return False
 
+    def _show_managed_telegram_input(self, text, received_at):
+        if self._ctx._run_still_current():
+            self._publish_execution("agentready.event.received", {
+                "source": "telegram", "text": text, "timestamp": received_at,
+            })
+
+    def _deliver_managed_completed_reply(self, result):
+        """Keep a completed reply owed while a late inbox entry continues the same session."""
+        from gateway.run import _sanitize_gateway_final_response
+
+        ctx = self._ctx
+        if ctx.mute_notification_reply or not ctx._run_still_current():
+            return
+        text = _sanitize_gateway_final_response(ctx.source.platform, result["final_response"])
+        self._publish_execution("message.interim", {
+            "text": text, "already_streamed": False, "timestamp": time.time(),
+        })
+        adapter = self._runner._delivery_adapter_for(ctx.source)
+        if ctx.source.platform != Platform.TELEGRAM or adapter is None:
+            return
+
+        from gateway.platforms.event import MessageEvent
+        event = MessageEvent(text="", source=ctx.source, message_id=ctx.inbound_message_id)
+        stream = self._stream_consumer()
+        if stream is not None:
+            stream.flush_pending_sync()
+        delivered = self._runner._run_agent_stream_confirmed_final_delivery(stream, text)
+        self._schedule(self._runner._deliver_queued_first_response(
+            text, source=ctx.source, adapter=adapter, event_message_id=ctx.event_message_id,
+            metadata=ctx._status_thread_metadata, text_already_delivered=delivered,
+            session_key=adapter._event_session_key(event), inbound_message_id=ctx.inbound_message_id,
+        ), "Could not schedule the completed reply before continuing a managed turn")
+
     def _publish_api_tool(self, event_type, call_id, tool_name, args, result=None):
         """The retained tool payload reaches the API observers of this exact admission only;
         the shared viewer stream keeps its ID-correlated frames."""
@@ -256,14 +289,17 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
             if not ctx._run_still_current():
                 return
             unseen = False
-            if local_viewer_route and not already_streamed and str(text or "").strip():
+            from hermes_runtime.sessions import HOME_SESSION_ID
+            managed_viewer = self._approval_owner is not None and self._approval_owner[1] == HOME_SESSION_ID
+            if (local_viewer_route or managed_viewer) and not already_streamed and str(text or "").strip():
                 # LocalSessionAdapter.send publishes nothing, so unstreamed commentary handed to the
                 # consumer would be recorded as delivered while no viewer saw it. A codex app-server
                 # final that arrives with no deltas then suppresses the reply (message.complete "").
                 # Publish the in-process TUI's message.interim contract instead, and count the text
                 # as delivered only when a viewer or observer actually took it.
-                payload = {"text": text, "already_streamed": False}
-                unseen = not self._publish_execution("message.interim", payload)
+                payload = {"text": text, "already_streamed": False, "timestamp": time.time()}
+                delivered = self._publish_execution("message.interim", payload)
+                unseen = local_viewer_route and not delivered
             if stts is not None:
                 # Flush accepted deltas; completed commentary is a separate speech segment.
                 stts.on_delta(None)
@@ -400,6 +436,8 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         agent.step_callback = ctx._step_callback_sync if (ctx._hooks_ref.loaded_hooks or self._approval_owner is not None) else None
         agent.stream_delta_callback = stream_delta_cb
         agent.interim_assistant_callback = interim_assistant_cb if want_interim_messages else None
+        agent._managed_input_display_callback = self._show_managed_telegram_input
+        agent._managed_completed_reply_callback = self._deliver_managed_completed_reply
         from gateway.run_turn_progress import local_viewer_turn
         agent.status_callback, agent.notice_callback = ctx._status_callback_sync, (
             self._local_notice_callback_sync if local_viewer_turn(self) else self._notice_callback_sync)

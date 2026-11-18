@@ -119,7 +119,7 @@ class MainChat:
             if not isinstance(identity, str) or not identity or len(identity) > 120:
                 raise ValueError('A stable submission identity is required')
             allowed = {key: params[key] for key in ('text', 'attachments') if key in params}
-            return await self.client.rpc(method, session_id=self.session_id, submission_id=identity,
+            return await self.client.rpc('panel.prompt.submit', session_id=self.session_id, submission_id=identity,
                                          clarify_batch=True, **allowed)
         if method == 'session.interrupt':
             return await self.client.rpc(method, session_id=self.session_id, execution_generation=self.generation)

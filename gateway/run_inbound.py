@@ -1198,7 +1198,6 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayPluginInjectionMixin)
         authority = active_authority(self)
         if authority is not None and not event.get_command() and not is_internal:
             from gateway.session_ingress import admit_message, executing_admission
-            from hermes_runtime.adapters.gateway import queue_native_telegram_reply
             if not executing_admission.get():
                 # The durable FIFO only orders turns; busy_input_mode still decides what a follow-up
                 # does to the RUNNING one (steer into it, redirect it, or end it so the FIFO advances).
@@ -1208,8 +1207,7 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayPluginInjectionMixin)
                 # never an interrupt (read as deny) nor a queued turn (auto-deny deadlock).
                 if self._is_session_running(_quick_key) and (
                         await self._route_plaintext_approval_while_busy(event, _quick_key)
-                        or (not queue_native_telegram_reply(event, _quick_key)
-                            and await self._hm_busy_preempt(event, source, _quick_key))):
+                        or await self._hm_busy_preempt(event, source, _quick_key)):
                     return True, None
                 _consumed, _consumer_reply = await self._hm_post_admission_consume(event, source, _quick_key)
                 if _consumed:

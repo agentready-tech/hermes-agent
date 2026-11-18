@@ -70,6 +70,9 @@ MAIN_SCHEDULE_INSTRUCTIONS = (
 
 MAIN_TOOL_OPERATION_INSTRUCTIONS = (
     "## Tool operations and incoming events\n"
+    "Apply direct user clarifications from Telegram or Panel at the next tool boundary. "
+    "Answer a question or briefly acknowledge a material correction in visible commentary before "
+    "continuing the current task with the updated instructions. "
     "While a tool is running, a new main-inbox event may return control to you. A tool result with "
     "status=running and operation_id is an execution receipt, not success or failure. The tool continues "
     "and its attributed completion arrives in this same conversation. Handle the new event according to "

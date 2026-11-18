@@ -23497,6 +23497,18 @@
           "already_streamed": {
             "title": "Already Streamed",
             "type": "boolean"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timestamp"
           }
         },
         "required": [
@@ -25094,6 +25106,26 @@
         "title": "PanelPersistentSubagent",
         "type": "object"
       },
+      "PanelSteeredReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "admission_id": {
+            "title": "Admission Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "steered",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "admission_id",
+          "status"
+        ],
+        "title": "PanelSteeredReceipt",
+        "type": "object"
+      },
       "PanelSubagentHistoryPage": {
         "additionalProperties": false,
         "properties": {
@@ -25312,6 +25344,61 @@
         "properties": {},
         "title": "PanelSubagentsChanged",
         "type": "object"
+      },
+      "PanelSubmitParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "submission_id": {
+            "title": "Submission Id",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "attachments": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/CanonicalAttachment"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Attachments"
+          },
+          "clarify_batch": {
+            "default": false,
+            "title": "Clarify Batch",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "session_id",
+          "submission_id",
+          "text"
+        ],
+        "title": "PanelSubmitParams",
+        "type": "object"
+      },
+      "PanelSubmitResult": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/AdmissionStatus"
+          },
+          {
+            "$ref": "#/components/schemas/PanelSteeredReceipt"
+          }
+        ],
+        "title": "PanelSubmitResult"
       },
       "Params": {
         "additionalProperties": false,
@@ -47421,6 +47508,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/PanelHistoryResult"
+        }
+      }
+    },
+    {
+      "name": "panel.prompt.submit",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PanelSubmitParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PanelSubmitResult"
         }
       }
     },

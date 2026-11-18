@@ -29,7 +29,8 @@ class Provider(BaseHTTPRequestHandler):
             self.server.entered.set()
             self.server.release.wait(timeout=15)
         common = {"id": "autonomous-test", "created": 1, "model": "gpt-4.1"}
-        text = "Delivery reviewed in the same main session."
+        text = getattr(self.server, "replies_by_call", {}).get(
+            len(self.server.calls), "Delivery reviewed in the same main session.")
         self.send_response(200)
         if body.get("stream"):
             self.send_header("Content-Type", "text/event-stream")

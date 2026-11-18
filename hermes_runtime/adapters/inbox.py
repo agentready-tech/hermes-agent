@@ -20,7 +20,13 @@ class HomeInbox:
         return transaction(open_db(path, db_label="state.db (managed inbox)", wal=False,
                                    busy_timeout_ms=10000, initialize=_initialize_schema), immediate=True)
 
-    def enqueue(self, content):
+    def event_receipt(self, source, event_id):
+        with self.transaction() as conn:
+            row = conn.execute("SELECT message_id FROM agentready_inbox WHERE event_key=?",
+                               (json.dumps([source, event_id]),)).fetchone()
+        return row[0] if row is not None else None
+
+    def enqueue(self, content, *, input_id=None):
         key = None
         text = content if isinstance(content, str) else ""
         if text.startswith("[AgentReady event]\n"):
@@ -30,7 +36,9 @@ class HomeInbox:
                     key = json.dumps([event.get("source"), event["event_id"]])
             except (ValueError, TypeError):
                 pass  # Plain content remains a valid, individually receipted message.
-        identity = "inbox-" + uuid.uuid4().hex
+        if input_id is not None and (key is None or not isinstance(input_id, str)):
+            raise ValueError("An explicit inbox identity requires an event")
+        identity = input_id or "inbox-" + uuid.uuid4().hex
         with self.transaction() as conn:
             floor = conn.execute("SELECT COALESCE(MAX(id),0) FROM messages").fetchone()[0]
             conn.execute("INSERT OR IGNORE INTO agentready_inbox(message_id,event_key,content,accepted_at,accepted_after_row_id) VALUES (?,?,?,?,?)",

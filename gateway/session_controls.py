@@ -185,6 +185,7 @@ class AuthorityConnection:
         handlers['panel.subagents.history'] = partial(subagent_read, self, history=True)
         from hermes_runtime.adapters.main_history import rpc as history_read
         handlers['panel.history.before'] = partial(history_read, self)
+        handlers['panel.prompt.submit'] = partial(self.submit, panel_followup=True)
         return handlers
 
     async def dispatch(self, request):
@@ -580,7 +581,7 @@ class AuthorityConnection:
             raise RuntimeStoreError('invalid_params')
         return self.authority.sessions[ref.session_id].event_stream.since(epoch, sequence)
 
-    async def submit(self, ref, params):
+    async def submit(self, ref, params, *, panel_followup=False):
         if ref.session_id not in self.subscriptions:
             raise RuntimeStoreError('permission_denied')
         forbidden = set(params) - {'session_id', 'text', 'submission_id', 'input_id', 'queued', 'attachments', 'finite', 'unattended',
@@ -599,7 +600,11 @@ class AuthorityConnection:
                    **submit_display_fields(params), **submit_cli_turn_fields(params)}
         if 'attachments' in params:
             payload['attachments'] = params['attachments']
-        receipt = await self.authority.submit(self.actor, Submission(request_id, ref, payload, 'queue'))
+        request = Submission(request_id, ref, payload, 'queue')
+        if panel_followup:
+            from hermes_runtime.adapters.panel_submission import submit
+            return await submit(self, request)
+        receipt = await self.authority.submit(self.actor, request)
         return asdict(receipt)
 
     async def mutate(self, ref, params):

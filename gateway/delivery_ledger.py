@@ -280,10 +280,10 @@ async def begin_final_delivery(event, session_key, text, adapter, *, reply_to):
     if not await asyncio.to_thread(ledger_enabled):
         return None
     from gateway.config import Platform
-    from hermes_runtime.adapters.gateway import queue_native_telegram_reply
+    from hermes_runtime.adapters.gateway import has_native_telegram_reply
 
     source = event.source
-    if queue_native_telegram_reply(event, session_key):
+    if has_native_telegram_reply(event, session_key):
         # A recovered native FIFO turn has no adapter waiter and arrives with the logical home
         # key. Use the same per-chat/topic key as the live Telegram send.
         session_key = adapter._event_session_key(event)

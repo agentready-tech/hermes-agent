@@ -176,6 +176,29 @@ active correction window, while `stale_generation` rejects settled/replaced work
 Managed-worker corrections currently return `unsupported_control`; normal durable
 queue submission and Stop remain separate controls.
 
+## Managed main chat steering
+
+An authenticated text clarification from Telegram or AgentSee Panel that an active
+managed main turn accepts must enter that turn through its durable inbox. At the
+next tool-group boundary, append it as a user message after the tool results and
+include it in the next model request. This works without a slash command or an
+interruption of the active tool. An admitted clarification stays in the same
+conversation and must not start an independent turn.
+
+Keep admission and delivery independent. A Telegram message ID, reply anchor,
+delivery receipt, or retry must never disable steering. When the active owner
+cannot accept an input, the native durable queue preserves its reply identity.
+A subsequent clarification must never replace an already completed reply. Public
+interim replies are shown live in Panel and reconstructed from its history on
+reconnect. Private reasoning is never part of that projection.
+
+Do not change these guarantees without explicit product-owner approval.
+`tests/hermes_runtime/test_busy_telegram_replies.py` and
+`tests/hermes_runtime/test_panel_main_queue.py` hold a tool open, submit a
+clarification, and assert that the next model request in the same turn sees it
+immediately after the tool result. The Telegram suite also protects distinct
+queued reply anchors, delivery recovery, and late follow-ups.
+
 ## Shared authority setup readiness
 
 Authenticated local clients can call `setup.status` and `setup.runtime_check` before

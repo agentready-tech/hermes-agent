@@ -177,6 +177,7 @@ class MessageInterimPayload(Payload):
 
     text: str
     already_streamed: bool
+    timestamp: float | None = None
 
 
 event("message.interim", MessageInterimPayload,

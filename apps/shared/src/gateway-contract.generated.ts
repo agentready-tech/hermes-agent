@@ -5141,6 +5141,18 @@ export interface CanonicalModelOverride {
   model: string
   provider?: string | null
 }
+export interface PanelSubmitParams {
+  session_id: string
+  submission_id: string
+  text: string
+  attachments?: CanonicalAttachment[] | null
+  clarify_batch?: boolean
+}
+export type PanelSubmitResult = AdmissionStatus | PanelSteeredReceipt
+export interface PanelSteeredReceipt {
+  admission_id: string
+  status: 'steered'
+}
 export interface CanonicalApprovalParams {
   profile?: string | null
   session_id: string
@@ -5628,6 +5640,7 @@ export interface StreamDeltaPayload {
 export interface MessageInterimPayload {
   text: string
   already_streamed: boolean
+  timestamp?: number | null
 }
 /** ``prompt_turn._complete_turn_payload`` / ``session_auto_continue._emit_terminal_turn_error`` / ``agent_callbacks._mirror_subagent_to_child`` (child watch mirror: ``text`` only) / ``compute_host_bridge`` (``text`` + ``status``). */
 export interface MessageCompletePayload {
@@ -6795,6 +6808,7 @@ export interface CanonicalRpcMethods {
   /** Native-owner only: admit the dispatcher's current claim on a kanban task. */
   'kanban.run': { params: KanbanRunParams; result: KanbanRunResult }
   'panel.history.before': { params: PanelHistoryParams; result: PanelHistoryResult }
+  'panel.prompt.submit': { params: PanelSubmitParams; result: PanelSubmitResult }
   'panel.subagents.history': { params: PanelSubagentHistoryParams; result: PanelSubagentHistoryResult }
   'panel.subagents.list': { params: PanelSubagentListParams; result: PanelSubagentListResult }
   'profiles.list': { params: CanonicalProfilesParams; result: CanonicalProfilesResult }
@@ -6858,6 +6872,7 @@ export const CANONICAL_RPC_METHODS = [
   'image.attach_bytes',
   'kanban.run',
   'panel.history.before',
+  'panel.prompt.submit',
   'panel.subagents.history',
   'panel.subagents.list',
   'profiles.list',

@@ -91,11 +91,11 @@ def _recover_or_remember_model(runner, skey, model):
 class GatewayTurnPrepareMixin:
     async def _mark_durable_active_turn(self, event: MessageEvent, session_key: str) -> bool:
         """Persist this running turn's key and, for managed Telegram, its own reply route."""
-        from hermes_runtime.adapters.gateway import queue_native_telegram_reply
+        from hermes_runtime.adapters.gateway import has_native_telegram_reply
 
         try:
             route = {}
-            if queue_native_telegram_reply(event, session_key) and not event.get_command():
+            if has_native_telegram_reply(event, session_key) and not event.get_command():
                 source = event.source
                 adapter = self._delivery_adapter_for(source)
                 route['delivery'] = {

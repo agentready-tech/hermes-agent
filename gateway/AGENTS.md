@@ -27,6 +27,10 @@ command that must reach the runner while the agent is blocked (approval prompts)
 guards and be dispatched inline — never via `_process_message_background()`, which races session
 lifecycle.
 
+Managed Telegram and Panel steering at tool boundaries is a required invariant. Do not
+bypass it to change delivery. See `website/docs/developer-guide/gateway-internals.md`
+§ Managed main chat steering for the contract and regression tests.
+
 ## Streaming delivery contract (stream-is-the-message adapters)
 
 Adapters with `draft_stream_is_message = True` (relay Slack native streaming) keep ONE cumulative

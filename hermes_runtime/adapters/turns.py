@@ -49,7 +49,40 @@ def steer_socket_path():
     return str(directory / "inbox.sock")
 
 
-def forward_to_active_turn(content, *, wait=False):
+def _human_followup(content):
+    """Only user chat envelopes can be shown as live user input or supersede a completed reply."""
+    if isinstance(content, list):
+        content = next((part.get("text") for part in content
+                        if isinstance(part, dict) and part.get("type") == "text"), None)
+    if not isinstance(content, str) or not content.startswith("[AgentReady event]\n"):
+        return None
+    try:
+        header = json.loads(content.split("\n", 2)[1])
+    except (IndexError, ValueError):
+        return None
+    if not isinstance(header, dict):
+        return None
+    source, event_id, sender = header.get("source"), header.get("event_id", ""), header.get("metadata")
+    if source == "telegram" and isinstance(sender, dict) and sender.get("internal") is False:
+        return header, content
+    if source == "agentready" and str(event_id).startswith("panel:"):
+        return header, content
+    return None
+
+
+def _preserve_completed_reply(agent, result, pending):
+    from gateway.response_filters import is_intentional_silence_agent_result
+
+    text = result.get("final_response")
+    if (isinstance(text, str) and text.strip() and not result.get("failed") and not result.get("interrupted")
+            and not is_intentional_silence_agent_result(result, text)
+            and any(_human_followup(content) for content in pending)):
+        emit = getattr(agent, "_managed_completed_reply_callback", None)
+        if emit is not None:
+            emit(result)
+
+
+def forward_to_active_turn(content, *, wait=False, input_id=None):
     """Return None only when no owner accepted the event. Never replay an
     accepted event after a disconnect: its effects may already have happened.
     The socket is private to this Agent's container and runtime UID.
@@ -63,7 +96,7 @@ def forward_to_active_turn(content, *, wait=False):
         connection.settimeout(None)
         with connection.makefile("rwb") as stream:
             stream.write(
-                (json.dumps({"content": content, "wait": wait}) + "\n").encode()
+                (json.dumps({"content": content, "wait": wait, "input_id": input_id}) + "\n").encode()
             )
             stream.flush()
             accepted = stream.readline()
@@ -133,7 +166,7 @@ class ActiveHomeTurn:
                 with self.lock:
                     accepted = self.accepting and bool(content)
                     if accepted:
-                        identity, pending = self.inbox.enqueue(content)
+                        identity, pending = self.inbox.enqueue(content, input_id=request.get("input_id"))
                         if pending and identity not in self._known_inputs:
                             self._known_inputs.add(identity)
                             self.pending.append((identity, content))
@@ -246,6 +279,10 @@ def run_conversation(self, proceed, *args, **kwargs):
                     pending.insert(0, leftover)
                 if not pending:
                     break
+                # If the model has just finished, a late user input still needs
+                # its own response. Keep the completed reply visible before
+                # continuing this same owned conversation.
+                _preserve_completed_reply(self, result, pending)
                 # A final model response has no tool boundary. Continue
                 # in this same owned session instead of losing the event.
                 continuation = dict(kwargs)
@@ -275,6 +312,10 @@ def after_tool_group(agent, messages):
     if turn is not None:
         for identity, content in turn.take_records():
             messages.append({"role": "user", "content": content, "platform_message_id": identity})
+            notify = getattr(agent, "_managed_input_display_callback", None)
+            if notify is not None and (event := _human_followup(content)) and event[0]["source"] == "telegram":
+                header, text = event
+                notify(text, header.get("received_at"))
 
 
 def steer(agent, content):

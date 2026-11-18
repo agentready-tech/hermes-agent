@@ -84,6 +84,81 @@ async def test_busy_main_queues_once_and_preserves_single_history(main_chat, sta
 
 
 @pytest.mark.asyncio
+async def test_panel_text_reaches_next_model_call_in_active_tool_turn(main_chat, main_home, monkeypatch):
+    from unittest.mock import patch
+
+    from hermes_cli.gateway_client import GatewayRPCError
+    from hermes_runtime.sessions import HOME_SESSION_ID
+    from hermes_state_runtime import list_session_admissions
+    from openai.types.chat import ChatCompletion
+    from run_agent import AIAgent
+    from tests.waiting import async_wait_until
+
+    chat, _authority, db, _client = main_chat
+    (main_home[0] / 'config.yaml').write_text('terminal:\n  backend: local\ncompression:\n  enabled: false\n')
+    monkeypatch.setenv('TERMINAL_ENV', 'local')
+    await chat.snapshot()
+    clarify = 'Use the corrected test value'
+    tool_started, release = threading.Event(), threading.Event()
+    requests = []
+    with patch('agent.process_bootstrap.OpenAI'):
+        agent = AIAgent(api_key='test-only', base_url='http://127.0.0.1:9/v1', provider='custom',
+                        model='gpt-4.1', quiet_mode=True, session_db=db, session_id=HOME_SESSION_ID,
+                        skip_context_files=True, skip_memory=True, enabled_toolsets=['terminal'])
+    agent.compression_enabled, agent.save_trajectories, agent.tool_delay = False, False, 0
+
+    def model(payload, *args, **kwargs):
+        requests.append(payload['messages'])
+        if len(requests) == 1:
+            message = {'role': 'assistant', 'content': None, 'tool_calls': [
+                {'id': 'tool-before-clarification', 'type': 'function',
+                 'function': {'name': 'terminal', 'arguments': '{"command":"printf fixture"}'}},
+            ]}
+            reason = 'tool_calls'
+        else:
+            message, reason = {'role': 'assistant', 'content': 'I will use the corrected value.'}, 'stop'
+        return ChatCompletion(id='fixture', object='chat.completion', created=1, model='gpt-4.1',
+            choices=[{'index': 0, 'message': message, 'finish_reason': reason}],
+            usage={'prompt_tokens': 100, 'completion_tokens': 10, 'total_tokens': 110})
+
+    def execute_tool(name, *_args, **_kwargs):
+        assert name == 'terminal'
+        tool_started.set()
+        assert release.wait(15)
+        return '{"output":"fixture tool finished"}'
+
+    monkeypatch.setattr(agent, '_interruptible_api_call', model)
+    monkeypatch.setattr(agent, '_interruptible_streaming_api_call', model)
+    monkeypatch.setattr('model_tools.handle_function_call', execute_tool)
+    turn = asyncio.create_task(asyncio.to_thread(agent.run_conversation, 'Run the fixture tool',
+                                                task_id=HOME_SESSION_ID))
+    request = {'method': 'prompt.submit', 'params': {'session_id': HOME_SESSION_ID,
+        'submission_id': 'stable-panel-clarification', 'text': clarify}}
+    try:
+        await async_wait_until(tool_started.is_set, timeout=10, what='running terminal tool')
+        confirmations = await asyncio.gather(chat.dispatch(request), chat.dispatch(request))
+        assert confirmations[0] == confirmations[1]
+        assert confirmations[0]['status'] == 'steered'
+        assert list_session_admissions(db, session_id=HOME_SESSION_ID) == []
+        release.set()
+        result = await asyncio.wait_for(asyncio.shield(turn), timeout=10)
+        assert result['final_response'] == 'I will use the corrected value.'
+        model_input = requests[1]
+        indices = [index for index, row in enumerate(model_input)
+                   if row['role'] == 'user' and clarify in str(row.get('content'))]
+        assert len(indices) == 1
+        assert model_input[indices[0] - 1]['tool_call_id'] == 'tool-before-clarification'
+        assert await chat.dispatch(request) == confirmations[0]
+        conflict = {**request, 'params': {**request['params'], 'text': 'Different input with the same nonce'}}
+        with pytest.raises(GatewayRPCError, match='admission_conflict'):
+            await chat.dispatch(conflict)
+        assert list_session_admissions(db, session_id=HOME_SESSION_ID) == []
+    finally:
+        release.set()
+        await asyncio.wait_for(asyncio.shield(turn), timeout=10)
+
+
+@pytest.mark.asyncio
 async def test_secrets_use_native_response_frames_not_submissions(main_chat):
     chat, _authority, _db, client = main_chat
     await chat.snapshot()

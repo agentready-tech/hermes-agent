@@ -4,6 +4,8 @@ Reuse upstream authority-only value shapes; these overrides do not widen METHODS
 """
 from typing import Literal
 
+from pydantic import RootModel
+
 from .base import JsonValue, Params, Result
 from .common import ProfileParams, TranscriptMessage
 from .canonical import AdmissionStatus, CanonicalSessionRef, PromptResponseResult, SessionInventoryFields
@@ -228,6 +230,23 @@ class CanonicalSubmitParams(CanonicalSessionParams):
     clarify_batch: bool = False
 
 
+class PanelSubmitParams(Params):
+    session_id: str
+    submission_id: str
+    text: str
+    attachments: list[CanonicalAttachment] | None = None
+    clarify_batch: bool = False
+
+
+class PanelSteeredReceipt(Result):
+    admission_id: str
+    status: Literal['steered']
+
+
+class PanelSubmitResult(RootModel[AdmissionStatus | PanelSteeredReceipt]):
+    pass
+
+
 class CanonicalControlParams(CanonicalSessionParams):
     execution_generation: int
 
@@ -286,6 +305,7 @@ for _name, _params, _result in (
     ('session.redirect', CanonicalCorrectionParams, CanonicalCorrectionResult),
     ('session.events.since', CanonicalEventsParams, CanonicalEventsResult),
     ('prompt.submit', CanonicalSubmitParams, AdmissionStatus),
+    ('panel.prompt.submit', PanelSubmitParams, PanelSubmitResult),
     ('approval.respond', CanonicalApprovalParams, PromptResponseResult),
 ):
     canonical_method(_name, params=_params, result=_result)
