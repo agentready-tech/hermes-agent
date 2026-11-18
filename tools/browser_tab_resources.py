@@ -17,13 +17,18 @@ from tools.bot_desktop import lease
 
 
 class TabResources:
-    def __init__(self, home: str, endpoint: str, task: str):
+    def __init__(self, home: str, endpoint: str, task: str, driver_name: str = ""):
         self.home, self.task = home, task
         self.admission_epoch = lease.get(home).epoch
         self.retained_unowned = False
         key = hashlib.sha256(endpoint.encode()).hexdigest()
         self.path = Path(home) / "cache" / "browser-tabs" / (key + ".json")
+        self.protected_path = self.path.with_suffix(".protected")
+        borrow_key = hashlib.sha256(f"{task}\0{driver_name}".encode()).hexdigest()
+        self.borrowed_path = self.path.with_name(f"{key}-{borrow_key}.borrowed")
         self.tabs: dict[str, dict] = {}
+        self.borrowed_tabs: dict[str, bool] = {}
+        self.protected_borrowed: set[str] = set()
 
     @contextlib.contextmanager
     def locked(self):
@@ -36,16 +41,44 @@ class TabResources:
                 self.tabs = json.loads(self.path.read_text(encoding="utf-8-sig")) if self.path.exists() else {}
                 if not isinstance(self.tabs, dict):
                     raise ValueError("Invalid browser ownership ledger")
+                protected = self.protected_path.read_text(encoding="utf-8") if self.protected_path.exists() else "[]"
+                self.protected_borrowed = set(json.loads(protected))
                 yield self
             finally:
                 fcntl.flock(lock, fcntl.LOCK_UN)
 
-    def save(self):
-        tmp = self.path.with_suffix(".tmp")
+    @staticmethod
+    def _save(path, data):
+        tmp = path.with_name(path.name + ".tmp")
         with tmp.open("w", encoding="utf-8") as out:
             os.chmod(tmp, 0o600)
-            json.dump(self.tabs, out)
-        tmp.replace(self.path)
+            json.dump(data, out)
+        tmp.replace(path)
+
+    def save(self):
+        self._save(self.path, self.tabs)
+
+    def load_borrowed(self, driver_identity):
+        try:
+            stored = json.loads(self.borrowed_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        if stored["epoch"] == self.admission_epoch and stored["driver"] == list(driver_identity()):
+            self.borrowed_tabs = stored["targets"]
+
+    def borrow(self, target, driver, activate):
+        """Keep the explicit selection separate from the tab ownership ledger."""
+        self.borrowed_tabs[target] = activate
+        if target not in self.protected_borrowed:
+            self.protected_borrowed.add(target)
+            self._save(self.protected_path, sorted(self.protected_borrowed))
+        self._save(self.borrowed_path, {"epoch": self.admission_epoch, "driver": driver,
+                                       "targets": self.borrowed_tabs})
+
+    def discard_closed_borrowed_tabs(self, live: set[str]):
+        if not self.protected_borrowed <= live:
+            self.protected_borrowed.intersection_update(live)
+            self._save(self.protected_path, sorted(self.protected_borrowed))
 
     def created(self, target: str, *, epoch=None, keep=False):
         self.tabs[target] = {"task": self.task, "keep": keep,
@@ -64,7 +97,7 @@ class TabResources:
         if current.holder != lease.AGENT or current.epoch != self.admission_epoch:
             return False
         if row is None:
-            return close_unowned
+            return close_unowned and target not in self.protected_borrowed
         return bool(row["task"] == self.task and not row["keep"]
                     and (row["epoch"] == current.epoch or close_unowned))
 
@@ -88,6 +121,7 @@ def close_finished_tabs(resources: TabResources, cdp, *, close_unowned=False) ->
     """Close safe task tabs and optionally idle user tabs; never a sibling's."""
     infos = cdp("Target.getTargets").get("targetInfos", [])
     live = {t["targetId"] for t in infos if t.get("type") == "page"}
+    resources.discard_closed_borrowed_tabs(live)
     for target in list(resources.tabs):
         if target not in live:
             resources.tabs.pop(target)
@@ -95,6 +129,8 @@ def close_finished_tabs(resources: TabResources, cdp, *, close_unowned=False) ->
     resources.retained_unowned = False
     for target in live:
         if not resources.may_close(target, close_unowned=close_unowned):
+            if target in resources.protected_borrowed:
+                resources.retained_unowned = True
             continue
         sid = None
         removed = False

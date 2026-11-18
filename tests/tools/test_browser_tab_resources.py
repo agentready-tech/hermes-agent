@@ -16,6 +16,7 @@ class Browser:
         self.tabs = {"human": {"targetId": "human", "type": "page"}}
         self.current = "human"
         self.visible = "human"
+        self.driver = (123, 1)
         self.closed = []
         self.safe = {}
 
@@ -24,7 +25,7 @@ class Browser:
             return {"targetInfos": list(self.tabs.values())}
         if method == "Target.createTarget":
             target = "owned-" + str(len(self.tabs))
-            self.tabs[target] = {"targetId": target, "type": "page"}
+            self.tabs[target] = {"targetId": target, "type": "page", "url": kw.get("url")}
             return {"targetId": target}
         if method == "Target.attachToTarget":
             return {"sessionId": kw["targetId"]}
@@ -32,7 +33,7 @@ class Browser:
             self.visible = kw["targetId"]
             return {}
         if method == "Runtime.evaluate":
-            return {"result": {"value": self.safe.get(kw["session_id"], True)}}
+            return {"result": {"value": self.safe.get(kw.get("session_id", self.current), True)}}
         if method == "Target.closeTarget":
             self.closed.append(kw["targetId"])
             self.tabs.pop(kw["targetId"])
@@ -44,18 +45,24 @@ class Browser:
 def browser(monkeypatch):
     monkeypatch.setattr("tools.browser_tab_harness._driver_started_since", lambda *args: True)
     b = Browser()
+    monkeypatch.setattr("tools.browser_tab_harness._driver_identity", lambda _: b.driver, raising=False)
     helpers = ModuleType("browser_harness.helpers")
     helpers.cdp = b.cdp
     helpers._send = lambda request: {"ok": True}
     helpers.current_tab = lambda: b.tabs[b.current]
 
     def switch_tab(target, activate=False):
-        b.current = target.get("targetId") if isinstance(target, dict) else target
+        b.current = (target.get("targetId") or target.get("target_id")) if isinstance(target, dict) else target
         if activate:
             helpers.cdp("Target.activateTarget", targetId=b.current)
 
     helpers.switch_tab = switch_tab
+    helpers.goto_url = lambda url: b.tabs[b.current].update(url=url)
+
     def new_tab(url="about:blank"):
+        if url != "about:blank" and b.tabs[b.current].get("url") == "about:blank":
+            helpers.goto_url(url)
+            return b.current
         target = helpers.cdp("Target.createTarget", url=url, background=True)["targetId"]
         helpers.switch_tab(target)
         return target
@@ -94,6 +101,89 @@ def test_existing_unowned_blank_is_not_reused_or_focused(tmp_path, browser):
         assert b.current == b.visible
         assert b.visible != "human"
 
+    assert "human" in b.tabs
+
+
+def test_explicit_human_tab_survives_calls_and_cleanup_without_becoming_owned(tmp_path, browser):
+    b, _ = browser
+    b.tabs["human"]["url"] = "https://fixture.example/"
+    ns = {}
+    with managed_tabs(ns, str(tmp_path), "browser", "task"):
+        bootstrap = b.current
+        ns["switch_tab"]({"target_id": "human"})
+        assert b.current == b.visible == "human"
+        assert b.closed == [bootstrap]
+    for _ in range(2):
+        with managed_tabs({}, str(tmp_path), "browser", "task"):
+            assert b.current == b.visible == "human"
+            assert set(b.tabs) == {"human"}
+    with managed_tabs({}, str(tmp_path), "browser", "task", cleanup=True, close_user_tabs=True):
+        pass
+    assert set(b.tabs) == {"human"}
+
+
+def test_another_named_daemon_cannot_close_a_borrowed_tab_during_idle_cleanup(tmp_path, browser, monkeypatch):
+    b, _ = browser
+    ns = {}
+    monkeypatch.setenv("BU_NAME", "first")
+    with managed_tabs(ns, str(tmp_path), "browser", "task"):
+        ns["switch_tab"]("human")
+    monkeypatch.setenv("BU_NAME", "other")
+    with managed_tabs({}, str(tmp_path), "browser", "task", cleanup=True, close_user_tabs=True):
+        pass
+    assert set(b.tabs) == {"human"}
+
+
+@pytest.mark.parametrize("used", ["navigation", "body", "popup"])
+def test_switch_does_not_close_the_startup_tab_once_used(tmp_path, browser, used):
+    b, helpers = browser
+    b.tabs["human"]["url"] = "https://fixture.example/"
+    ns = {}
+    with managed_tabs(ns, str(tmp_path), "browser", "task"):
+        opened = b.current
+        if used == "navigation":
+            helpers.goto_url("https://other.example/")
+        elif used == "body":
+            b.safe[opened] = False
+        else:
+            b.tabs["popup"] = {"targetId": "popup", "type": "page", "openerId": opened}
+        ns["switch_tab"]("human")
+    assert opened in b.tabs and not b.closed
+
+
+def test_new_tab_does_not_navigate_a_borrowed_blank_or_steal_its_focus(tmp_path, browser):
+    b, _ = browser
+    b.tabs["human"]["url"] = "about:blank"
+    ns = {}
+    with managed_tabs(ns, str(tmp_path), "browser", "task"):
+        ns["switch_tab"]("human", activate=False)
+        visible = b.visible
+    with managed_tabs(ns, str(tmp_path), "browser", "task"):
+        assert b.current == "human" and b.visible == visible
+        new = ns["new_tab"]("https://fixture.example/")
+        assert new != "human" and b.visible == new
+        assert b.tabs["human"]["url"] == "about:blank"
+
+
+@pytest.mark.parametrize("changed", ["task", "daemon", "browser", "lease", "process"])
+def test_borrowed_human_tab_is_not_implicitly_reused_after_scope_change(tmp_path, browser, monkeypatch, changed):
+    b, _ = browser
+    b.tabs["human"]["url"] = "https://fixture.example/"
+    ns = {}
+    with managed_tabs(ns, str(tmp_path), "browser", "task"):
+        ns["switch_tab"]("human", activate=False)
+        assert b.visible != "human"
+    if changed == "daemon":
+        monkeypatch.setenv("BU_NAME", "other-session")
+    if changed == "lease":
+        path = tmp_path / "bot-desktop" / "lease.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"holder": "agent", "epoch": 2}))
+    if changed == "process":
+        b.driver = (124, 2)
+    with managed_tabs({}, str(tmp_path), "other-browser" if changed == "browser" else "browser",
+                      "sibling" if changed == "task" else "task"):
+        assert b.current != "human"
     assert "human" in b.tabs
 
 
