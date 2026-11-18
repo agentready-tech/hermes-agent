@@ -3,10 +3,11 @@
 import asyncio
 import copy
 import json
+from pathlib import Path
 
 import pytest
 
-from hermes_runtime.standalone.panel_subscriptions import Subscriptions
+from hermes_runtime.standalone.panel_subscriptions import CLAUDE, Subscriptions
 
 
 @pytest.fixture
@@ -120,8 +121,61 @@ def test_managed_route_is_bound_to_the_customer_and_rejects_flags(service):
         asyncio.run(value.select("openai", "model --provider custom", False))
     assert config == original
     config["model"]["base_url"] = "https://panel.invalid/app/api/agents/another-customer/inference/v1"
+    foreign = copy.deepcopy(config)
+    assert value.status()["managedFallback"] is False
     with pytest.raises(ValueError, match="базовым инференсом"):
-        value.status()
+        asyncio.run(value.select("managed", None, False))
+    with pytest.raises(ValueError, match="базовым инференсом"):
+        asyncio.run(value.select("claude", "opus-5.5", True))
+    assert config == foreign
+
+
+@pytest.mark.parametrize("managed_profile", [False, True])
+def test_claude_reconnect_uses_the_profile_login_and_keeps_inference_routes(service, monkeypatch, managed_profile):
+    value, config, _ = service
+    directory = value.home / "provider-auth" / "claude"
+    directory.mkdir(parents=True)
+    if managed_profile:
+        config["autonomous"]["panel"]["managed_inference"] = config["model"]
+    config["model"] = {"provider": CLAUDE, "default": "claude-opus-5-5[1m]"}
+    config["fallback_providers"] = [{"provider": "openai-codex", "model": "gpt-6.1-sol"}]
+    config["plugins"] = {"entries": {CLAUDE: {"settings": {"claude_config_dir": str(directory)}}}}
+    before = copy.deepcopy(config)
+    (value.home / "config.yaml").write_text(json.dumps(config))
+    signed_in = False
+
+    class ClaudeProfile:
+        def setup_status(self):
+            from hermes_constants import get_hermes_home
+            assert get_hermes_home() == value.home
+            return {"available": True, "logged_in": signed_in, "login_command": ["claude", "auth", "login"]}
+
+    class Login:
+        def __init__(self, command, env, cwd):
+            assert command == ["claude"]
+            assert Path(env["HERMES_HOME"]) == value.home
+            assert Path(env["CLAUDE_CONFIG_DIR"]) == directory
+            assert Path(cwd) == value.home
+
+        def view(self):
+            return {"status": "approved" if signed_in else "pending"}
+
+    monkeypatch.setattr("providers.get_provider_profile", lambda _provider: ClaudeProfile())
+    monkeypatch.setattr(value, "_claude", Subscriptions._claude.__get__(value))
+    monkeypatch.setattr("hermes_runtime.standalone.panel_claude_login.ClaudeLogin", Login)
+    status = value.status()
+    assert status["selected"] == "claude"
+    assert status["model"] == config["model"]["default"]
+    assert status["managedFallback"] is False
+    assert status["providers"][0] == {"id": "claude", "available": True, "connected": False}
+    login = value.start("claude")
+    assert login["status"] == "pending"
+    signed_in = True
+    assert value.poll("claude", login["sessionId"])["status"] == "approved"
+    assert value.status()["providers"][0]["connected"] is True
+    assert value.models("claude") == {"models": [{"id": "model-live", "label": "model-live"}]}
+    assert config == before
+    assert not (value.home / "subscriptions").exists()
 
 
 def test_claude_login_only_exports_the_official_authorization_url():

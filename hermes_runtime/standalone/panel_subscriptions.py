@@ -48,9 +48,11 @@ class Subscriptions:
         atomic_config_replace(self.home / "config.yaml", config)
 
     def _claude(self):
+        from hermes_runtime.workspace.transport import profile_scope
         from providers import get_provider_profile
-        profile = get_provider_profile(CLAUDE)
-        return profile.setup_status() if profile and hasattr(profile, "setup_status") else {"available": False, "logged_in": False}
+        with profile_scope(self.home):
+            profile = get_provider_profile(CLAUDE)
+            return profile.setup_status() if profile and hasattr(profile, "setup_status") else {"available": False, "logged_in": False}
 
     def _request(self, path, payload=None, method=None):
         return self.auth.authenticated_request(path, payload, method=method)
@@ -66,7 +68,7 @@ class Subscriptions:
         # Native account cards may carry token previews, emails and local file paths. None
         # belongs in Panel's response, store or logs.
         return {"selected": selected, "model": model.get("default", ""),
-            "managedFallback": any(row.get("base_url") == managed.get("base_url")
+            "managedFallback": managed is not None and any(row.get("base_url") == managed.get("base_url")
                 for row in config.get("fallback_providers", []) if isinstance(row, dict)),
             "providers": [{"id": "claude", "available": bool(claude.get("available")), "connected": bool(claude.get("logged_in"))},
                 {"id": "openai", "available": True, "connected": bool(openai.get("logged_in"))}]}
@@ -77,7 +79,7 @@ class Subscriptions:
         panel = config.get("autonomous", {}).get("panel", {})
         expected = panel.get("url", "").rstrip("/") + "/app/api/agents/" + panel.get("environment_id", "") + "/inference/v1"
         if route.get("provider") != "custom" or route.get("base_url") != expected or route.get("key_env") != "AGENTSEE_INFERENCE_KEY":
-            raise SubscriptionError("Подписки доступны для сотрудников с базовым инференсом agentsee.")
+            return None
         return route
 
     def start(self, provider):
@@ -98,20 +100,20 @@ class Subscriptions:
                     "pollInterval": max(5, result.get("poll_interval", 5))}
             from hermes_runtime.standalone.panel_claude_login import ClaudeLogin
             config = self._config()
-            self._managed_route(config)
             plugin = config.setdefault("plugins", {}).setdefault("entries", {}).setdefault(CLAUDE, {}).setdefault("settings", {})
-            directory = self.home / "subscriptions" / "claude"
-            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-            directory.chmod(0o700)
-            plugin.setdefault("claude_config_dir", str(directory))
-            self._write(config)
+            if not plugin.get("claude_config_dir"):
+                directory = self.home / "subscriptions" / "claude"
+                directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+                directory.chmod(0o700)
+                plugin["claude_config_dir"] = str(directory)
+                self._write(config)
             status = self._claude()
             if not status.get("available") or not status.get("login_command"):
                 raise SubscriptionError("Claude DirectSDK пока не установлен. Обратитесь в agentsee.")
             sid = secrets.token_urlsafe(24)
             # The same plugin setting is read for every subsequent DirectSDK request.
             from tools.environments.local import served_profile_child_env
-            child = {**served_profile_child_env(), "CLAUDE_CONFIG_DIR": plugin["claude_config_dir"]}
+            child = {**served_profile_child_env(target_home=self.home), "CLAUDE_CONFIG_DIR": plugin["claude_config_dir"]}
             login = ClaudeLogin(status["login_command"][:-2], child, str(self.home))
             self.sessions[sid] = {"provider": provider, "login": login}
             return {"sessionId": sid, **login.view()}
@@ -160,6 +162,8 @@ class Subscriptions:
         with self.lock:
             config = self._config()
             managed = copy.deepcopy(self._managed_route(config))
+            if managed is None and (provider == "managed" or managed_fallback):
+                raise SubscriptionError("Подписки доступны для сотрудников с базовым инференсом agentsee.")
             if provider != "managed":
                 if not next(row["connected"] for row in status["providers"] if row["id"] == provider):
                     raise SubscriptionError("Сначала подключите выбранную подписку.")
@@ -168,11 +172,14 @@ class Subscriptions:
                 route = {"provider": PROVIDERS[provider], "default": model}
             else:
                 route = managed
-            config.setdefault("autonomous", {}).setdefault("panel", {})["managed_inference"] = managed
+            panel = config.setdefault("autonomous", {}).setdefault("panel", {})
+            if managed is not None:
+                panel["managed_inference"] = managed
+                config["fallback_providers"] = [{**{k: v for k, v in managed.items() if k != "default"},
+                    "model": managed["default"]}] if managed_fallback and provider != "managed" else []
             if self.auth.gateway_owned:
-                config["autonomous"]["panel"]["model_selection_revision"] = secrets.token_hex(16)
+                panel["model_selection_revision"] = secrets.token_hex(16)
             config["model"] = route
-            config["fallback_providers"] = [{**{k: v for k, v in managed.items() if k != "default"}, "model": managed["default"]}] if managed_fallback and provider != "managed" else []
             self._write(config)
         if self.auth.gateway_owned:
             # Main has no frozen local-session policy. Its owner consumes this selection
