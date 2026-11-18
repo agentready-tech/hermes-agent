@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.18.1",
+  "defaultRuntimeVersion": "2026.11.18.2",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -4731,6 +4731,43 @@
         "desktopRegressionTestsPassed": 65
       },
       "description": "Reduce Kubernetes exec round trips on cold and warm Desktop startup."
+    },
+    "2026.11.18.2": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:cf9a36602b6ee293720bf8c7e4479acd712e551bd3a8e323ac42bc6a00870ba2",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.18.2",
+      "configDigest": "sha256:4811e99401f05ea776cb777a736ce447ad9720ad61a6e7006ee738d66f9ed918",
+      "platform": "linux/amd64",
+      "sourceRevision": "c5a8a67650fe704cca319fc0418c59db6c3e3d46",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:cf9a36602b6ee293720bf8c7e4479acd712e551bd3a8e323ac42bc6a00870ba2",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.18.2",
+        "digest": "sha256:cf9a36602b6ee293720bf8c7e4479acd712e551bd3a8e323ac42bc6a00870ba2",
+        "configDigest": "sha256:4811e99401f05ea776cb777a736ce447ad9720ad61a6e7006ee738d66f9ed918",
+        "sourceRevision": "c5a8a67650fe704cca319fc0418c59db6c3e3d46",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 44289408220,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:630ec8fd4e108aff38d55b346bdcb9374c5bbd12efc3db42f042010e70efdce8",
+        "deployRunId": 44291905647
+      },
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml",
+      "validation": {
+        "runtimeReady": true,
+        "futureDefaultConfigured": true,
+        "releaseRegressionTestsPassed": 63
+      },
+      "description": "Restore tool-boundary chat corrections and reuse explicit browser tab selections."
     }
   },
   "supersededRuntimeAttempts": {
