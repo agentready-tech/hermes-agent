@@ -134,6 +134,7 @@ class ActiveHomeTurn:
             self.wakeup.set()
         self._known_inputs = {identity for identity, _ in self.pending}
         self._taken_inputs = set()
+        self._browser_cleanups = {}
         self.accepting = True
         self.done = threading.Event()
         self.outcome = None
@@ -192,6 +193,20 @@ class ActiveHomeTurn:
 
     def take(self, *, close_if_empty=False):
         return [content for _, content in self.take_records(close_if_empty=close_if_empty)]
+
+    def defer_browser_cleanup(self, task_id, cleanup):
+        # A model segment can finish while a queued clarification or tool
+        # result is about to continue the same owned turn.
+        self._browser_cleanups[task_id] = cleanup
+
+    def finish_browser_cleanup(self, result):
+        if not result.get("completed") or result.get("failed") or result.get("interrupted") or result.get("cleanup_errors"):
+            return
+        errors = []
+        for cleanup in self._browser_cleanups.values():
+            cleanup(errors)
+        if errors:
+            result["cleanup_errors"] = errors
 
     def finish(self, result=None, error=None):
         try:
@@ -278,6 +293,7 @@ def run_conversation(self, proceed, *args, **kwargs):
                 if leftover:
                     pending.insert(0, leftover)
                 if not pending:
+                    turn.finish_browser_cleanup(result)
                     break
                 # If the model has just finished, a late user input still needs
                 # its own response. Keep the completed reply visible before

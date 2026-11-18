@@ -92,8 +92,11 @@ async def test_busy_telegram_reply_boundary(tmp_path, monkeypatch, followup):
     provider = ThreadingHTTPServer(('127.0.0.1', 0), _ToolProvider if with_tool else Provider)
     provider.calls = []
     provider.block_next = not with_tool
+    browser_cleanups = []
     if followup == 'after-final-model-call':
         provider.replies_by_call = {1: 'First review complete.', 2: 'Follow-up reviewed.'}
+        monkeypatch.setattr('tools.browser_tab_runtime.finish_native_tabs',
+                            lambda agent, task, **outcome: browser_cleanups.append((task, len(provider.calls), outcome)))
     provider.entered, provider.release = threading.Event(), threading.Event()
     next_tool_entered, next_tool_release = threading.Event(), threading.Event()
     if with_tool:
@@ -181,6 +184,7 @@ async def test_busy_telegram_reply_boundary(tmp_path, monkeypatch, followup):
             await async_wait_until(lambda: len(adapter.replies) == 2, timeout=5, what='both completed replies')
             assert [item[1] for item in adapter.replies] == ['First review complete.', 'Follow-up reviewed.']
             assert rows("SELECT COUNT(*) FROM delivery_obligations WHERE state='delivered'") == [(2,)]
+            assert browser_cleanups == [(HOME_SESSION_ID, 2, {'completed': True, 'interrupted': False, 'failed': False})]
             return
         if followup == 'explicit-steer':
             assert before == [('101', HOME_SESSION_ID, 'started')]

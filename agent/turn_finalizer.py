@@ -121,6 +121,24 @@ def _guarded_cleanup(label: str, fn: Callable[[], Any], errors: list[str], logge
         logger.error("finalize_turn: _%s failed: %s", label, err, exc_info=True)
 
 
+def _finish_browser_tabs(agent, task_id, *, completed, interrupted, failed, cleanup_errors, logger):
+    from tools.browser_tab_runtime import finish_native_tabs
+
+    def finish(errors):
+        _guarded_cleanup(
+            "finish_native_tabs",
+            lambda: finish_native_tabs(agent, task_id, completed=completed,
+                                       interrupted=interrupted, failed=failed or bool(cleanup_errors)),
+            errors, logger,
+        )
+
+    managed_turn = getattr(agent, "_agentready_active_turn", None)
+    if managed_turn is None:
+        finish(cleanup_errors)
+    else:
+        managed_turn.defer_browser_cleanup(task_id, finish)
+
+
 def _resolve_budget_fallback(
     agent, *, final_response, api_call_count, interrupted, failed, messages, _turn_exit_reason,
     _pending_verification_response, _pending_verification_response_previewed, logger,
@@ -638,13 +656,8 @@ def finalize_turn(
 
     # Shared desktop tabs are task-owned resources, not the persistent browser.
     # Interrupted/failed turns and live managed operations keep their work intact.
-    from tools.browser_tab_runtime import finish_native_tabs
-    _guarded_cleanup(
-        "finish_native_tabs",
-        lambda: finish_native_tabs(agent, effective_task_id, completed=completed,
-                                   interrupted=interrupted, failed=failed or bool(_cleanup_errors)),
-        _cleanup_errors, logger,
-    )
+    _finish_browser_tabs(agent, effective_task_id, completed=completed, interrupted=interrupted,
+                         failed=failed, cleanup_errors=_cleanup_errors, logger=logger)
 
     # Keep the gateway's separate in-memory history snapshot current even on
     # cleanup error, so a later prompt isn't sent with a pre-turn snapshot.
