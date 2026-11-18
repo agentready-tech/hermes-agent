@@ -180,6 +180,11 @@ def test_claude_reconnect_uses_the_profile_login_and_keeps_inference_routes(serv
 
 def test_claude_login_only_exports_the_official_authorization_url():
     from hermes_runtime.standalone.panel_claude_login import authorization_url
+    current = "https://claude.com/cai/oauth/authorize?state=fixture"
+    assert authorization_url(f"If the browser didn't open, visit: {current}\nPaste code here if prompted > ") == current
+    assert authorization_url("https://claude.com.evil.invalid/cai/oauth/authorize?state=fixture") is None
+    assert authorization_url("https://claude.com/other?state=fixture") is None
+    assert authorization_url("https://fixture@claude.com/cai/oauth/authorize?state=fixture") is None
     assert authorization_url("private https://evil.invalid/oauth/authorize?token=private") is None
     assert authorization_url("https://claude.ai.evil.invalid/oauth/authorize?code=private") is None
     assert authorization_url("https://claude.ai/oauth/authorize?state=fixture") == "https://claude.ai/oauth/authorize?state=fixture"
@@ -190,11 +195,11 @@ def test_claude_code_owns_code_exchange_and_cancellation(tmp_path):
     import sys
     from hermes_runtime.standalone.panel_claude_login import ClaudeLogin
     child = tmp_path / "native_cli.py"
-    child.write_text("import sys\nfrom pathlib import Path\nassert sys.argv[1:] == ['auth','login','--claudeai']\nprint('https://claude.ai/oauth/authorize?state=fixture',flush=True)\ncode=input()\nassert code=='fixture#state'\nPath('native-credential-fixture').write_text('native-owned')\n")
+    child.write_text("import sys\nfrom pathlib import Path\nassert sys.argv[1:] == ['auth','login','--claudeai']\nprint('https://claude.com/cai/oauth/authorize?state=fixture',flush=True)\ncode=input()\nassert code=='fixture#state'\nPath('native-credential-fixture').write_text('native-owned')\n")
     login = ClaudeLogin([sys.executable, str(child)], os.environ, str(tmp_path))
     try:
         assert login.ready.wait(5)
-        assert login.view()["url"] == "https://claude.ai/oauth/authorize?state=fixture"
+        assert login.view()["url"] == "https://claude.com/cai/oauth/authorize?state=fixture"
         login.submit("fixture#state")
         login.process.wait(timeout=5)
         assert login.view() == {"status": "approved"}

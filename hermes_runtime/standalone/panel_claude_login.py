@@ -12,7 +12,12 @@ from urllib.parse import urlsplit
 def authorization_url(text):
     for candidate in re.findall(r"https://[^\s\x1b<>]+", text):
         url = urlsplit(candidate)
-        if url.hostname in {"claude.ai", "console.anthropic.com", "platform.claude.com"} and url.path == "/oauth/authorize":
+        if url.username is None and url.password is None and (url.hostname, url.path) in {
+            ("claude.com", "/cai/oauth/authorize"),
+            ("claude.ai", "/oauth/authorize"),
+            ("console.anthropic.com", "/oauth/authorize"),
+            ("platform.claude.com", "/oauth/authorize"),
+        }:
             return candidate
     return None
 
