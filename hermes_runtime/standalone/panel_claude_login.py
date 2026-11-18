@@ -9,6 +9,10 @@ import time
 from urllib.parse import urlsplit
 
 
+class ClaudeLoginError(ValueError):
+    """A sign-in error that can be displayed without exposing provider output."""
+
+
 def authorization_url(text):
     for candidate in re.findall(r"https://[^\s\x1b<>]+", text):
         url = urlsplit(candidate)
@@ -30,8 +34,9 @@ class ClaudeLogin:
         self.url = None
         self.error = False
         self.cancelled = False
+        self.submitted = False
         self.ready = threading.Event()
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         # The provider client owns PKCE and credential persistence. Never open a browser on
         # the worker: the customer opens its official URL in their own browser instead.
         self.process = subprocess.Popen([*command, "auth", "login", "--claudeai"],
@@ -69,15 +74,25 @@ class ClaudeLogin:
         if self.process.poll() is not None:
             return {"status": "error" if self.process.returncode else "approved"}
         with self.lock:
-            return {"status": "pending", "flow": "authorization_code", **({"url": self.url} if self.url else {})}
+            return {"status": "pending", "flow": "authorization_code", "submitted": self.submitted,
+                    **({"url": self.url} if self.url else {})}
 
     def submit(self, code):
-        if not isinstance(code, str) or not re.fullmatch(r"[a-zA-Z0-9_.~#-]{1,4096}", code):
-            raise ValueError("Некорректный код авторизации.")
-        if self.view()["status"] != "pending":
-            raise ValueError("Вход уже завершён. Начните подключение заново.")
-        self.process.stdin.write((code + "\n").encode())
-        self.process.stdin.flush()
+        # Claude Code owns the code format. Accept an opaque value on one input line.
+        if not isinstance(code, str) or not re.fullmatch(r"[\x21-\x7e]{1,4096}", code):
+            raise ClaudeLoginError("Некорректный код авторизации.")
+        with self.lock:
+            # The browser can lose the reply after stdin accepted the code.
+            if self.submitted:
+                return
+            if self.view()["status"] != "pending":
+                raise ClaudeLoginError("Вход уже завершён. Начните подключение заново.")
+            try:
+                self.process.stdin.write((code + "\n").encode("ascii"))
+                self.process.stdin.flush()
+            except BrokenPipeError:
+                raise ClaudeLoginError("Вход уже завершён. Начните подключение заново.") from None
+            self.submitted = True
 
     def cancel(self):
         self.cancelled = True

@@ -195,12 +195,18 @@ def test_claude_code_owns_code_exchange_and_cancellation(tmp_path):
     import sys
     from hermes_runtime.standalone.panel_claude_login import ClaudeLogin
     child = tmp_path / "native_cli.py"
-    child.write_text("import sys\nfrom pathlib import Path\nassert sys.argv[1:] == ['auth','login','--claudeai']\nprint('https://claude.com/cai/oauth/authorize?state=fixture',flush=True)\ncode=input()\nassert code=='fixture#state'\nPath('native-credential-fixture').write_text('native-owned')\n")
+    child.write_text("import sys\nfrom pathlib import Path\nassert sys.argv[1:] == ['auth','login','--claudeai']\nprint('https://claude.com/cai/oauth/authorize?state=fixture',flush=True)\ncode=input()\nassert code=='fixture+/=#state'\nassert not sys.stdin.read()\nPath('native-credential-fixture').write_text('native-owned')\n")
     login = ClaudeLogin([sys.executable, str(child)], os.environ, str(tmp_path))
     try:
         assert login.ready.wait(5)
         assert login.view()["url"] == "https://claude.com/cai/oauth/authorize?state=fixture"
-        login.submit("fixture#state")
+        with pytest.raises(ValueError):
+            login.submit("fixture\nsecond-line")
+        login.submit("fixture+/=#state")
+        assert login.view()["submitted"] is True
+        # A reconnect can retry confirmation after losing the first acknowledgement.
+        login.submit("fixture+/=#state")
+        login.process.stdin.close()
         login.process.wait(timeout=5)
         assert login.view() == {"status": "approved"}
         assert (tmp_path / "native-credential-fixture").read_text() == "native-owned"

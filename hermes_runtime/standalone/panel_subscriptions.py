@@ -145,6 +145,18 @@ class Subscriptions:
             del self.sessions[session_id]
         return {"status": "cancelled"}
 
+    def submit_claude_code(self, provider, session_id, code):
+        from hermes_runtime.standalone.panel_claude_login import ClaudeLoginError
+
+        if provider != "claude":
+            raise SubscriptionError("Метод не разрешён.")
+        login = self._session(provider, session_id)["login"]
+        try:
+            login.submit(code)
+        except ClaudeLoginError as error:
+            raise SubscriptionError(str(error)) from None
+        return {"submitted": True}
+
     def models(self, provider):
         from hermes_cli.models import cached_provider_model_ids
         from hermes_runtime.workspace.transport import profile_scope
@@ -245,7 +257,7 @@ class Subscriptions:
             "subscriptions.login.start": lambda: self.start(provider),
             "subscriptions.login.poll": lambda: self.poll(provider, params.get("sessionId")),
             "subscriptions.login.cancel": lambda: self.cancel(provider, params.get("sessionId")),
-            "subscriptions.login.code": lambda: self._session(provider, params.get("sessionId"))["login"].submit(params.get("code")) or {"submitted": True},
+            "subscriptions.login.code": lambda: self.submit_claude_code(provider, params.get("sessionId"), params.get("code")),
             "subscriptions.disconnect": lambda: self.disconnect(provider)}
         if method not in handlers or (provider == "managed" and method != "subscriptions.select"):
             raise SubscriptionError("Метод не разрешён.")
