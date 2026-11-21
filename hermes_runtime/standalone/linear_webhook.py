@@ -75,22 +75,22 @@ def _issue_fields(payload, subscription):
     data = payload.get("data")
     if not isinstance(data, dict):
         raise InvalidLinearDelivery(400)
-    if _required_uuid(data.get("teamId")) != subscription.team_id:
+    team_id = _required_uuid(data.get("teamId"))
+    kind = f"Issue/{action}"
+    fields = {"kind": kind, "issue_id": _required_uuid(data.get("id"))}
+    if action == "update":
+        previous = payload.get("updatedFrom", {})
+        if not isinstance(previous, dict):
+            raise InvalidLinearDelivery(400)
+        if "stateId" not in previous:
+            return None
+        old, new = _required_uuid(previous["stateId"]), _required_uuid(data.get("stateId"))
+        if old == new:
+            return None
+        fields.update(previous_state_id=old, state_id=new)
+    if team_id != subscription.team_id or kind not in subscription.events:
         return None
-    if action == "create" and "Issue/create" in subscription.events:
-        return {"kind": "Issue/create", "issue_id": _required_uuid(data.get("id"))}
-    if action != "update" or "Issue/update" not in subscription.events:
-        return None
-    previous = payload.get("updatedFrom", {})
-    if not isinstance(previous, dict):
-        raise InvalidLinearDelivery(400)
-    if "stateId" not in previous:
-        return None
-    old, new = _required_uuid(previous["stateId"]), _required_uuid(data.get("stateId"))
-    if old == new:
-        return None
-    return {"kind": "Issue/update", "issue_id": _required_uuid(data.get("id")),
-            "previous_state_id": old, "state_id": new}
+    return fields
 
 
 def check_linear_delivery(body: bytes, headers: Iterable[tuple[str, str]], subscription: LinearSubscription,

@@ -28,8 +28,12 @@ def _payload(**updates):
 
 def _signed(payload):
     body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    return body, _headers(body)
+
+
+def _headers(body):
     signature = hmac.new(_SUBSCRIPTION.secret, body, "sha256").hexdigest()
-    return body, [("lInEaR-Signature", signature), ("Linear-Delivery", _DELIVERY)]
+    return [("Linear-Signature", signature), ("Linear-Delivery", _DELIVERY)]
 
 
 def _check(payload, subscription=_SUBSCRIPTION):
@@ -39,6 +43,7 @@ def _check(payload, subscription=_SUBSCRIPTION):
 @pytest.mark.parametrize("age", [-60_000, 0, 60_000])
 def test_verifies_raw_utf8_and_projects_only_issue_id(age):
     body, headers = _signed(_payload(webhookTimestamp=_NOW - age))
+    headers[0] = ("lInEaR-Signature", headers[0][1])
     checked = check_linear_delivery(body, headers, _SUBSCRIPTION, now_ms=_NOW)
     assert checked.delivery_id == _DELIVERY
     assert checked.body_digest == hashlib.sha256(body).hexdigest()
@@ -107,13 +112,43 @@ def test_only_requested_team_and_real_status_changes_are_projected():
     assert _check(update, replace(_SUBSCRIPTION, events=frozenset({"Issue/create"}))).issue_fields is None
 
 
+@pytest.mark.parametrize("changes", [
+    {"data": {"teamId": _TEAM}},
+    {"action": "update", "data": {"teamId": _TEAM}, "updatedFrom": {}},
+    {"action": "update", "updatedFrom": None},
+    {"action": "update", "updatedFrom": {"stateId": _OLD}},
+    {"action": "update", "data": {"teamId": _TEAM, "id": _ISSUE, "stateId": _NEW},
+     "updatedFrom": {"stateId": None}},
+])
+@pytest.mark.parametrize("scope", ["other-team", "disabled-event", "selected"])
+def test_malformed_recognized_issue_is_not_ignored(changes, scope):
+    payload = _payload(**changes)
+    subscription = _SUBSCRIPTION
+    if scope == "other-team":
+        subscription = replace(subscription, team_id=_NEW)
+    elif scope == "disabled-event":
+        subscription = replace(subscription, events=frozenset())
+    with pytest.raises(InvalidLinearDelivery) as rejection:
+        _check(payload, subscription)
+    assert rejection.value.status == 400
+
+
+def test_rejects_duplicate_key_in_otherwise_valid_body():
+    body, headers = _signed(_payload())
+    assert check_linear_delivery(body, headers, _SUBSCRIPTION, now_ms=_NOW).issue_fields == {
+        "kind": "Issue/create", "issue_id": _ISSUE,
+    }
+    duplicate = b'{"type":"Issue",' + body[1:]
+    with pytest.raises(InvalidLinearDelivery) as rejection:
+        check_linear_delivery(duplicate, _headers(duplicate), _SUBSCRIPTION, now_ms=_NOW)
+    assert rejection.value.status == 400
+
+
 @pytest.mark.parametrize("body,status", [
-    (b"[]", 400), (b"\xff", 400), (b'{"type":"Issue","type":"Comment"}', 400),
+    (b"[]", 400), (b"\xff", 400),
     (b" " * (256 * 1024 + 1), 413),
 ])
 def test_rejects_invalid_or_oversize_body(body, status):
-    signature = hmac.new(_SUBSCRIPTION.secret, body, "sha256").hexdigest()
-    headers = [("Linear-Signature", signature), ("Linear-Delivery", _DELIVERY)]
     with pytest.raises(InvalidLinearDelivery) as rejection:
-        check_linear_delivery(body, headers, _SUBSCRIPTION, now_ms=_NOW)
+        check_linear_delivery(body, _headers(body), _SUBSCRIPTION, now_ms=_NOW)
     assert rejection.value.status == status
