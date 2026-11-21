@@ -27,6 +27,13 @@ class HomeInbox:
         return row[0] if row is not None else None
 
     def enqueue(self, content, *, input_id=None):
+        key, identity = self._enqueue_identity(content, input_id)
+        with self.transaction() as conn:
+            receipt = self._enqueue_in_transaction(conn, content, key=key, identity=identity)
+        return receipt
+
+    @staticmethod
+    def _enqueue_identity(content, input_id):
         key = None
         text = content if isinstance(content, str) else ""
         if text.startswith("[AgentReady event]\n"):
@@ -39,12 +46,16 @@ class HomeInbox:
         if input_id is not None and (key is None or not isinstance(input_id, str)):
             raise ValueError("An explicit inbox identity requires an event")
         identity = input_id or "inbox-" + uuid.uuid4().hex
-        with self.transaction() as conn:
-            floor = conn.execute("SELECT COALESCE(MAX(id),0) FROM messages").fetchone()[0]
-            conn.execute("INSERT OR IGNORE INTO agentready_inbox(message_id,event_key,content,accepted_at,accepted_after_row_id) VALUES (?,?,?,?,?)",
+        return key, identity
+
+    @staticmethod
+    def _enqueue_in_transaction(executor, content, *, key, identity):
+        """Stage inbox work on the owner's active transaction; the return is not a durable receipt yet."""
+        floor = executor.execute("SELECT COALESCE(MAX(id),0) FROM messages").fetchone()[0]
+        executor.execute("INSERT OR IGNORE INTO agentready_inbox(message_id,event_key,content,accepted_at,accepted_after_row_id) VALUES (?,?,?,?,?)",
                          (identity, key, json.dumps(content, ensure_ascii=False), time.time(), floor))
-            row = conn.execute("SELECT message_id,delivered_at FROM agentready_inbox WHERE " + ("event_key=?" if key else "message_id=?"), (key or identity,)).fetchone()
-            return row[0], row[1] is None
+        row = executor.execute("SELECT message_id,delivered_at FROM agentready_inbox WHERE " + ("event_key=?" if key else "message_id=?"), (key or identity,)).fetchone()
+        return row[0], row[1] is None
 
     def pending(self):
         with self.transaction() as conn:
