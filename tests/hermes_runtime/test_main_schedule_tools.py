@@ -124,11 +124,11 @@ def test_main_schedule_rejects_separate_session_options_without_saving(main_home
     assert list_jobs() == []
 
 
-@pytest.mark.parametrize("monitor", [
-    {"monitor_url": "https://fixture.invalid"},
-    {"monitor_script": "fixture.py"},
+@pytest.mark.parametrize("field, monitor", [
+    ("monitor_url", "https://fixture.invalid"),
+    ("monitor_script", "fixture.py"),
 ])
-def test_managed_monitor_is_rejected_at_create_update_and_admission(main_home, monkeypatch, monitor):
+def test_managed_monitor_is_rejected_at_create_update_and_admission(main_home, monkeypatch, field, monitor):
     from cron.jobs import get_job, list_jobs
     from cron.scheduler import run_job
     from hermes_runtime.standalone import events
@@ -138,18 +138,26 @@ def test_managed_monitor_is_rejected_at_create_update_and_admission(main_home, m
 
     monkeypatch.setattr("cron.scheduler._apply_monitor_gate", unexpected)
     monkeypatch.setattr(events, "_admit_scheduled_prompt", unexpected)
+    if field == "monitor_script":
+        scripts = main_home[0] / "scripts"
+        scripts.mkdir(exist_ok=True)
+        (scripts / monitor).touch()
 
     args = {"prompt": "Check the fixture later", "schedule": "every 1h"}
-    assert _tool("create", **args, **monitor)["success"] is False
+    rejected = _tool("create", **args, monitor=monitor)
+    assert rejected["success"] is False
+    assert "Main-inbox schedules accept prompts" in rejected["error"]
     assert list_jobs() == []
     created = _tool("create", **args)
     assert created["success"] is True
     job_id = created["job_id"]
     before = get_job(job_id)
-    assert _tool("update", job_id=job_id, **monitor)["success"] is False
+    rejected = _tool("update", job_id=job_id, monitor=monitor)
+    assert rejected["success"] is False
+    assert "Main-inbox schedules accept prompts" in rejected["error"]
     assert get_job(job_id) == before
     with pytest.raises(ValueError, match="Main-inbox schedules accept prompts"):
-        run_job({**before, **monitor})
+        run_job({**before, field: monitor})
 
 
 def test_managed_scheduler_refuses_legacy_isolated_job_without_creating_session(main_home):
