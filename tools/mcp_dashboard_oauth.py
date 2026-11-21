@@ -152,6 +152,9 @@ class DashboardOAuthFlow:
             if self.status in {"approved", "error"}:
                 return
             self.status = "error"
+            if self._callback is not None:
+                # Token endpoint errors can echo the submitted code.
+                error = error.replace(self._callback[0], "[REDACTED]")
             self.error = error or "MCP OAuth flow failed before the callback was received (empty error message)"
             # The SDK's callback waiter reads _callback_error, not error — without
             # this copy, a failure marked before any browser redirect (worker
@@ -172,6 +175,13 @@ class DashboardOAuthFlow:
 
     def mark_worker_done(self) -> None:
         self._worker_done.set()
+
+    @property
+    def callback_resolved(self) -> bool:
+        return self._callback_ready.is_set()
+
+    def wait_for_worker(self, timeout: float) -> bool:
+        return self._worker_done.wait(timeout)
 
     @property
     def worker_done(self) -> bool:

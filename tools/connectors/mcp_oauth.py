@@ -12,7 +12,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse, urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +289,33 @@ class OAuthAttempt:
     auth_url: str
     flow: Any
     detail: str = ""
+
+    @property
+    def callback_uri(self) -> Optional[str]:
+        """The local address this authorization request actually uses."""
+        redirect_uris = parse_qs(urlparse(self.auth_url).query).get("redirect_uri")
+        uri = self.flow.redirect_uri
+        if redirect_uris != [uri]:
+            return None
+        try:
+            return _validate_client_redirect_uri(uri)
+        except ValueError:
+            return None
+
+    def submit_redirect(self, url: str) -> None:
+        """Parse the pasted address locally and submit it to this flow's state check."""
+        from tools.mcp_oauth import _parse_redirect_query
+
+        parsed = urlsplit(url.strip())
+        if parsed.fragment or parsed._replace(query="").geturl() != self.callback_uri:
+            raise ValueError("OAuth callback address mismatch")
+        result = _parse_redirect_query(parsed.query)
+        state = result["state"]
+        if not state or not state.isascii() or not (result["code"] or result["error"]):
+            raise ValueError("Missing or invalid OAuth callback parameters")
+        if result["error"]:
+            result["error"] = "authorization declined in browser"
+        self.flow.deliver_callback(**result)
 
     def poll(self) -> dict[str, Any]:
         snapshot = self.flow.snapshot()

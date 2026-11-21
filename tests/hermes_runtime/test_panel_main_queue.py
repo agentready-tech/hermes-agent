@@ -227,3 +227,101 @@ def test_managed_panel_turn_keeps_masked_native_vault_forms(main_home):
     assert out == {'code': 'synthetic-code'}
     assert 'synthetic-code' not in json.dumps(frames)
     assert unlock.get_code_prompt_callback() is previous
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('channel', ['panel', 'telegram'])
+@pytest.mark.parametrize('reply', ['valid', 'foreign_state', 'foreign_port', 'provider_rejected', 'cancelled'])
+async def test_catalog_oauth_uses_the_originating_chats_secret_prompt(main_home, monkeypatch, channel, reply):
+    from urllib.parse import urlencode, urlsplit
+
+    from gateway.config import Platform
+    from gateway.session_cli_turn import cli_turn_scope
+    from gateway.session_events import SessionEvents
+    from gateway.session_secret_prompt import secret_prompt_scope
+    from gateway.session_sudo_prompt import resolve
+    from hermes_cli import mcp_config
+    from mcp.shared.auth import OAuthToken
+    from tools import mcp_tool_discovery
+    from tools.connectors import mcp
+    from tools.connectors.tool import manage_connections
+    from tools.mcp_dashboard_oauth import get_dashboard_oauth_flow
+    from tools.mcp_oauth import HermesTokenStorage, _make_callback_waiter
+    from tests.waiting import async_wait_until
+
+    received, registered, prompts, frames = [], [], [], []
+    redirect = ''
+    code, state = 'synthetic-authorize-code', 'issued-for-this-install'
+
+    async def exchange():
+        nonlocal redirect
+        flow = get_dashboard_oauth_flow()
+        auth_url = 'https://oauth.example.test/authorize?' + urlencode({
+            'redirect_uri': flow.redirect_uri, 'state': state,
+        })
+        callback_uri = flow.redirect_uri
+        if reply == 'foreign_port':
+            callback_uri = f'http://127.0.0.1:{urlsplit(callback_uri).port + 1}/callback'
+        redirect = '' if reply == 'cancelled' else callback_uri + '?' + urlencode({
+            'code': code, 'state': 'another-install' if reply == 'foreign_state' else state,
+        })
+        await flow.publish_authorization_url(auth_url)
+        callback = await _make_callback_waiter(0, timeout=5)()
+        received.append(callback if isinstance(callback, tuple) else (callback.code, callback.state))
+        if reply == 'provider_rejected':
+            raise RuntimeError(f'Provider rejected the test code {code}')
+        await HermesTokenStorage('linear').set_tokens(OAuthToken(access_token='test-token', token_type='Bearer'))
+
+    def probe(name, config, *, connect_timeout, details):
+        assert name == 'linear'
+        asyncio.run(exchange())
+        details['initialized'] = True
+        return [('list_issues', 'List issues')]
+
+    monkeypatch.setattr(mcp_config, '_probe_single_server', probe)
+    monkeypatch.setattr(mcp_tool_discovery, 'register_mcp_servers', lambda config: registered.extend(config))
+    monkeypatch.setattr(mcp, '_registered_tool_names', lambda _: ['mcp_linear_list_issues'])
+
+    class Adapter:
+        async def request_secret(self, source, *, label, site):
+            assert source.user_id == 'authorized-user'
+            prompts.append(label)
+            return redirect
+
+    session_id, admission_id = 'agentready_home', 'oauth-admission'
+    events = SessionEvents()
+    events.fanout.attach(SimpleNamespace(write=lambda frame: frames.append(frame) or True))
+    authority = SimpleNamespace(sessions={session_id: SimpleNamespace(event_stream=events)})
+    turn = SimpleNamespace(
+        _approval_owner=(authority, session_id, 1),
+        _runner=SimpleNamespace(_delivery_adapter_for=lambda _: Adapter()),
+        _ctx=SimpleNamespace(source=SimpleNamespace(platform=Platform.TELEGRAM, user_id='authorized-user'),
+                             inbound_message_id=admission_id, _loop_for_step=asyncio.get_running_loop(),
+                             _run_still_current=lambda: True),
+    )
+    args = {'action': 'install', 'connectors': [{'name': 'linear', 'mcp': True}]}
+    with cli_turn_scope(admission_id, {'clarify_batch': channel == 'panel'}), secret_prompt_scope(turn, SimpleNamespace()):
+        install = asyncio.create_task(asyncio.to_thread(manage_connections, args, session_id=session_id))
+        if channel == 'panel':
+            await async_wait_until(lambda: install.done() or frames, timeout=5, what='OAuth secret form')
+            request = next((frame for frame in frames if frame.get('method') == 'secret'), None)
+            assert request is not None, 'Panel OAuth install must open the protected input'
+            prompts.append(request['params']['prompt'])
+            resolve({'id': request['id'], 'result': {'value': redirect}})
+        result = await asyncio.wait_for(install, 6)
+
+    assert len(prompts) == 1 and 'https://oauth.example.test/authorize?' in prompts[0]
+    target = json.loads(result)['targets'][0]
+    if reply == 'valid':
+        assert target['state'] == 'connected'
+        assert target['tools'] == ['mcp_linear_list_issues']
+        assert registered == ['linear'] and received == [(code, state)]
+        assert HermesTokenStorage('linear').has_cached_tokens()
+    else:
+        assert target['state'] == 'failed'
+        assert registered == []
+        assert received == ([(code, state)] if reply == 'provider_rejected' else [])
+        assert not HermesTokenStorage('linear').has_cached_tokens()
+    assert 'connect_url' not in target
+    assert code not in json.dumps([frames, prompts, result])
+    assert not (main_home[0] / '.env').exists()

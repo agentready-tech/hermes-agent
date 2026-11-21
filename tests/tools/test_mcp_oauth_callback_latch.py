@@ -105,3 +105,26 @@ def test_first_terminal_callback_wins_over_later_ones(monkeypatch):
     ])
     assert statuses == [404, 200, 200, 200]
     assert (result.code, result.state) == ("first", "s1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["relay", "http"])
+async def test_pinned_dashboard_port_shares_the_flow_callback(source, tmp_path):
+    from tools.connectors.mcp_oauth import OAuthAttempt
+    from tools.mcp_dashboard_oauth import DashboardOAuthFlow, dashboard_oauth_flow
+
+    port = _free_port()
+    uri = f"http://127.0.0.1:{port}/callback"
+    auth_url = f"https://oauth.example.test/authorize?redirect_uri={uri}&state=s1"
+    flow = DashboardOAuthFlow("flow", "test", None, str(tmp_path), uri)
+    await flow.publish_authorization_url(auth_url)
+    with mo.force_interactive_oauth(), dashboard_oauth_flow(flow):
+        pending = asyncio.create_task(mo._make_callback_waiter(port, timeout=5)())
+        await asyncio.to_thread(_wait_listening, port)
+        if source == "relay":
+            OAuthAttempt(auth_url, flow).submit_redirect(f"{uri}?code=synthetic&state=s1")
+        else:
+            assert await asyncio.to_thread(_get, port, "/callback?code=invalid&state=foreign") == 400
+            assert await asyncio.to_thread(_get, port, "/callback?code=synthetic&state=s1") == 200
+        result = await pending
+    assert (result.code, result.state) == ("synthetic", "s1")

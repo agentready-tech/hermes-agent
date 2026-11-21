@@ -12,7 +12,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from hermes_constants import hermes_home_key
 from tools.connectors.contract import Actor, SettleReason, TargetState
 from tools.connectors.gateway.config import operation_session_key
-from tools.connectors.operation import ConnectionOperation, DetachedOperation, IllegalTransition, Target
+from tools.connectors.operation import (
+    OPERATION_DEADLINE_SECONDS, ConnectionOperation, DetachedOperation, IllegalTransition, Target,
+)
 from tools.connectors.run import Kind, run_operation
 from tools.connectors.targets import hosted_names, misrouted_to_mcp_error
 from tools.registry import tool_error
@@ -34,7 +36,7 @@ NOTE = (
 
 NO_CARD_NOTE = (
     "No connection card is drawn for this turn. Show any connect_url to the user so they "
-    "open it in a browser, then ask them to say when they are done. Connected targets' tools are "
+    "open it in a browser. Never ask for the callback URL in ordinary chat. Connected targets' tools are "
     "available now through tool_describe/tool_call and are named under tools_listing. A target with "
     "discovery_error is authorized but its tools are unavailable; retry discovery with "
     "manage_connections using that target's authorize or install action without asking for consent "
@@ -805,13 +807,50 @@ def retry(operation: ConnectionOperation, names: list[str]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
+def _complete_chat_oauth(runner: _Runner, operation: ConnectionOperation, target: Target,
+                         attempt: Any, prompt: Callable) -> None:
+    flow = attempt.flow
+    target.connect_url = None
+    target.detail = ""
+    pasted_url = prompt(
+        "MCP_OAUTH_REDIRECT",
+        f"Open the link below to authorize {target.name}. After approval, copy the full redirect "
+        f"URL from your browser's address bar into this protected input, even if the page did not load.\n"
+        f"{attempt.auth_url}",
+        timeout=OPERATION_DEADLINE_SECONDS,
+        cancelled=lambda: flow.callback_resolved,
+    )
+    failure = "The OAuth input was cancelled, expired, or unavailable."
+    if pasted_url and not flow.callback_resolved:
+        try:
+            attempt.submit_redirect(pasted_url)
+        except ValueError:
+            failure = "The redirect URL did not match this OAuth attempt."
+
+    if not flow.callback_resolved:
+        _cancel_attempt(runner, target)
+        _fail(operation, target, failure)
+        return
+    if not flow.wait_for_worker(OPERATION_DEADLINE_SECONDS):
+        detail = _cancel_attempt(runner, target) or "The provider timed out while completing OAuth."
+        _fail(operation, target, detail)
+
+
 def _no_card_result(runner: _Runner, names: list[str], action: str, session_key: str) -> str:
+    from gateway.session_secret_prompt import current_secret_prompt
+
     operation = DetachedOperation([Target(n, "mcp", action) for n in names], session_key=session_key)
+    prompt = current_secret_prompt()
     for target in operation.targets:
         runner.run(_NO_CARD, operation, target)
+        work = runner.work.get(target.name)
+        if work is not None and work.attempt is not None:
+            if prompt is not None and getattr(work.attempt, "callback_uri", None):
+                _complete_chat_oauth(runner, operation, target, work.attempt, prompt)
+            _observe_oauth(runner, operation, target)
     payload = operation.result(with_urls=True)
     payload["status"] = "initiated" if any(t.state == TargetState.initiated for t in operation.targets) else "settled"
-    payload["note"] = NO_CARD_NOTE
+    payload["note"] = NO_CARD_NOTE if any(t.connect_url for t in operation.targets) else NOTE
     return json.dumps(payload, ensure_ascii=False)
 
 
@@ -829,8 +868,8 @@ def run_mcp_operation(
         return tool_error(error)
     runner = open_runner(action, backend)
     session_key = operation_session_key(session_id)
-    # Every interactive surface that renders the card attaches this callback. Registry dispatch and
-    # messaging sessions attach none, so they receive the link instead of opening an unanswerable op.
+    # Clients that render connection cards attach this callback. Chat can relay a loopback
+    # redirect through its protected input without opening a connection card.
     if connection_callback is None:
         return _no_card_result(runner, names, action, session_key)
     try:

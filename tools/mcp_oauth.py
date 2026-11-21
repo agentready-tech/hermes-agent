@@ -683,7 +683,7 @@ def _result_taken(result: dict) -> bool:
     return result.get("auth_code") is not None or result.get("error") is not None
 
 
-def _make_callback_handler() -> tuple[type, dict]:
+def _make_callback_handler(dashboard_flow=None) -> tuple[type, dict]:
     """Fresh ``(HandlerClass, result_dict)`` per flow so concurrent flows don't stomp on each other."""
     result: dict[str, Any] = {"auth_code": None, "state": None, "error": None, "iss": None}
 
@@ -695,6 +695,13 @@ def _make_callback_handler() -> tuple[type, dict]:
                 # Browsers follow the real /callback with queryless fetches (/favicon.ico); an unconditional
                 # update here wrote four Nones over the code before the 500 ms waiter poll saw it (#116278).
                 status, body = 404, "<h2>Not Found</h2>"
+            elif dashboard_flow is not None:
+                try:
+                    dashboard_flow.deliver_callback(**parsed)
+                except (TypeError, ValueError):
+                    status, body = 400, "<h2>OAuth callback rejected</h2>"
+                else:
+                    body = "<h2>Authorization received</h2><p>You can close this tab and return to Hermes.</p>"
             elif _result_taken(result):
                 # First terminal result (HTTP or paste) wins; a duplicate or refreshed callback never replaces it.
                 body = "<h2>Authorization already received</h2><p>You can close this tab and return to Hermes.</p>"
@@ -878,9 +885,7 @@ def _make_callback_waiter(port: int, cimd_url: str | None = None, timeout: float
     async def _wait():
         dashboard_flow = get_dashboard_oauth_flow()
         if dashboard_flow is not None and not port:
-            # Dashboard flow speaks the legacy tuple; normalize to one shape. A pinned loopback port
-            # (pre-registered client) listens locally instead; the dashboard only shows the URL.
-            return _authorization_code_result(*await dashboard_flow.wait_for_callback())
+            return _authorization_code_result(*await dashboard_flow.wait_for_callback(timeout))
         # The SDK entered the authorization-code flow, so any cached token is unusable. Reject BEFORE
         # binding: binding would block for the full timeout and collide with the TIME_WAIT port on retry.
         # Reject before binding the callback listener in non-interactive contexts. Reaching here means the
@@ -894,7 +899,7 @@ def _make_callback_waiter(port: int, cimd_url: str | None = None, timeout: float
         _raise_if_non_interactive(
             "OAuth callback requires an interactive session but none is available (non-interactive/background "
             "context); skipping browser authorization without binding a callback listener.")
-        handler_cls, result = _make_callback_handler()
+        handler_cls, result = _make_callback_handler(dashboard_flow)
         server = _start_callback_server(port, handler_cls)
         # serve_forever/shutdown, not a bare handle_request thread: a thread parked in handle_request's
         # select() keeps the listening socket alive past server_close() (the kernel holds the file for
@@ -911,6 +916,10 @@ def _make_callback_waiter(port: int, cimd_url: str | None = None, timeout: float
             threading.Thread(target=_paste_callback_reader, args=(result,), daemon=True).start()
         elapsed = 0.0
         try:
+            # A pre-registered client keeps its pinned loopback HTTP port. Its HTTP and pasted
+            # callbacks still go to the same flow and compete for the same one-shot result.
+            if dashboard_flow is not None:
+                return _authorization_code_result(*await dashboard_flow.wait_for_callback(timeout))
             while elapsed < timeout and not _result_taken(result):
                 await asyncio.sleep(0.5)
                 elapsed += 0.5
