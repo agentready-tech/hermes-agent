@@ -59,6 +59,14 @@ def test_scheduling_policy_is_mandatory_only_for_the_main_owner(runtime, monkeyp
         from hermes_runtime.standalone.instructions import MAIN_SCHEDULE_INSTRUCTIONS
         assert (MAIN_SCHEDULE_INSTRUCTIONS in text) == (kind == "main")
         assert "Existing host instructions" in text
+        for rule in (
+            "stable project_id and wait_id",
+            "exact recorded job_id",
+            "future next_run_at",
+            "at most once per tick",
+            "use only computer_use for desktop UI",
+        ):
+            assert (rule in text) == (kind == "main")
         if kind == "main":
             assert text.count(MAIN_SCHEDULE_INSTRUCTIONS) == 1
             assert not {"skill_view", "skills_list"} & agent.valid_tool_names
