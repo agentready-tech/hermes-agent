@@ -71,3 +71,33 @@ def test_mail_keeps_local_fallback_and_does_not_replay_legacy_receipts(telegram_
     assert len(inbox.pending()) == 1
     with sqlite3.connect(home / "state.db") as conn:
         assert conn.execute("SELECT count(*) FROM async_delegations").fetchone()[0] == 0
+
+
+def test_settled_local_mail_receipt_survives_reopen_and_new_gateway_origin(telegram_home):
+    from hermes_runtime.adapters.inbox import HomeInbox
+    from hermes_runtime.adapters.state import main_gateway_origin
+    from hermes_runtime.sessions import HOME_SESSION_ID
+    from hermes_runtime.standalone.workspace import admit_mail
+    from hermes_state import SessionDB
+
+    home, entry = telegram_home
+    entry.suspended = True
+    with sqlite3.connect(home / "state.db") as conn:
+        conn.execute("UPDATE gateway_routing SET entry_json=?", (json.dumps(entry.to_dict()),))
+    original = admit_mail("Inert mail", "email:fixture", "mail-route-switch")
+    db = SessionDB(db_path=home / "state.db")
+    try:
+        db.append_message(HOME_SESSION_ID, "user", "Inert mail", platform_message_id=original["message_id"])
+    finally:
+        db.close()
+    HomeInbox(home).acknowledge_recorded()
+
+    entry.suspended = False
+    with sqlite3.connect(home / "state.db") as conn:
+        conn.execute("UPDATE gateway_routing SET entry_json=?", (json.dumps(entry.to_dict()),))
+    assert main_gateway_origin()["thread_id"] == "77"
+    replay = admit_mail("Inert mail", "email:fixture", "mail-route-switch")
+    assert replay == {"message_id": original["message_id"], "pending": False}
+    assert HomeInbox(home).pending() == []
+    with sqlite3.connect(home / "state.db") as conn:
+        assert conn.execute("SELECT count(*) FROM async_delegations").fetchone()[0] == 0

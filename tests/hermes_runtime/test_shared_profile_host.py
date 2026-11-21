@@ -76,6 +76,27 @@ def test_both_profiles_keep_the_same_logical_home_id_in_their_own_sqlite(shared_
             db.close()
 
 
+def test_shared_profile_mail_deduplicates_only_within_its_own_inbox(shared_homes):
+    from gateway.run import _profile_runtime_scope
+    from hermes_runtime.adapters.inbox import HomeInbox
+    from hermes_runtime.standalone.workspace import admit_mail
+
+    _, homes = shared_homes
+    receipts = {}
+    for name, home in homes.items():
+        with _profile_runtime_scope(home):
+            receipts[name] = admit_mail(f"Inert mail for {name}", "email:fixture", "same-id")
+
+    for name, home in reversed(tuple(homes.items())):
+        with _profile_runtime_scope(home):
+            receipt = receipts[name]
+            assert admit_mail("Replay must not replace the original", "email:fixture", "same-id") == receipt
+            [(message_id, content)] = HomeInbox(home).pending()
+            assert message_id == receipt["message_id"]
+            assert f"Inert mail for {name}" in content
+    assert receipts["alpha"]["message_id"] != receipts["bravo"]["message_id"]
+
+
 def test_unregistered_home_cannot_activate_or_borrow_a_host_profile(shared_homes, tmp_path):
     from gateway.run import _profile_runtime_scope
 
