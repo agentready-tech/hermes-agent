@@ -43,7 +43,7 @@ def native_schema(agent):
         "deadline": {"type": "string", "description": "Finite timezone-aware ISO timestamp"},
         "return_path": {"type": "string", "enum": ["timer"]},
 
-        "reason": {"type": "string", "enum": ["reply", "cancelled", "closed", "expired", "access_lost"]},
+        "reason": {"type": "string", "enum": ["reply", "cancelled", "closed", "expired"]},
         "reply_ref": {"type": "object", "properties": {
             "kind": {"type": "string", "enum": ["session_admission"]}, "admission_id": {"type": "string"},
         }, "required": ["kind", "admission_id"], "additionalProperties": False},
@@ -122,21 +122,20 @@ def _existing(workspace, wait_id):
     return current
 
 
-def _close(workspace, conn, store, wait_id, args):
+def validate_close(current, conn, store, args):
     from hermes_runtime.adapters.external_wait_reply import proves_reply
 
-    current = _existing(workspace, wait_id)
     reason = args.get('reason')
     if reason == 'reply':
         if not proves_reply(conn, store.db_path.resolve().parent, store.parent_id, current, args.get('reply_ref')):
             raise ValueError("Closing on a reply requires trusted evidence of the original input")
-    elif reason not in ("cancelled", "closed", "expired", "access_lost") or 'reply_ref' in args:
+    elif reason == "access_lost":
+        raise ValueError("No trusted loss-of-access receipt is available for this wait")
+    elif reason not in ("cancelled", "closed", "expired") or 'reply_ref' in args:
         raise ValueError("Invalid close reason or unexpected reply evidence")
     if reason == "expired" and datetime.fromisoformat(current["deadline"]) > datetime.now(UTC):
         raise ValueError("The wait has not expired")
-    if current["state"] != "CLOSING":
-        current.update(state="CLOSING" if current["job_id"] is not None else "CLOSED", close_reason=reason)
-    return current
+    return reason
 
 
 def dispatch(agent, args):

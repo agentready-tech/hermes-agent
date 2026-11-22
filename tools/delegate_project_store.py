@@ -15,6 +15,19 @@ def _transaction():
     return transaction(_connect(), immediate=True)
 
 
+def write_workspace(conn, subagent_id, workspace, change):
+    result = change(workspace, conn)
+    conn.execute("UPDATE delegated_projects SET workspace_json=? WHERE subagent_id=?", (json.dumps(workspace), subagent_id))
+    return result
+
+
+def set_project_paused(conn, subagent_id, paused, archive):
+    conn.execute("UPDATE delegated_projects SET paused=?,archived=MAX(archived,?),updated_at=? WHERE subagent_id=?",
+                 (int(paused), int(archive), time.time(), subagent_id))
+    if archive:
+        conn.execute("UPDATE delegated_project_messages SET state='cancelled',completed_at=?,published=1 WHERE subagent_id=? AND state='pending'", (time.time(), subagent_id))
+
+
 class ProjectStore:
     def __init__(self, parent):
         from hermes_constants import get_hermes_home
@@ -183,12 +196,13 @@ class ProjectStore:
             return [dict(row) for row in conn.execute("SELECT * FROM delegated_project_messages WHERE subagent_id=? AND state NOT IN ('pending','running') AND published=0", (subagent_id,))]
 
     def pause(self, subagent_id, paused=True, archive=False):
-        self.get(subagent_id)
+        project = self.get(subagent_id)
+        if archive:
+            from tools.delegate_wait_timer import archive_project
+
+            return archive_project(self, project, paused)
         with _transaction() as conn:
-            conn.execute("UPDATE delegated_projects SET paused=?,archived=MAX(archived,?),updated_at=? WHERE subagent_id=?",
-                         (int(paused), int(archive), time.time(), subagent_id))
-            if archive:
-                conn.execute("UPDATE delegated_project_messages SET state='cancelled',completed_at=?,published=1 WHERE subagent_id=? AND state='pending'", (time.time(), subagent_id))
+            set_project_paused(conn, subagent_id, paused, False)
 
     def save_workspace(self, subagent_id, info):
         self.mutate_workspace(subagent_id, lambda workspace, _conn: workspace.update(worktree=info), active_only=False)
@@ -209,10 +223,7 @@ class ProjectStore:
             if row is None or (active_only and (row[1] or row[2])):
                 raise ValueError("Unknown project subagent")
             # Workspace metadata has multiple writers. Merge against the row protected by this transaction.
-            workspace = json.loads(row[0])
-            result = change(workspace, conn)
-            conn.execute("UPDATE delegated_projects SET workspace_json=? WHERE subagent_id=?", (json.dumps(workspace), subagent_id))
-            return result
+            return write_workspace(conn, subagent_id, json.loads(row[0]), change)
 
     def instruction(self, subagent_id, proposed):
         # Native ephemeral child instructions are appended after the cached core

@@ -309,7 +309,7 @@ def _jobs_lock(*, strict=False):
             try:
                 ensure_dirs()
                 path = _jobs_lock_file()
-                lock_fd = open(path, "a+", encoding="utf-8-sig")
+                lock_fd = open(path, "a+", encoding="utf-8")
                 lock_fd.seek(0)
                 acquired = _acquire_flock(lock_fd, _JOBS_LOCK_TIMEOUT_SECONDS)
                 if acquired is True:
@@ -2871,7 +2871,9 @@ def get_due_jobs() -> list[dict[str, Any]]:
     would be skipped forever.
     """
     with _jobs_lock():
-        return _get_due_jobs_locked()
+        due, snapshot = _get_due_jobs_locked()
+    from cron.wait_binding import close_terminal_waits
+    return close_terminal_waits(due, snapshot, _hermes_now())
 
 
 @dataclass
@@ -3303,7 +3305,7 @@ def _evaluate_due_job(job: dict[str, Any], scan: _DueScan, run_claim_ttl: float)
     return True
 
 
-def _get_due_jobs_locked() -> list[dict[str, Any]]:
+def _get_due_jobs_locked() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Inner implementation of get_due_jobs(); must be called with _jobs_lock held."""
     raw_jobs = load_jobs()
     scan = _DueScan(raw_jobs, _hermes_now())
@@ -3342,12 +3344,12 @@ def _get_due_jobs_locked() -> list[dict[str, Any]]:
             save_jobs(raw_jobs, removed_ids=scan.removed or None)
         except OSError as exc:  # repairs live in memory; the next tick retries the persist
             store_health.note_unwritable(exc, "due-scan repairs not persisted", "scan")
-            return due
+            return due, jobs
     # Only now is a skipped one-shot claimed or durably due on disk: normal grace applies again.
     store_health.end_recovery_window(_current_cron_store().cron_dir)
     for emit in scan.on_saved:
         emit()
-    return due
+    return due, jobs
 
 
 # --- Run output ---

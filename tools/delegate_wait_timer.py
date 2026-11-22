@@ -113,38 +113,95 @@ def _bind_and_resume(store, project, wait_id, job_id, definition):
 
 
 def close(store, project, wait_id, args):
-    from cron.jobs import _fire_job_lock, _jobs_lock, remove_job
-    from cron.wait_binding import exact_job, records, store_home
-    from tools.delegate_external_wait import _close, _existing
+    from tools.delegate_external_wait import validate_close
 
-    job_id = _existing(store.read_workspace(project), wait_id)['job_id']
+    snapshot = json.loads(store.get(project)['workspace_json']).get('external_wait')
+    if not isinstance(snapshot, dict) or snapshot.get('wait_id') != wait_id:
+        raise ValueError('No current wait with this exact ID')
+
+    def authorize(current, conn):
+        return validate_close(current, conn, store, args)
+
+    return settle((project, wait_id, snapshot['job_id']), _mutator(store, project), authorize)
+
+
+def _mutator(store, project):
+    from functools import partial
+
+    return partial(store.mutate_workspace, project, active_only=False)
+
+
+def archive_project(store, project, paused):
+    from tools.delegate_project_store import set_project_paused
+
+    project_id = project['subagent_id']
+    mutate = _mutator(store, project_id)
+    snapshot = json.loads(project['workspace_json']).get('external_wait')
+
+    def archive(current, conn):
+        set_project_paused(conn, project_id, paused, True)
+        if current.get('state') in ('CLOSING', 'CLOSED'):
+            return current['close_reason']
+        return 'closed'
+
+    if isinstance(snapshot, dict):
+        return settle((project_id, snapshot['wait_id'], snapshot['job_id']), mutate, archive)
+
+    def archive_without_wait(workspace, conn):
+        if workspace.get('external_wait') is not None:
+            raise ValueError('External wait changed before archive; retry the project archive')
+        archive({}, conn)
+
+    return mutate(archive_without_wait)
+
+
+def settle(identity, mutate, authorize):
+    """Share the fenced CLOSING -> exact removal -> CLOSED path for terminal owners."""
+    from cron.jobs import _fire_job_lock, _jobs_lock, remove_job
+    from cron.wait_binding import exact_job, is_wait_timer_id, matches_wait, records, store_home
+
+    project, wait_id, job_id = identity
+    if not isinstance(wait_id, str) or not wait_id or (job_id is not None and not is_wait_timer_id(job_id)):
+        raise ValueError('Invalid external wait cleanup identity')
+
+    def exact_wait(workspace):
+        current = workspace.get('external_wait')
+        if not matches_wait(current, wait_id, job_id):
+            raise ValueError('External wait changed before closure; retry the exact operation')
+        return current
 
     def begin(workspace, conn):
-        if _existing(workspace, wait_id)['job_id'] != job_id:
-            raise ValueError('External wait timer changed before closure; retry the exact close')
-        return _close(workspace, conn, store, wait_id, args)
-
-    if job_id is None:
-        return store.mutate_workspace(project, begin)
-    store_home()
+        current = exact_wait(workspace)
+        reason = authorize(current, conn)
+        if current['state'] in ('CLOSING', 'CLOSED'):
+            if current.get('close_reason') != reason:
+                raise ValueError('External wait already has a different terminal outcome')
+        elif current['state'] in ('OPEN', 'RESERVED', 'BOUND'):
+            current.update(state='CLOSING' if job_id is not None else 'CLOSED', close_reason=reason)
+        else:
+            raise ValueError('External wait state cannot be closed')
+        return current
 
     def finish(workspace, _conn):
-        current = _existing(workspace, wait_id)
-        if current['state'] != 'CLOSING' or current['job_id'] != job_id:
+        current = exact_wait(workspace)
+        if current['state'] not in ('CLOSING', 'CLOSED'):
             raise ValueError('External wait cleanup state changed')
         current['state'] = 'CLOSED'
         return current
 
+    if job_id is None:
+        return mutate(begin)
+    store_home()
     with _fire_job_lock(job_id) as acquired:
         if not acquired:
             raise ValueError('External wait fire fence unavailable')
-        store.mutate_workspace(project, begin)
+        mutate(begin)
         with _jobs_lock(strict=True):
             if exact_job(records(), job_id, project, wait_id) is not None:
                 remove_job(job_id)
             if exact_job(records(), job_id, project, wait_id) is not None:
                 raise ValueError('External wait timer removal not confirmed')
-        closed = store.mutate_workspace(project, finish)
+        closed = mutate(finish)
     from cron.scheduler import _notify_provider_jobs_changed
 
     _notify_provider_jobs_changed()

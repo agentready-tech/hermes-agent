@@ -3,21 +3,26 @@
 from contextlib import closing, contextmanager
 from datetime import UTC, datetime
 import json
+import logging
 import re
 import sqlite3
 from uuid import uuid4
 
 BINDING_PAUSE = 'External wait binding pending'
+logger = logging.getLogger(__name__)
 
 
 def new_wait_timer_id():
     return 'wait-' + uuid4().hex
 
 
+def is_wait_timer_id(job_id):
+    return isinstance(job_id, str) and re.fullmatch(r'wait-[a-f0-9]{32}', job_id) is not None
+
+
 def is_wait_timer(job):
     # Even if a store loses metadata, this ID may never act as a generic job.
-    job_id = job.get('id')
-    return 'external_wait' in job or (isinstance(job_id, str) and re.fullmatch(r'wait-[a-f0-9]{32}', job_id) is not None)
+    return 'external_wait' in job or is_wait_timer_id(job.get('id'))
 
 
 def binding(project_id, wait_id, state='bound'):
@@ -90,22 +95,110 @@ def stage_job(job, identity):
     return job
 
 
-def _active_wait(home, project_id, wait_id, job_id):
+def _owned_project(conn, project_id):
     from hermes_runtime.sessions import HOME_SESSION_ID
     from hermes_state_runtime import _canonical_chain
 
+    row = conn.execute('SELECT workspace_json, parent_session_id, archived, paused FROM delegated_projects '
+                       'WHERE subagent_id=?', (project_id,)).fetchone()
+    if row is None or row[1] not in _canonical_chain(conn, HOME_SESSION_ID):
+        raise ValueError('External wait has no verified owning main project')
+    workspace = json.loads(row[0])
+    if not isinstance(workspace, dict):
+        raise ValueError('Invalid external wait project workspace')
+    return workspace, row[2], row[3]
+
+
+def matches_wait(wait, wait_id, job_id):
+    return (isinstance(wait, dict) and
+            (wait.get('wait_id'), wait.get('job_id'), wait.get('mode'), wait.get('return_path'))
+            == (wait_id, job_id, 'resume_main', 'timer'))
+
+
+def _active_wait(home, project_id, wait_id, job_id):
     with closing(sqlite3.connect((home / 'state.db').as_uri() + '?mode=ro', uri=True)) as conn:
-        row = conn.execute('SELECT workspace_json, parent_session_id FROM delegated_projects '
-                           'WHERE subagent_id=? AND archived=0 AND paused=0', (project_id,)).fetchone()
-        if row is None or row[1] not in _canonical_chain(conn, HOME_SESSION_ID):
-            return False
-        wait = json.loads(row[0]).get('external_wait', {})
-        if not isinstance(wait, dict) or wait.get('state') != 'BOUND':
+        workspace, archived, paused = _owned_project(conn, project_id)
+        wait = workspace.get('external_wait')
+        if archived or paused or not matches_wait(wait, wait_id, job_id) or wait.get('state') != 'BOUND':
             return False
         deadline = datetime.fromisoformat(wait['deadline'])
-        return ((wait.get('job_id'), wait.get('wait_id'), wait.get('mode'), wait.get('return_path'))
-                == (job_id, wait_id, 'resume_main', 'timer')
-                and deadline.tzinfo is not None and datetime.now(UTC) < deadline)
+        return deadline.tzinfo is not None and datetime.now(UTC) < deadline
+
+
+def _job_identity(job):
+    tag, job_id = job.get('external_wait'), job.get('id')
+    if (not is_wait_timer_id(job_id)
+            or not isinstance(tag, dict) or tag.get('state') not in ('staged', 'bound')):
+        return None
+    project_id, wait_id = tag.get('project_id'), tag.get('wait_id')
+    if not all(isinstance(value, str) and value for value in (project_id, wait_id)):
+        return None
+    return project_id, wait_id, job_id
+
+
+def _terminal_reason(wait, archived, now):
+    state = wait.get('state')
+    if state in ('CLOSING', 'CLOSED'):
+        reason = wait.get('close_reason')
+        # An older access_lost label alone is not evidence. A committed archive is independent proof.
+        if reason in ('reply', 'cancelled', 'closed', 'expired') or (archived == 1 and reason == 'access_lost'):
+            return reason
+        return None
+    if state not in ('RESERVED', 'BOUND'):
+        return None
+    if archived == 1:
+        return 'closed'
+    deadline = datetime.fromisoformat(wait['deadline'])
+    if deadline.tzinfo is not None and deadline <= now:
+        return 'expired'
+    return None
+
+
+def _close_terminal_wait(db_uri, identity, now):
+    from hermes_cli.sqlite_util import transaction
+    from tools.delegate_project_store import write_workspace
+    from tools.delegate_wait_timer import settle
+
+    project_id, wait_id, job_id = identity
+    with closing(sqlite3.connect(db_uri + '?mode=ro', uri=True)) as conn:
+        workspace, archived, _paused = _owned_project(conn, project_id)
+        wait = workspace.get('external_wait')
+        if not matches_wait(wait, wait_id, job_id):
+            raise ValueError('External wait snapshot does not match the job')
+        reason = _terminal_reason(wait, archived, now)
+        if reason is None:
+            return False
+
+    def mutate(change):
+        with transaction(sqlite3.connect(db_uri + '?mode=rw', uri=True), immediate=True) as conn:
+            workspace, archived, _paused = _owned_project(conn, project_id)
+            if (not matches_wait(workspace.get('external_wait'), wait_id, job_id)
+                    or _terminal_reason(workspace['external_wait'], archived, now) != reason):
+                raise ValueError('Terminal external wait evidence changed')
+            return write_workspace(conn, project_id, workspace, change)
+
+    settle(identity, mutate, lambda _wait, _conn: reason)
+    return True
+
+
+def close_terminal_waits(due, snapshot, now):
+    """Finish terminal bindings from the ordinary due scan, after releasing its jobs lock."""
+    candidates = [identity for job in snapshot if (identity := _job_identity(job)) is not None]
+    if not candidates:
+        return due
+    try:
+        db_uri = (store_home() / 'state.db').as_uri()
+    except (ValueError, RuntimeError, OSError):
+        return due  # Admission still requires the owning store.
+    excluded = set()
+    for identity in candidates:
+        try:
+            if _close_terminal_wait(db_uri, identity, now):
+                excluded.add(identity[2])
+        except (ValueError, RuntimeError, OSError, sqlite3.Error, KeyError, TypeError) as error:
+            excluded.add(identity[2])  # Other jobs continue; this ID never wakes on ambiguous evidence.
+            logger.debug('External wait closure deferred for %s (%s)', identity[2], type(error).__name__)
+    return [job for job in due if job['id'] not in excluded]
 
 
 @contextmanager
@@ -113,14 +206,11 @@ def admitted_binding(job):
     """Check the current bound pair under the same per-job fence as removal."""
     from cron.jobs import _fire_job_lock, _jobs_lock, is_job_runnable, is_terminal_job
 
-    tag = job.get('external_wait')
-    job_id = job.get('id')
-    if (not isinstance(job_id, str) or re.fullmatch(r'wait-[a-f0-9]{32}', job_id) is None
-            or not isinstance(tag, dict) or tag.get('state') != 'bound'):
+    identity = _job_identity(job)
+    if identity is None or job['external_wait']['state'] != 'bound':
         raise ValueError('External wait timer is not bound')
-    project_id, wait_id = tag.get('project_id'), tag.get('wait_id')
-    if not isinstance(project_id, str) or not isinstance(wait_id, str):
-        raise ValueError('Invalid external wait timer identity')
+    project_id, wait_id, job_id = identity
+    tag = job['external_wait']
     home = store_home()
     with _fire_job_lock(job_id) as acquired:
         if not acquired:
