@@ -35,6 +35,12 @@ def _duplicate(conn, key):
     return row[0] if row is not None else None
 
 
+def read_linear_receipt(db, key):
+    """Read the committed receipt under the same scoped replay rules as the writer."""
+    with db._read_ctx() as conn:
+        return _duplicate(conn, key)
+
+
 def _insert_receipt(conn, key, admission_id):
     conn.execute('INSERT INTO linear_main_receipts(subscription_id,delivery_id,body_sha256,admission_id) '
                  'VALUES(?,?,?,?)', (key.subscription_id, key.delivery_id, key.body_sha256, admission_id))
