@@ -8,6 +8,7 @@ import sqlite3
 def create(agent, args):
     from cron.jobs import compute_next_run, parse_schedule
     from cron.wait_binding import new_wait_timer_id, store_home
+    from hermes_runtime.adapters.goal_turn import goal_in_scope
     from tools.cronjob_tools import _scan_cron_prompt
     from tools.delegate_external_wait import _existing, _owns_main, _text
     from tools.delegate_project_store import ProjectStore
@@ -42,6 +43,8 @@ def create(agent, args):
         return wait['job_id']
 
     try:
+        if not goal_in_scope(agent, project):
+            raise ValueError('Project Goal is outside the scope of this wake')
         store_home()
         parsed = parse_schedule(schedule)
         if parsed['kind'] not in ('cron', 'interval'):

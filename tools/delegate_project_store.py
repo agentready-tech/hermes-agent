@@ -28,6 +28,25 @@ def set_project_paused(conn, subagent_id, paused, archive):
         conn.execute("UPDATE delegated_project_messages SET state='cancelled',completed_at=?,published=1 WHERE subagent_id=? AND state='pending'", (time.time(), subagent_id))
 
 
+def cancel_goal_inputs(conn, project_id):
+    conn.execute(
+        """UPDATE delegated_project_messages SET state='cancelled',completed_at=?,published=1
+           WHERE state='pending' AND json_extract(origin_json, '$.goal_project_id')=?""",
+        (time.time(), project_id),
+    )
+
+
+def _goal_input_closed(conn, message):
+    goal_id = json.loads(message["origin_json"]).get("goal_project_id")
+    if not goal_id:
+        return False
+    row = conn.execute(
+        "SELECT json_extract(workspace_json, '$.goal_state.status'), archived FROM delegated_projects WHERE subagent_id=?",
+        (goal_id,),
+    ).fetchone()
+    return row is None or row[1] == 1 or row[0] in {"closing", "done", "cancelled"}
+
+
 class ProjectStore:
     def __init__(self, parent):
         from hermes_constants import get_hermes_home
@@ -148,16 +167,20 @@ class ProjectStore:
             conn.row_factory = sqlite3.Row
             # BEGIN IMMEDIATE is owned by sqlite_util.transaction; one child turn per project.
             rows = conn.execute("SELECT * FROM delegated_project_messages WHERE subagent_id=? AND state IN ('pending','running') ORDER BY rowid", (project["subagent_id"],)).fetchall()
-            if not rows:
-                return None
-            row = dict(rows[0])
-            if row["state"] == "running" and (alive is None or alive(row["owner_pid"], row["owner_started_at"])):
-                return None
-            token = uuid.uuid4().hex
-            conn.execute("UPDATE delegated_project_messages SET state='running',owner_pid=?,owner_started_at=?,claim_token=? WHERE message_id=?",
-                         (os.getpid(), get_process_start_time(os.getpid()), token, row["message_id"]))
-            row.update(claim_token=token, recovering=row["state"] == "running")
-            return row
+            for entry in rows:
+                row = dict(entry)
+                if row["state"] == "running" and (alive is None or alive(row["owner_pid"], row["owner_started_at"])):
+                    return None
+                if _goal_input_closed(conn, row):
+                    conn.execute("UPDATE delegated_project_messages SET state='cancelled',completed_at=?,published=1,"
+                                 "owner_pid=NULL,claim_token=NULL WHERE message_id=?", (time.time(), row["message_id"]))
+                    continue
+                token = uuid.uuid4().hex
+                conn.execute("UPDATE delegated_project_messages SET state='running',owner_pid=?,owner_started_at=?,claim_token=? WHERE message_id=?",
+                             (os.getpid(), get_process_start_time(os.getpid()), token, row["message_id"]))
+                row.update(claim_token=token, recovering=row["state"] == "running")
+                return row
+            return None
 
     def settle(self, project, message, result):
         canonical = result.get("status") == "completed" and self.committed_result(project, message) is not None

@@ -460,3 +460,128 @@ def test_confirmed_native_operation_returns_to_its_goal_without_cron(main_home, 
     assert _snapshot(actor, project_id)["final_evidence"] == [identity]
     assert list_jobs() == []
     verifier.assert_called_once()
+
+
+
+def test_recovery_leaves_due_slot_to_owning_cron(main_home, monkeypatch):
+    from datetime import datetime, timedelta
+
+    from cron.jobs import get_job
+    from hermes_runtime.adapters import goal_turn
+    from hermes_runtime.adapters.inbox import HomeInbox
+
+    _, db = main_home
+    actor = _actor(db)
+    goal = _open(actor, "Check the exact supplier thread")
+    wait = _call(actor, **_args(goal))
+    job = _timer(actor, {"action": "create", "project_id": goal, "wait_id": wait["wait_id"],
+                         "schedule": "every 15m", "prompt": "Check the thread"})["job_id"]
+    goal_turn.finish_segment(actor, "Waiting.")
+    due = datetime.fromisoformat(get_job(job)["next_run_at"])
+    monkeypatch.setattr(goal_turn, "datetime", SimpleNamespace(now=lambda _tz: due))
+    monkeypatch.setattr("hermes_runtime.adapters.state.main_gateway_origin", dict)
+    goal_turn.recover()
+    assert _snapshot(actor, goal)["status"] == "waiting"
+    assert HomeInbox().pending() == []
+
+    after_deadline = datetime.fromisoformat(wait["deadline"]) + timedelta(seconds=1)
+    monkeypatch.setattr(goal_turn, "datetime", SimpleNamespace(now=lambda _tz: after_deadline))
+    goal_turn.recover()
+    assert _snapshot(actor, goal)["status"] == "ready"
+    assert len(HomeInbox().pending()) == 1
+
+
+def test_recovery_rotates_a_consumed_wake_without_resaved_transition(main_home, monkeypatch):
+    from hermes_runtime.adapters import goal_turn
+    from hermes_runtime.adapters.inbox import HomeInbox
+
+    _, db = main_home
+    actor = _actor(db)
+    goal = _open(actor, "Continue from the last accepted step")
+    monkeypatch.setattr("hermes_runtime.adapters.state.main_gateway_origin", dict)
+    goal_turn.finish_segment(actor, "Queued.")
+    original = _snapshot(actor, goal)["wake_id"]
+    inbox = HomeInbox()
+    [(identity, content)] = inbox.pending()
+    db.append_message(HOME_SESSION_ID, "user", content, platform_message_id=identity)
+    inbox.acknowledge_recorded()
+    assert inbox.pending() == []
+    assert inbox.event_receipt("goal", original, delivered=True) == identity
+
+    goal_turn.recover()
+    next_wake = _snapshot(actor, goal)["wake_id"]
+    assert next_wake != original
+    [pending] = inbox.pending()
+    assert "reconcile any accepted tool work" in pending[1]
+    goal_turn.recover()
+    assert _snapshot(actor, goal)["wake_id"] == next_wake
+    assert inbox.pending() == [pending]
+
+
+def test_cancel_discards_only_the_goals_queued_work_and_abandoned_claim(main_home, monkeypatch):
+    _, db = main_home
+    actor = _actor(db)
+    goal = _open(actor, "Cancel this task")
+    other_goal = _open(actor, "Keep the unrelated task", slot=2)
+    with ProjectStore(actor) as store:
+        worker = store.create("shared-worker", "Process assignments", "")
+        origin = {"goal_project_id": goal, "wake": True}
+        abandoned = store.enqueue(worker, "Old step", origin, "first")
+        assert store.claim(worker)["message_id"] == abandoned
+        pending = store.enqueue(worker, "Queued step", origin, "second")
+        other = store.enqueue(worker, "Unrelated step", {"goal_project_id": other_goal}, "other")
+        assert _goal(actor, "cancel", project_id=goal)["status"] == "cancelled"
+        assert store.message(pending)["state"] == "cancelled"
+        assert store.message(other)["state"] == "pending"
+        monkeypatch.setattr("tools.delegate_project_store._owner_liveness", lambda: lambda *_: False)
+        assert store.claim(worker)["message_id"] == other
+        assert store.message(abandoned)["state"] == "cancelled"
+
+
+def test_bound_wake_cannot_modify_a_second_goal(main_home):
+    _, db = main_home
+    actor = _actor(db)
+    bound = _open(actor, "First task")
+    other = _open(actor, "Second task", slot=2)
+    segment = GoalSegment(None, True)
+    segment.bind(bound)
+    actor._agentready_active_turn.goal_segment = segment
+    for operation in ("select", "checkpoint"):
+        result = json.loads(dispatch(actor, {"action": "project_goal", "op": operation, "project_id": other}))
+        assert "outside the scope" in result["error"]
+    assert "outside the scope" in _call(actor, **_args(other))["error"]
+    assert segment.project_ids == {bound}
+    assert _snapshot(actor, other)["status"] == "ready"
+
+
+def test_human_followup_keeps_its_reply_during_a_quiet_goal_wake(main_home, monkeypatch):
+    from hermes_runtime.adapters import goal_turn, turns
+    from hermes_runtime.adapters.inbox import HomeInbox
+    from hermes_runtime.events import event_prompt
+
+    _, db = main_home
+    actor = _actor(db)
+    goal = _open(actor, "Wait for a significant update")
+    monkeypatch.setattr("hermes_runtime.adapters.state.main_gateway_origin", dict)
+    goal_turn.finish_segment(actor, "Queued.")
+    inbox = HomeInbox()
+    [wake] = inbox.pending()
+    followup = event_prompt("Which step are you on?", "agentready", "panel:fixture", {})
+    receipt, accepted = inbox.enqueue(followup)
+    assert accepted
+    turn = SimpleNamespace(inbox=inbox, take_records=lambda: [(receipt, followup)])
+    actor._agentready_active_turn = turn
+    actor._flush_messages_to_session_db = Mock(return_value=True)
+
+    def model(_prompt, **_kwargs):
+        assert actor._mute_notification_reply is True
+        messages = []
+        turns.after_tool_group(actor, messages)
+        assert messages[-1]["platform_message_id"] == receipt
+        assert not getattr(actor, "_mute_notification_reply", False)
+        return {"completed": True, "final_response": goal_turn.finish_segment(actor, "The current step is saved.")}
+
+    result = goal_turn.run_segment(actor, turn, model, wake[1], goal_records=[wake], conversation_history=[])
+    assert result["final_response"] == "The current step is saved."
+    assert not result.get("_notification_reply_muted")
+    assert _snapshot(actor, goal)["status"] == "ready"

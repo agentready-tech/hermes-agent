@@ -3,7 +3,7 @@
 from datetime import datetime
 
 
-def has_live_timer(wait, project_id, now):
+def has_live_timer(wait, project_id, now, *, include_due=False):
     from cron.jobs import _peek_jobs_unlocked
     from cron.wait_binding import exact_job
     from hermes_runtime.standalone.events import main_schedule_origin, validate_main_schedule
@@ -36,6 +36,7 @@ def has_live_timer(wait, project_id, now):
         validate_main_schedule(job)
         next_run = datetime.fromisoformat(job.get('next_run_at'))
         deadline = datetime.fromisoformat(wait.get('deadline'))
-        return next_run.tzinfo is not None and deadline.tzinfo is not None and now < next_run < deadline
+        return (next_run.tzinfo is not None and deadline.tzinfo is not None and now < deadline
+                and next_run < deadline and (include_due or now < next_run))
     except (ValueError, TypeError):
         return False

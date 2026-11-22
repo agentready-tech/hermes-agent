@@ -49,12 +49,17 @@ def read_goal(store, project_id):
     return goal
 
 
-def mutate_goal(store, project_id, change):
-    def apply(workspace, _conn):
+def mutate_goal(store, project_id, change, *, retire_pending=False):
+    def apply(workspace, conn):
         current = workspace.get(KEY)
         if not isinstance(current, dict):
             raise ValueError("No Goal is open for this project")
-        return change(current)
+        updated = change(current)
+        if retire_pending and updated["status"] == "closing":
+            from tools.delegate_project_store import cancel_goal_inputs
+
+            cancel_goal_inputs(conn, project_id)
+        return updated
     return store.mutate_workspace(project_id, apply)
 
 
@@ -210,7 +215,7 @@ def close_goal(store, project_id, outcome, evidence=()):
             goal.update(status="closing", outcome=outcome, final_evidence=list(evidence))
         return goal
 
-    current = mutate_goal(store, project_id, begin)
+    current = mutate_goal(store, project_id, begin, retire_pending=True)
     if current["status"] != "closing":
         return current
     close_wait(store, project_id, "cancelled" if outcome == "cancelled" else "closed")
@@ -252,6 +257,7 @@ def _change_status(store, segment, project_id, op, args):
 
 
 def dispatch(agent, args):
+    from hermes_runtime.adapters.goal_turn import goal_in_scope
     from tools.delegate_external_wait import _owns_main
 
     segment = getattr(getattr(agent, "_agentready_active_turn", None), "goal_segment", None)
@@ -267,12 +273,15 @@ def dispatch(agent, args):
                     {"project_id": p["subagent_id"], "goal": p["goal"], "status": goal["status"]}
                     for p in store.projects()
                     if not p["paused"] and not p["archived"]
+                    and goal_in_scope(agent, p["subagent_id"])
                     and (goal := json.loads(p["workspace_json"]).get(KEY)) and active_goal(goal)
                 ]})
             if op == "open":
                 project_id, saved = _open(store, segment, args)
             else:
                 project_id = _text(args, "project_id", required=True, limit=128)
+                if not goal_in_scope(agent, project_id):
+                    raise ValueError("Project Goal is outside the scope of this wake")
                 if op == "select":
                     saved = read_goal(store, project_id)
                     if active_goal(saved) and saved["status"] != "blocked":

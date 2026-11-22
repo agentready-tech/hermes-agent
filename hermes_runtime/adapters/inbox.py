@@ -20,10 +20,12 @@ class HomeInbox:
         return transaction(open_db(path, db_label="state.db (managed inbox)", wal=False,
                                    busy_timeout_ms=10000, initialize=_initialize_schema), immediate=True)
 
-    def event_receipt(self, source, event_id):
+    def event_receipt(self, source, event_id, *, delivered=False):
         with self.transaction() as conn:
-            row = conn.execute("SELECT message_id FROM agentready_inbox WHERE event_key=?",
-                               (json.dumps([source, event_id]),)).fetchone()
+            row = conn.execute(
+                "SELECT message_id FROM agentready_inbox WHERE event_key=? AND (?=0 OR delivered_at IS NOT NULL)",
+                (json.dumps([source, event_id]), int(delivered)),
+            ).fetchone()
         return row[0] if row is not None else None
 
     def enqueue(self, content, *, input_id=None):

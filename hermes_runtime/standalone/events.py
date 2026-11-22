@@ -75,6 +75,10 @@ def enqueue(prompt, source, event_id, metadata=None):
     return {"message_id": identity, "pending": pending}
 
 
+def scheduled_prompt_id(source, event_id):
+    return f"main-{source}-" + hashlib.sha256(event_id.encode()).hexdigest()
+
+
 def _admit_scheduled_prompt(prompt, event_id, metadata, *, source="cron"):
     from hermes_runtime.adapters.state import main_gateway_origin, current_home_session_id
     from hermes_runtime.events import event_prompt
@@ -96,7 +100,7 @@ def _admit_scheduled_prompt(prompt, event_id, metadata, *, source="cron"):
         origin["main_project_event"] = {"source": source, "event_id": event_id, "metadata": metadata}
     if source == "goal" or metadata.get("project_goal"):
         origin["goal_project_id"] = metadata["project_id"]
-    identity = f"main-{source}-" + hashlib.sha256(event_id.encode()).hexdigest()
+    identity = scheduled_prompt_id(source, event_id)
     # The native gateway owns this wake and its reply. A raw session-id wake is
     # claimed by the internal UI and loses the originating messaging transport.
     description = "Run the scheduled prompt in the main conversation" if source == "cron" else "Continue the saved Project Goal"

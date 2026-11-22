@@ -30,6 +30,7 @@ class GoalSegment:
     internal: bool
     history_tool_results: set[str] = field(default_factory=set)
     project_ids: set[str] = field(default_factory=set)
+    bound_project_ids: set[str] = field(default_factory=set)
     wake_ids: dict[str, str] = field(default_factory=dict)
     selected_id: str | None = None
     notify: bool = False
@@ -43,6 +44,7 @@ class GoalSegment:
         self.selected_id = project_id
 
     def bind(self, project_id):
+        self.bound_project_ids.add(project_id)
         self.project_ids.add(project_id)
         self.selected_id = project_id if len(self.project_ids) == 1 else None
 
@@ -50,6 +52,12 @@ class GoalSegment:
 def current_segment(agent):
     segment = getattr(getattr(agent, "_agentready_active_turn", None), "goal_segment", None)
     return segment if isinstance(segment, GoalSegment) else None
+
+
+def goal_in_scope(agent, project_id):
+    segment = current_segment(agent)
+    return (segment is None or not segment.internal or not segment.bound_project_ids
+            or project_id in segment.bound_project_ids)
 
 
 def _automation(row):
@@ -219,7 +227,7 @@ def ingest_records(agent, records):
     if _ingest(agent, segment, records) < len(records):
         segment.quiet_source = False
         if not segment.internal:
-            agent._mute_notification_reply = False
+            segment.quiet = False
     return _without_obsolete(agent._agentready_active_turn, segment, records)
 
 
@@ -317,7 +325,7 @@ def _working(store, project_id):
     ))
 
 
-def _waiting(store, project_id):
+def _waiting(store, project_id, *, include_due=False):
     from cron.wait_binding import store_home
     from cron.wait_evidence import has_live_timer
 
@@ -328,7 +336,7 @@ def _waiting(store, project_id):
         store_home()
     except (ValueError, RuntimeError, OSError):
         return None
-    if has_live_timer(wait, project_id, datetime.now(UTC)):
+    if has_live_timer(wait, project_id, datetime.now(UTC), include_due=include_due):
         return wait["wait_id"]
     return None
 
@@ -343,7 +351,7 @@ def _branch(store, project_id, goal):
         return {"status": "running", "wake_id": None, "attempts_without_progress": 0}
     if _awaiting_operation(store, goal):
         return {"status": "awaiting_operation", "wake_id": None, "attempts_without_progress": 0}
-    if wait_id := _waiting(store, project_id):
+    if wait_id := _waiting(store, project_id, include_due=goal["status"] == "waiting"):
         return {"status": "waiting", "wait_id": wait_id, "wake_id": None, "attempts_without_progress": 0}
     return {"status": "ready"}
 
@@ -379,9 +387,34 @@ def _publish(project_id, goal):
 
     if goal["status"] == "ready" and goal.get("wake_id"):
         _admit_scheduled_prompt(
-            "Continue the saved Project Goal. Read its last confirmed stage and perform the next applicable step.",
+            "Continue the saved Project Goal. Read its last confirmed stage and reconcile any accepted tool work "
+            "before performing the next applicable step. Do not repeat external effects with unknown outcomes.",
             goal["wake_id"], {"project_id": project_id}, source="goal",
         )
+
+
+def _consumed_wake(store, wake_id):
+    from gateway.session_automation import find_automation_admission
+    from hermes_runtime.adapters.inbox import HomeInbox
+    from hermes_runtime.sessions import HOME_SESSION_ID
+    from hermes_runtime.standalone.events import scheduled_prompt_id
+
+    if HomeInbox(store.db_path.resolve().parent).event_receipt("goal", wake_id, delivered=True):
+        return True
+    native_id = scheduled_prompt_id("goal", wake_id)
+    ledger = store.db._read_one("SELECT delivery_state FROM async_delegations WHERE delegation_id=?", (native_id,))
+    if not ledger or ledger[0] != "delivered":
+        return False
+    identity = json.dumps(["async_delegation", native_id, ""], separators=(",", ":"))
+    admission = find_automation_admission(store.db, HOME_SESSION_ID, identity)
+    return bool(admission and admission["status"] == "terminal" and admission["outcome"] in {"completed", "failed"})
+
+
+def _recover_ready(store, project_id, goal):
+    wake_id = goal.get("wake_id")
+    if not wake_id or _consumed_wake(store, wake_id):
+        goal = _write_transition(store, project_id, _branch(store, project_id, goal), None, wake_id)
+    _publish(project_id, goal)
 
 
 def finish_segment(agent, response, *, verify=True, final_message=None):
@@ -450,9 +483,9 @@ def recover():
                 goal = read_goal(store, project_id)
                 if goal["status"] == "closing":
                     close_goal(store, project_id, goal["outcome"], goal["final_evidence"])
-                elif goal["status"] == "ready" and goal.get("wake_id"):
-                    _publish(project_id, goal)
-                elif (goal["status"] == "ready" or goal["status"] == "waiting" and not _waiting(store, project_id)
+                elif goal["status"] == "ready":
+                    _recover_ready(store, project_id, goal)
+                elif (goal["status"] == "waiting" and not _waiting(store, project_id, include_due=True)
                       or goal["status"] == "awaiting_operation" and not _awaiting_operation(store, goal)):
                     branch = _branch(store, project_id, goal)
                     current = _write_transition(store, project_id, branch, None, None)

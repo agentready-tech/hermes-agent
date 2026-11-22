@@ -157,6 +157,7 @@ def validate_close(current, conn, store, args):
 
 def dispatch(agent, args):
     """Handle an explicit native action; the shared registry/MCP handler does not dispatch it."""
+    from hermes_runtime.adapters.goal_turn import goal_in_scope
     from tools.delegate_project_store import ProjectStore
 
     if getattr(agent, "_agentready_active_turn", None) is None or not _owns_main(agent):
@@ -167,6 +168,8 @@ def dispatch(agent, args):
             raise ValueError("Expected open, select or close with an exact project_id")
         if args.keys() - ({"action", "op", "project_id"} | _FIELDS[op]):
             raise ValueError("Unexpected fields for this external wait operation")
+        if not goal_in_scope(agent, project_id):
+            raise ValueError("Project Goal is outside the scope of this wake")
         with ProjectStore(agent) as store:
             current = _apply(store, project_id, op, args)
     except (ValueError, RuntimeError, OSError, sqlite3.Error) as error:
