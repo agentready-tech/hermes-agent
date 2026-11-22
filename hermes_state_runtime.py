@@ -134,30 +134,34 @@ def admit_session_input(db, *, epoch: int, principal_id: str, session_id: str,
     if retired is not None:
         return retired
     digest = admission_fingerprint(canonical_target=session_id, payload={'input': json.loads(encoded), 'intent': intent})
-    def write(conn):
-        _epoch(conn, epoch)
-        _session(conn, session_id)
-        old = conn.execute('''SELECT * FROM session_admissions
-            WHERE principal_id=? AND target_session_id=? AND request_id=?''', (principal_id, session_id, request_id)).fetchone()
-        if old is not None:
-            if old['payload_digest'] != digest:
-                raise RuntimeStoreError('admission_conflict')
-            return _row(old)
-        queued = conn.execute('''SELECT COUNT(*) FROM session_admissions WHERE target_session_id=?
-            AND status='queued' ''', (session_id,)).fetchone()[0]
-        # Main's cap holds in both states: a FIFO paused behind an unknown turn runs every accepted
-        # input after Discard, so it must not grow without bound while nobody resolves it.
-        if queued >= ADMISSION_QUEUE_MAX:
-            raise RuntimeStoreError('queue_full')
-        if _authorize_write is not None:
-            _authorize_write(conn)
-        admission_id = uuid.uuid4().hex
-        conn.execute('''INSERT INTO session_admissions(admission_id,request_id,principal_id,
-            target_session_id,lineage_json,payload_json,payload_digest,intent,status,owner_epoch)
-            VALUES(?,?,?,?,?,?,?,?,'queued',?)''',
-            (admission_id, request_id, principal_id, session_id, json.dumps([session_id]), encoded, digest, intent, epoch))
-        return _row(_admission(conn, admission_id))
-    return db._execute_write(write)
+    return db._execute_write(lambda conn: _admit_input_in_transaction(
+        conn, epoch=epoch, principal_id=principal_id, session_id=session_id, request_id=request_id,
+        encoded=encoded, digest=digest, intent=intent, authorize=_authorize_write))
+
+
+def _admit_input_in_transaction(conn, *, epoch, principal_id, session_id, request_id,
+                                encoded, digest, intent, authorize):
+    _epoch(conn, epoch)
+    _session(conn, session_id)
+    old = conn.execute('''SELECT * FROM session_admissions
+        WHERE principal_id=? AND target_session_id=? AND request_id=?''', (principal_id, session_id, request_id)).fetchone()
+    if old is not None:
+        if old['payload_digest'] != digest:
+            raise RuntimeStoreError('admission_conflict')
+        return _row(old)
+    queued = conn.execute('''SELECT COUNT(*) FROM session_admissions WHERE target_session_id=?
+        AND status='queued' ''', (session_id,)).fetchone()[0]
+    # A FIFO paused behind an unknown turn must not grow without bound.
+    if queued >= ADMISSION_QUEUE_MAX:
+        raise RuntimeStoreError('queue_full')
+    if authorize is not None:
+        authorize(conn)
+    admission_id = uuid.uuid4().hex
+    conn.execute('''INSERT INTO session_admissions(admission_id,request_id,principal_id,
+        target_session_id,lineage_json,payload_json,payload_digest,intent,status,owner_epoch)
+        VALUES(?,?,?,?,?,?,?,?,'queued',?)''',
+        (admission_id, request_id, principal_id, session_id, json.dumps([session_id]), encoded, digest, intent, epoch))
+    return _row(_admission(conn, admission_id))
 
 
 def get_session_admission(db, *, admission_id: str) -> dict | None:

@@ -548,6 +548,24 @@ CREATE TABLE IF NOT EXISTS session_admissions (
 );
 CREATE INDEX IF NOT EXISTS session_admissions_pending
     ON session_admissions(target_session_id, status, seq);
+CREATE TABLE IF NOT EXISTS linear_main_receipts (
+    subscription_id TEXT NOT NULL,
+    delivery_id TEXT NOT NULL,
+    body_sha256 TEXT NOT NULL,
+    admission_id TEXT NOT NULL UNIQUE,
+    terminal_at INTEGER,
+    PRIMARY KEY (subscription_id, delivery_id),
+    UNIQUE (subscription_id, body_sha256)
+);
+CREATE INDEX IF NOT EXISTS linear_main_receipts_terminal ON linear_main_receipts(terminal_at)
+    WHERE terminal_at IS NOT NULL;
+CREATE TRIGGER IF NOT EXISTS linear_main_receipts_settle
+AFTER UPDATE OF status ON session_admissions
+WHEN OLD.status != 'terminal' AND NEW.status = 'terminal'
+BEGIN
+    UPDATE linear_main_receipts SET terminal_at=CAST(strftime('%s','now') AS INTEGER)
+    WHERE admission_id=NEW.admission_id AND terminal_at IS NULL;
+END;
 -- Cron run history finds a job's unified-runtime runs by the scheduler principal's request ids
 -- (``cron:<job>:<execution>``); without this a lookup walked
 -- every cron admission of every job. Partial: interactive turns, the bulk of admissions, pay

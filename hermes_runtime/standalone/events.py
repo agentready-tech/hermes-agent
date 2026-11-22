@@ -63,16 +63,20 @@ def enqueue(prompt, source, event_id, metadata=None):
     inbox = HomeInbox()
     identity, pending = inbox.enqueue(content)
     if pending:
-        from hermes_runtime.adapters.turns import forward_to_active_turn
-        try:
-            original = dict(inbox.pending()).get(identity)
-            if original is not None:
-                forward_to_active_turn(original)
-        except (OSError, RuntimeError):
-            # Admission is already durable. The bound backend will wake it even
-            # if the active turn closes between accepting the receipt and IPC.
-            logger.info("Event accepted; active-turn handoff deferred to inbox recovery")
+        _forward_pending_event(inbox, identity)
     return {"message_id": identity, "pending": pending}
+
+
+def _forward_pending_event(inbox, identity):
+    from hermes_runtime.adapters.turns import forward_to_active_turn
+
+    try:
+        original = dict(inbox.pending()).get(identity)
+        if original is not None:
+            forward_to_active_turn(original)
+    except (OSError, RuntimeError):
+        # Admission is already durable; the backend can recover after IPC failure.
+        logger.info("Event accepted; active-turn handoff deferred to inbox recovery")
 
 
 def _admit_scheduled_prompt(prompt, event_id, metadata):

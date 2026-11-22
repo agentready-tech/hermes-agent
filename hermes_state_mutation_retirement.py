@@ -49,6 +49,8 @@ def retire_terminal_receipts(conn, session_ids):
             raise RuntimeStoreError('unknown_execution' if 'unknown' in states else 'session_busy')
         for raw in admissions:
             row = dict(raw)
+            conn.execute("UPDATE linear_main_receipts SET terminal_at=CAST(strftime('%s','now') AS INTEGER) "
+                         "WHERE admission_id=? AND terminal_at IS NULL", (row['admission_id'],))
             from hermes_state_media import retire_media
             retire_media(conn, json.loads(row['payload_json']), row['request_id'])
             # Keep the digest for exact retries, not another copy of user input/history.

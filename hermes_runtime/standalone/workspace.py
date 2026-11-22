@@ -1,6 +1,5 @@
 """Managed mailbox ingress into the existing durable home inbox."""
 
-import hashlib
 import json
 import logging
 import signal
@@ -12,33 +11,16 @@ logger = logging.getLogger(__name__)
 
 
 def admit_mail(prompt, source, event_id, metadata=None, *, session_store=None):
-    """Let the native gateway own a mail reply, including while Panel owns a turn.
+    """Admit mail called directly inside an already bound managed profile."""
+    from hermes_runtime.adapters.hermes import managed_home
 
-    Injecting into HomeInbox would lend the mail the foreground UI's transport.
-    The existing durable gateway admission instead runs once in the same main
-    history and keeps its committed messaging destination through retries.
-    """
-    from hermes_runtime.adapters.inbox import HomeInbox
-    from hermes_runtime.adapters.state import main_gateway_origin, current_home_session_id
-    from hermes_runtime.events import event_prompt
-    from hermes_runtime.standalone.events import enqueue
-    from tools.delegate_project_recovery import publish_wakeup
+    return _admit_profile_mail(managed_home(), prompt, source, event_id, metadata, session_store=session_store)
 
-    if not str(prompt).strip() or not event_id or not source:
-        raise ValueError("An event requires nonempty content, source and stable event_id")
-    key = json.dumps([source, event_id])
-    with HomeInbox().transaction() as conn:
-        legacy = conn.execute("SELECT message_id,delivered_at FROM agentready_inbox WHERE event_key=?", (key,)).fetchone()
-    if legacy is not None:
-        # A cursor-write retry across an upgrade must not execute an old mail again.
-        return {"message_id": legacy[0], "pending": legacy[1] is None}
-    origin = main_gateway_origin() if session_store is None else main_gateway_origin(session_store=session_store)
-    if not origin:
-        return enqueue(prompt, source, event_id, metadata)
-    identity = "main-mail-" + hashlib.sha256(key.encode()).hexdigest()
-    publish_wakeup(identity, current_home_session_id(), origin, event_prompt(prompt, source, event_id, metadata),
-                   goal="Process the incoming email in the existing main conversation")
-    return {"message_id": identity}
+
+def _admit_profile_mail(home, prompt, source, event_id, metadata=None, *, session_store=None):
+    from hermes_runtime.standalone.main_admission import WorkspaceMail, admit_main
+
+    return admit_main(home, WorkspaceMail(prompt, source, event_id, metadata, session_store))
 
 
 def admit_batches(home, response, cursors, *, admit=None, save=None):
@@ -49,7 +31,7 @@ def admit_batches(home, response, cursors, *, admit=None, save=None):
     """
     from utils import atomic_json_write
 
-    admit = admit or admit_mail
+    admit = admit or partial(_admit_profile_mail, home)
     save = save or (lambda value: atomic_json_write(
         Path(home) / "autonomous" / "workspace-cursors.json", value, mode=0o600, fsync_dir=True))
     for batch in response.get("batches", []):
@@ -89,7 +71,7 @@ def run_polls(home, stopped, *, session_store=None):
 
     path = Path(home) / "autonomous" / "workspace-cursors.json"
     cursors = None
-    admit = partial(admit_mail, session_store=session_store) if session_store is not None else None
+    admit = partial(_admit_profile_mail, home, session_store=session_store)
     while not stopped.is_set():
         interval = 60
         try:

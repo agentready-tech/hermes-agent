@@ -80,21 +80,25 @@ def publish_recovery_wakeups():
 
 
 def publish_wakeup(identity, parent, origin, summary, *, agent_message=False, goal="Restore accepted work after restart"):
-    # One deterministic recovery notice per abandoned owner/input, including across
-    # the managed serve and messaging gateway processes sharing this profile.
     with _transaction() as conn:
-        if conn.execute("SELECT 1 FROM async_delegations WHERE delegation_id=?", (identity,)).fetchone():
-            return False
-        now = time.time()
-        event = {"type": "async_delegation", "delegation_id": identity, "parent_session_id": parent,
-            "durable_recovery": True, "agent_message": agent_message,
-            "origin_session_id": origin.get("origin_session_id", ""), "status": "completed", "summary": summary,
-            "goal": goal, "dispatched_at": now, "completed_at": now,
-            **{k: v for k, v in origin.items() if k != "wake"}}
-        event["session_key"] = event.get("session_key") or parent
-        # Persist both halves on the same admitted transaction, rather than holding
-        # this lock while calling the public completion writers on another connection.
-        conn.execute("INSERT INTO async_delegations(delegation_id,origin_session,origin_ui_session_id,parent_session_id,state,dispatched_at,completed_at,updated_at,event_json,result_json,delivery_state,origin_session_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (identity, event.get("session_key", ""), event.get("origin_ui_session_id", ""), parent, "completed", now,
-             now, now, json.dumps(event), json.dumps({"summary": summary}), "pending", parent))
+        inserted = _write_wakeup_in_transaction(conn, identity, parent, origin, summary,
+                                                agent_message=agent_message, goal=goal)
+    return inserted
+
+
+def _write_wakeup_in_transaction(executor, identity, parent, origin, summary, *, agent_message, goal):
+    """Stage the wakeup on the owner's active transaction without committing it."""
+    # The deterministic notice is shared by serve and gateway in this profile.
+    if executor.execute("SELECT 1 FROM async_delegations WHERE delegation_id=?", (identity,)).fetchone():
+        return False
+    now = time.time()
+    event = {"type": "async_delegation", "delegation_id": identity, "parent_session_id": parent,
+        "durable_recovery": True, "agent_message": agent_message,
+        "origin_session_id": origin.get("origin_session_id", ""), "status": "completed", "summary": summary,
+        "goal": goal, "dispatched_at": now, "completed_at": now,
+        **{k: v for k, v in origin.items() if k != "wake"}}
+    event["session_key"] = event.get("session_key") or parent
+    executor.execute("INSERT INTO async_delegations(delegation_id,origin_session,origin_ui_session_id,parent_session_id,state,dispatched_at,completed_at,updated_at,event_json,result_json,delivery_state,origin_session_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (identity, event.get("session_key", ""), event.get("origin_ui_session_id", ""), parent, "completed", now,
+         now, now, json.dumps(event), json.dumps({"summary": summary}), "pending", parent))
     return True
