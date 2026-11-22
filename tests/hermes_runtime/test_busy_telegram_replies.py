@@ -7,6 +7,8 @@ from contextlib import closing
 from dataclasses import replace
 from http.server import ThreadingHTTPServer
 import sqlite3
+import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,8 +21,8 @@ from tests.waiting import async_wait_until
 
 class _ToolProvider(Provider):
     def do_POST(self):
-        step = len(self.server.calls)
-        if step >= 2:
+        step = len(self.server.calls) - self.server.seed_calls
+        if not 0 <= step < 2:
             return super().do_POST()
         body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         self.server.calls.append(body)
@@ -75,6 +77,7 @@ class _Telegram(BasePlatformAdapter):
 @pytest.mark.asyncio
 @pytest.mark.parametrize('followup', [
     'at-tool-boundary', 'after-final-model-call', 'native-queue', 'recover-follower', 'explicit-steer',
+    'coordination-panel', 'coordination-telegram',
 ])
 async def test_busy_telegram_reply_boundary(tmp_path, monkeypatch, followup):
     from gateway import delivery_ledger
@@ -88,9 +91,11 @@ async def test_busy_telegram_reply_boundary(tmp_path, monkeypatch, followup):
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
     monkeypatch.setattr('hermes_state.DEFAULT_DB_PATH', tmp_path / 'state.db')
     monkeypatch.setattr(delivery_ledger, '_db_path', lambda: tmp_path / 'state.db')
-    with_tool = followup == 'at-tool-boundary'
+    coordination = followup.startswith('coordination-')
+    with_tool = followup == 'at-tool-boundary' or coordination
     provider = ThreadingHTTPServer(('127.0.0.1', 0), _ToolProvider if with_tool else Provider)
     provider.calls = []
+    provider.seed_calls = int(coordination)
     provider.block_next = not with_tool
     browser_cleanups = []
     if followup == 'after-final-model-call':
@@ -140,30 +145,81 @@ async def test_busy_telegram_reply_boundary(tmp_path, monkeypatch, followup):
         second_text = '/steer ' + second_text
     second = MessageEvent(text=second_text, source=source, message_id='102')
 
-    def rows(sql):
-        with closing(sqlite3.connect(tmp_path / 'state.db')) as db:
-            return db.execute(sql).fetchall()
+    def rows(sql, parameters=()):
+        with closing(sqlite3.connect(tmp_path / 'state.db')) as db, db:
+            return db.execute(sql, parameters).fetchall()
 
     try:
         await adapter.handle_message(first)
+        if coordination:
+            await async_wait_until(lambda: len(adapter.replies) == 1 and authority.sessions[HOME_SESSION_ID].task.done(),
+                                   timeout=20, what='seed reply and bound Telegram origin')
+            adapter.replies.clear()
+            mail_id = 'agent-mail-' + 'a' * 32
+            rows('''INSERT INTO delegation_mail(message_id,root_session_id,sender_session_id,target_session_id,
+                    content,content_hash,kind,origin_json,accepted_at) VALUES(?,?,?,?,?,?,'message',?,?)''',
+                 (mail_id, HOME_SESSION_ID, 'sender', 'child-fixture', 'Coordination detail', 'fixture', '{}', time.time()))
+            identity = json.dumps(['async_delegation', mail_id, ''])
+            route = adapter._event_session_key(first)
+            await authority.admit_automation(adapter, MessageEvent(
+                text='Private coordination wake', source=source, internal=True,
+                metadata={'gateway_session_key': route, 'gateway_session_id': HOME_SESSION_ID},
+            ), identity)
         await async_wait_until(provider.entered.is_set, timeout=20, what='running tool or first model call')
         live = authority.sessions[HOME_SESSION_ID]
-        await asyncio.wait_for(adapter.handle_message(second), timeout=5)
+        if followup == 'coordination-panel':
+            from gateway.session_controls import AuthorityConnection
+            panel = AuthorityConnection(authority, SimpleNamespace(write=lambda _frame: True), {
+                'user_id': 'panel-fixture', 'provider': 'local', 'profile_id': str(tmp_path),
+                'instance_id': 'busy-replies', 'native_bootstrap': True,
+            })
+            await panel.dispatch({'id': 1, 'method': 'session.resume', 'params': {'session_id': HOME_SESSION_ID}})
+            receipt = await panel.dispatch({'id': 2, 'method': 'panel.prompt.submit', 'params': {
+                'session_id': HOME_SESSION_ID, 'text': second_text, 'submission_id': 'panel-coordination-correction',
+                'clarify_batch': True,
+            }})
+            assert receipt['result']['status'] == 'steered'
+        else:
+            await asyncio.wait_for(adapter.handle_message(second), timeout=5)
         before = rows('SELECT request_id, target_session_id, status FROM session_admissions ORDER BY seq')
         provider.release.set()
         clarification_reply = 'I received the clarification. Continuing the review.'
         if with_tool:
             await async_wait_until(next_tool_entered.is_set, timeout=10, what='tool after clarification')
-            await async_wait_until(lambda: any(row[1] == clarification_reply for row in adapter.replies),
-                                   timeout=5, what='interim Telegram reply during the tool')
+            if followup != 'coordination-panel':
+                await async_wait_until(lambda: any(row[1] == clarification_reply for row in adapter.replies),
+                                       timeout=5, what='interim Telegram reply during the tool')
+            if coordination:
+                frames = live.event_stream.since(live.event_stream.epoch, 0)['events']
+                visible = ''.join(frame['payload'].get('text') or '' for frame in frames
+                                  if frame['type'] in {'message.interim', 'message.delta'})
+                assert clarification_reply in visible
+                assert 'Checking the requested delivery.' not in visible
             assert not live.task.done()
             next_tool_release.set()
-        expected_calls = 3 if with_tool else 2
+        expected_calls = (3 if with_tool else 2) + provider.seed_calls
         await async_wait_until(lambda: len(provider.calls) == expected_calls and live.task.done(),
                                timeout=20, what='completed model calls')
         if adapter._background_tasks:
             await asyncio.wait_for(asyncio.gather(*tuple(adapter._background_tasks)), timeout=10)
         text = 'Delivery reviewed in the same main session.'
+        if coordination:
+            model_input = provider.calls[2]['messages']
+            tool_index = next(i for i, row in enumerate(model_input) if row['role'] == 'tool')
+            assert model_input[tool_index + 1]['role'] == 'user'
+            assert second_text in model_input[tool_index + 1]['content']
+            assert rows('SELECT COUNT(*) FROM session_admissions') == [(2,)]
+            assert rows('SELECT COUNT(*) FROM agentready_inbox WHERE delivered_at IS NOT NULL') == [(1,)]
+            for visible in (second_text, clarification_reply):
+                assert rows('SELECT display_kind FROM messages WHERE content LIKE ?', ('%' + visible + '%',)) == [(None,)]
+            assert rows('SELECT display_kind FROM messages WHERE role=? ORDER BY id DESC LIMIT 1', ('assistant',)) == [(None,)]
+            for hidden in ('Private coordination wake', 'Checking the requested delivery.'):
+                assert rows('SELECT display_kind FROM messages WHERE content LIKE ?', ('%' + hidden + '%',)) == [('hidden',)]
+            assert [item[1] for item in adapter.replies] == (
+                [] if followup == 'coordination-panel' else [clarification_reply, text])
+            frames = live.event_stream.since(live.event_stream.epoch, 0)['events']
+            assert sum(frame['type'] == 'message.complete' for frame in frames) == 2
+            return
         if with_tool:
             assert before == [('101', HOME_SESSION_ID, 'started')]
             followup_messages = provider.calls[1]['messages']

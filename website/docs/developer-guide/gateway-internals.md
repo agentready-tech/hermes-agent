@@ -192,6 +192,13 @@ A subsequent clarification must never replace an already completed reply. Public
 interim replies are shown live in Panel and reconstructed from its history on
 reconnect. Private reasoning is never part of that projection.
 
+A diagnostic or coordination wake keeps its earlier rows private. When an
+authenticated chat input reaches the tool boundary, the input and subsequent
+assistant replies become visible in the same conversation. A Telegram reply
+uses the authenticated input's chat and topic. When multiple inbox inputs share
+one transcript row, retain every receipt so none of them can be replayed after
+they have been recorded.
+
 Do not change these guarantees without explicit product-owner approval.
 `tests/hermes_runtime/test_busy_telegram_replies.py` and
 `tests/hermes_runtime/test_panel_main_queue.py` hold a tool open, submit a

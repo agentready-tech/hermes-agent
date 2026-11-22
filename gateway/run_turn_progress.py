@@ -131,6 +131,8 @@ class GatewayTurnProgressMixin:
         if isinstance(event_type, str) and event_type.startswith('subagent.'):
             from hermes_runtime.adapters.main_subagents import changed
             changed(self, event_type)
+        if ctx.mute_notification_reply:
+            return
         # Failed subagent → one clean user-facing notice, handled FIRST, before every progress-queue
         # gate: platforms with tool_progress off must still hear about a dead delegation.
         if event_type == "subagent.complete":
