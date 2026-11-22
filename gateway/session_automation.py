@@ -29,12 +29,17 @@ def completion_admission(runner, event):
     entry = runner.session_store.lookup_by_session_key(str(event.get('session_key') or ''))
     if entry is None:
         return None
-    from hermes_state_runtime import list_session_admissions
     identity = producer_identity(runner, event)
     # Compression moves the route's transcript to a child; admissions stay on the logical root.
     sid = (entry.origin.chat_id if entry.origin.platform == Platform.LOCAL
            else authority.logical_owner(entry.session_id))
-    for row in list_session_admissions(authority.db, session_id=sid, pending_only=False):
+    return find_automation_admission(authority.db, sid, identity)
+
+
+def find_automation_admission(db, session_id, identity):
+    from hermes_state_runtime import list_session_admissions
+
+    for row in list_session_admissions(db, session_id=session_id, pending_only=False):
         descriptor = row['payload'].get('local_automation_v1') or row['payload'].get('native_text_v1', {}).get('automation', {})
         if identity in descriptor.get('identities', [descriptor.get('identity')]):
             return row
@@ -61,9 +66,9 @@ def _owner(runner, event, authority):
 def automation_notification_metadata(metadata):
     """Validate trusted producer category; omit the default from old fingerprints."""
     category = metadata.get('notification_category', 'result')
-    if category not in ('result', 'diagnostic'):
+    if category not in ('result', 'diagnostic', 'project_goal'):
         raise RuntimeStoreError('invalid_params')
-    return {'notification_category': category} if category == 'diagnostic' else {}
+    return {'notification_category': category} if category != 'result' else {}
 
 
 def mailbox_wake_disposition(authority, ref, payload):

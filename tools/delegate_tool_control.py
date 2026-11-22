@@ -7,8 +7,10 @@ from tools.registry import tool_error
 
 def control_action(parent, action, subagent_id, message, event_id, query, timeout_seconds, *, background=None):
     from tools.delegate_tool import _CONTROL_ACTIONS, _handle_control_action
-    from tools.delegate_projects import include_projects, project_action
+    from tools.delegate_projects import include_projects, project_action, require_wake_control_scope
     try:
+        if action in ("message", "steer") or (action == "stop" and not str(subagent_id or "").startswith("project-")):
+            require_wake_control_scope(parent, subagent_id)
         if action in ("message", "peers", "wait"):
             from tools.delegate_mail import mail_action
             return json.dumps(mail_action(parent, action, subagent_id, message, event_id, timeout_seconds), ensure_ascii=False)

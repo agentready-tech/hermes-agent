@@ -41,7 +41,7 @@ class TabResources:
                 self.tabs = json.loads(self.path.read_text(encoding="utf-8-sig")) if self.path.exists() else {}
                 if not isinstance(self.tabs, dict):
                     raise ValueError("Invalid browser ownership ledger")
-                protected = self.protected_path.read_text(encoding="utf-8") if self.protected_path.exists() else "[]"
+                protected = self.protected_path.read_text(encoding="utf-8-sig") if self.protected_path.exists() else "[]"
                 self.protected_borrowed = set(json.loads(protected))
                 yield self
             finally:
@@ -60,7 +60,7 @@ class TabResources:
 
     def load_borrowed(self, driver_identity):
         try:
-            stored = json.loads(self.borrowed_path.read_text(encoding="utf-8"))
+            stored = json.loads(self.borrowed_path.read_text(encoding="utf-8-sig"))
         except FileNotFoundError:
             return
         if stored["epoch"] == self.admission_epoch and stored["driver"] == list(driver_identity()):

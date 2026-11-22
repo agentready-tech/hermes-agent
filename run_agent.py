@@ -286,6 +286,11 @@ class AIAgent(
                           "no longer sleep between executions.", DeprecationWarning, stacklevel=2)
         from agent.agent_init import init_agent
         init_agent(self, **init_kwargs)
+        if "delegate_task" in self.valid_tool_names:
+            from tools.delegate_external_wait import native_schema
+
+            self.tools = native_schema(self)
+            self.valid_tool_names = {tool["function"]["name"] for tool in self.tools}
 
     def _get_session_db_for_recall(self):
         """SessionDB for recall, opening the default state DB when no ``session_db`` was passed so the
@@ -1345,6 +1350,14 @@ class AIAgent(
 
     def _dispatch_delegate_task(self, function_args: dict) -> str:
         """Single call site for delegate_task dispatch; new DELEGATE_TASK_SCHEMA fields are added only here."""
+        if function_args.get("action") == "project_goal":
+            from tools.delegate_project_goal import dispatch
+
+            return dispatch(self, function_args)
+        if function_args.get("action") == "external_wait":
+            from tools.delegate_external_wait import dispatch
+
+            return dispatch(self, function_args)
         from tools.delegate_tool import _strip_model_hidden_task_fields, delegate_task as _delegate_task
         # Top-level MODEL delegations always run in the background (handle returned, results re-enter as
         # messages). An ORCHESTRATOR SUBAGENT (depth > 0) stays synchronous — it needs results in-turn and

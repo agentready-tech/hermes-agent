@@ -287,15 +287,12 @@ def _release_flock(lock_fd) -> None:
 
 
 @contextlib.contextmanager
-def _jobs_lock():
-    """Serialize a load_jobs→modify→save_jobs critical section: in-process RLock (parallel tick
-    threads) plus a cross-process flock on ``<cron dir>/.jobs.lock`` (gateway vs. CLI writes —
-    otherwise a `cron pause` could be clobbered and keep firing). Nested calls in one thread
-    reuse the held lock. Without a flock backend, or on flock timeout (logged loudly), it
-    degrades to in-process-only locking: a briefly torn cross-process write beats a dead
-    scheduler."""
+def _jobs_lock(*, strict=False):
+    """Serialize load/modify/save; refuse legacy in-process degradation in strict mode."""
     depth = getattr(_jobs_lock_state, "depth", 0)
     if depth:
+        if strict and _jobs_lock_state.locked_path != _jobs_lock_file():
+            raise RuntimeError("Cron write requires the owning profile's cross-process jobs lock")
         _jobs_lock_state.depth = depth + 1
         try:
             yield
@@ -305,39 +302,36 @@ def _jobs_lock():
 
     with _jobs_file_lock:
         _jobs_lock_state.depth = 1
-        # jobs.json stamp as of this section's load_jobs(): lets _save_jobs_unlocked skip the
-        # shrink-merge parse when the file provably hasn't changed. Reset on entry/exit so stale
-        # stamps from unlocked loads or prior sections can never suppress a needed merge.
-        # See #80703.
-        _jobs_lock_state.load_stamp = None
+        # A prior section's stamp must not suppress a needed shrink-merge (#80703).
+        _jobs_lock_state.load_stamp = _jobs_lock_state.locked_path = None
         lock_fd = None
         try:
             try:
                 ensure_dirs()
-                lock_fd = open(_jobs_lock_file(), "a+", encoding="utf-8-sig")
+                path = _jobs_lock_file()
+                lock_fd = open(path, "a+", encoding="utf-8")
                 lock_fd.seek(0)
-                if _acquire_flock(lock_fd, _JOBS_LOCK_TIMEOUT_SECONDS) is False:
-                    logger.error(
-                        "Timed out after %.0fs waiting for the cron "
-                        "jobs lock (%s) — another process is holding "
-                        "it. Proceeding with in-process locking only "
-                        "so the scheduler stays alive (#60703).",
-                        _JOBS_LOCK_TIMEOUT_SECONDS, _jobs_lock_file())
+                acquired = _acquire_flock(lock_fd, _JOBS_LOCK_TIMEOUT_SECONDS)
+                if acquired is True:
+                    _jobs_lock_state.locked_path = path
+                elif acquired is False:
+                    logger.error("Timed out after %.0fs waiting for the cron jobs lock (%s) (#60703)",
+                                 _JOBS_LOCK_TIMEOUT_SECONDS, path)
                     with contextlib.suppress(OSError):
                         lock_fd.close()
                     lock_fd = None
             except OSError as e:
-                # A locking failure must never take down cron writes — in-process lock still held.
-                logger.warning("jobs.json cross-process lock unavailable (%s); "
-                               "proceeding with in-process lock only", e)
+                logger.warning("jobs.json cross-process lock unavailable (%s)", e)
             try:
+                if strict and _jobs_lock_state.locked_path is None:
+                    raise RuntimeError("Cron write requires the owning profile's cross-process jobs lock")
                 yield
             finally:
                 if lock_fd is not None:
                     _release_flock(lock_fd)
         finally:
             _jobs_lock_state.depth = 0
-            _jobs_lock_state.load_stamp = None
+            _jobs_lock_state.load_stamp = _jobs_lock_state.locked_path = None
 
 
 @contextlib.contextmanager
@@ -421,7 +415,7 @@ def fire_claim_fence(job_id: str, *, expected_owner: str):
 
 # Fields that must never change after creation: ``id`` is a path component under OUTPUT_DIR, so an
 # update could leak ``../escape``/absolute/nested values into output writes/deletes.
-_IMMUTABLE_JOB_FIELDS = frozenset({"id"})
+_IMMUTABLE_JOB_FIELDS = frozenset({"id", "external_wait"})
 
 
 def _job_output_dir(job_id: str) -> Path:
@@ -1811,6 +1805,7 @@ def create_job(
     paused_reason: Optional[str] = None,
     pinned: bool = False,
     interpreter: Optional[str] = None,
+    _wait_timer: Optional[tuple[str, str, str]] = None,
 ) -> dict[str, Any]:
     """Create a new cron job and return the stored record.
 
@@ -1837,7 +1832,7 @@ def create_job(
         repeat = 1
     if deliver is None:
         deliver = "origin" if origin else "local"
-    job_id = uuid.uuid4().hex[:12]
+    job_id = _wait_timer[0] if _wait_timer is not None else uuid.uuid4().hex[:12]
     now = _hermes_now().isoformat()
 
     raw = locals()
@@ -1913,6 +1908,9 @@ def create_job(
         if value is not None:
             job[key] = value
 
+    if _wait_timer is not None:
+        from cron.wait_binding import stage_job
+        return stage_job(job, _wait_timer)
     with _jobs_lock():
         save_jobs(load_jobs() + [job])
     return job
@@ -2095,6 +2093,14 @@ def update_job(job_id: str, updates: dict[str, Any]) -> Optional[dict[str, Any]]
         _normalize_job_updates(job, updates)
         _apply_pin_update(job, updates)
         updated = _apply_skill_fields({**job, **updates})
+        if "external_wait" in job:
+            from cron.wait_binding import validate_timer
+
+            validate_timer(updated)
+            if any(updated.get(field) != job.get(field) for field in ("prompt", "schedule", "repeat")):
+                raise ValueError("Close the exact external wait before changing its timer definition")
+            if job["external_wait"].get("state") == "staged" and is_job_runnable(updated):
+                raise ValueError("An external wait timer cannot run before binding")
         _reject_terminal_activation(job, updated, job_id)
         # Re-check on the MERGED record; scoped to changed fields so legacy records keep loading.
         if {"monitor_script", "monitor_url", "no_agent", "script"}.intersection(updates):
@@ -2865,7 +2871,9 @@ def get_due_jobs() -> list[dict[str, Any]]:
     would be skipped forever.
     """
     with _jobs_lock():
-        return _get_due_jobs_locked()
+        due, snapshot = _get_due_jobs_locked()
+    from cron.wait_binding import close_terminal_waits
+    return close_terminal_waits(due, snapshot, _hermes_now())
 
 
 @dataclass
@@ -3297,7 +3305,7 @@ def _evaluate_due_job(job: dict[str, Any], scan: _DueScan, run_claim_ttl: float)
     return True
 
 
-def _get_due_jobs_locked() -> list[dict[str, Any]]:
+def _get_due_jobs_locked() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Inner implementation of get_due_jobs(); must be called with _jobs_lock held."""
     raw_jobs = load_jobs()
     scan = _DueScan(raw_jobs, _hermes_now())
@@ -3336,12 +3344,12 @@ def _get_due_jobs_locked() -> list[dict[str, Any]]:
             save_jobs(raw_jobs, removed_ids=scan.removed or None)
         except OSError as exc:  # repairs live in memory; the next tick retries the persist
             store_health.note_unwritable(exc, "due-scan repairs not persisted", "scan")
-            return due
+            return due, jobs
     # Only now is a skipped one-shot claimed or durably due on disk: normal grace applies again.
     store_health.end_recovery_window(_current_cron_store().cron_dir)
     for emit in scan.on_saved:
         emit()
-    return due
+    return due, jobs
 
 
 # --- Run output ---

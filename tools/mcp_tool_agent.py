@@ -123,6 +123,9 @@ def refresh_agent_mcp_tools(
     # OLDER set must not clobber a newer one); definitions computed OUTSIDE the lock.
     snapshot_generation = registry._generation
     new_defs = list(get_tool_definitions(enabled_toolsets=enabled, disabled_toolsets=disabled, quiet_mode=quiet_mode) or [])
+    from tools.delegate_external_wait import native_schema
+
+    new_defs = native_schema(agent, new_defs, enabled_toolsets=enabled, disabled_toolsets=disabled)
     new_names = {_def_name(t) for t in new_defs}
     # Post-build families re-appended on LOCALS only; live attributes untouched until publish.
     staged_engine_names = _reinject_post_build_tools(agent, new_defs, new_names)

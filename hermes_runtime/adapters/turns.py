@@ -72,12 +72,13 @@ def _human_followup(content):
 
 def _preserve_completed_reply(agent, result, pending):
     from gateway.response_filters import is_intentional_silence_agent_result
+    from hermes_runtime.adapters.goal_turn import goal_inbox_event
 
     text = result.get("final_response")
     if (not getattr(agent, "_mute_notification_reply", False)
             and isinstance(text, str) and text.strip() and not result.get("failed") and not result.get("interrupted")
             and not is_intentional_silence_agent_result(result, text)
-            and any(_human_followup(content) for content in pending)):
+            and any(_human_followup(content) or goal_inbox_event(content) for content in pending)):
         emit = getattr(agent, "_managed_completed_reply_callback", None)
         if emit is not None:
             emit(result)
@@ -203,8 +204,10 @@ class ActiveHomeTurn:
             # A disconnected sender does not cancel an accepted event.
             return
 
-    def take_records(self, *, close_if_empty=False):
+    def take_records(self, *, close_if_empty=False, only_if=None):
         with self.lock:
+            if only_if and not all(only_if(content) for _, content in self.pending):
+                return []
             pending, self.pending = self.pending, []
             self.wakeup.clear()
             self._taken_inputs.update(identity for identity, _ in pending)
@@ -306,7 +309,9 @@ def run_conversation(self, proceed, *args, **kwargs):
                 close = getattr(db, "close", None)
                 if callable(close):
                     close()
-            result = proceed(*args, **kwargs)
+            from hermes_runtime.adapters.goal_turn import run_segment
+
+            result = run_segment(self, turn, proceed, *args, **kwargs)
             while True:
                 leftover = result.pop("pending_steer", None)
                 records = turn.take_records(close_if_empty=not leftover)
@@ -332,7 +337,8 @@ def run_conversation(self, proceed, *args, **kwargs):
                 continuation["persist_user_platform_id"] = records[0][0] if records else None
                 continuation["persist_user_display_kind"] = None
                 continuation["persist_user_display_metadata"] = {"agentready_inbox_ids": [identity for identity, _ in records]}
-                result = proceed(combine_event_content(pending), **continuation)
+                result = run_segment(self, turn, proceed, combine_event_content(pending),
+                                     goal_records=records, goal_steer=leftover, **continuation)
             turn.finish(result=result)
             return result
         except BaseException as error:
@@ -346,8 +352,10 @@ def run_conversation(self, proceed, *args, **kwargs):
 
 
 def after_tool_group(agent, messages):
+    from hermes_runtime.adapters.goal_turn import ingest_records
+
     turn = getattr(agent, "_agentready_active_turn", None)
-    records = turn.take_records() if turn is not None else []
+    records = ingest_records(agent, turn.take_records()) if turn is not None else []
     if not records:
         return
     contents = [content for _, content in records]

@@ -323,12 +323,18 @@ INLINE_TOOL_EXECUTORS: dict[str, InlineToolExecutor] = {
 INVOKE_TOOL_PRE_MEMORY_MANAGER_NAMES = frozenset({"todo_list", "session_search", "memory"})
 
 
-def resolve_invoke_tool_executor(agent, function_name: str) -> Optional[InlineToolExecutor]:
+def resolve_invoke_tool_executor(agent, function_name: str, arguments=None) -> Optional[InlineToolExecutor]:
     """Inline executor for ``invoke_tool`` (concurrent path), or None for registry dispatch.
 
     Precedence: todo_list/session_search/memory, then memory-manager tools, then the
     remaining inline tools (``message_agent`` excluded).
     """
+    if function_name == "cronjob_manage" and arguments:
+        from tools.delegate_external_wait import timer_tool
+
+        timer_executor = timer_tool(function_name, arguments)
+        if timer_executor is not None:
+            return timer_executor
     if function_name in INVOKE_TOOL_PRE_MEMORY_MANAGER_NAMES:
         return INLINE_TOOL_EXECUTORS[function_name]
     memory_manager = agent._memory_manager

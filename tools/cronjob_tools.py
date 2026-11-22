@@ -1218,6 +1218,8 @@ _HANDLER_FORWARDED_ARGS = (
 def _cronjob_handler(args, **kw):
     """Model-tool dispatch: resolves the one model-facing ``monitor`` field into the stored
     ``monitor_script``/``monitor_url`` pair (legacy field names still accepted)."""
+    if "project_id" in args or "wait_id" in args:
+        return tool_error("External wait timers require the live owning main turn")
     _mon_script, _mon_url = _split_monitor_arg(args.get("monitor"), args.get("monitor_script"), args.get("monitor_url"))
     return cronjob(
         action=args.get("action", ""),

@@ -108,7 +108,7 @@ class GatewayTurnPersistenceMixin:
 
         # Normalize empty responses: surface errors, partial failures, and work-without-text.
         # Fix for #18765.
-        if not _intentional_silence:
+        if not _intentional_silence and agent_result.get("_notification_reply_muted") is not True:
             response = _normalize_empty_agent_response(agent_result, response, history_len=len(history))
             response = _sanitize_gateway_final_response(source.platform, response)
 

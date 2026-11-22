@@ -22,6 +22,10 @@ def _wake_inbox(inbox, *, reconcile=True):
     inbox.acknowledge_recorded()
     if home_turn_active():
         return False
+    if reconcile:
+        from hermes_runtime.adapters.goal_turn import recover
+
+        recover()
     if pending := inbox.pending():
         identity = "home-recovery-" + hashlib.sha256(json.dumps([i for i, _ in pending]).encode()).hexdigest()
         origin = {"session_key": "", "origin_ui_session_id": ""}

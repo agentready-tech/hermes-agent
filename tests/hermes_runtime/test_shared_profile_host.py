@@ -412,7 +412,7 @@ async def test_profile_panel_connector_uses_own_home_and_credential(shared_homes
 
 @pytest.mark.asyncio
 async def test_shared_gateway_keeps_existing_transport_and_legacy_route(shared_homes, monkeypatch):
-    from datetime import datetime, timezone
+    from datetime import UTC, datetime
     import json
 
     import hermes_state
@@ -431,7 +431,7 @@ async def test_shared_gateway_keeps_existing_transport_and_legacy_route(shared_h
     runner = GatewayRunner(GatewayConfig(multiplex_profiles=True, sessions_dir=root / 'sessions'))
     runner.session_authorities = SessionAuthorities(root, multiplexed=True)
     runner.session_runtime_descriptor = {'instance_id': 'shared-legacy-fixture'}
-    timestamp = datetime.now(timezone.utc)
+    timestamp = datetime.now(UTC)
     origin = SessionSource(platform=Platform.TELEGRAM, chat_id='42', chat_type='dm', user_id='42')
     existing = SessionEntry(HOME_SESSION_KEY, HOME_SESSION_ID, timestamp, timestamp,
                             origin=origin, platform=origin.platform, display_name='Existing main')

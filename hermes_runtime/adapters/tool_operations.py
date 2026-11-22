@@ -99,8 +99,12 @@ class ToolOperationStore:
         prompt = json.dumps({"operation_id": identity, "tool": row["tool_name"],
             "tool_call_id": row["tool_call_id"], "session_id": row["session_id"],
             "status": row["state"], "result": result}, ensure_ascii=False)
-        content = event_prompt(prompt, "tool_operation", identity,
-            {"session_id": row["session_id"], "origin": json.loads(row["origin_json"])})
+        metadata = {"session_id": row["session_id"], "origin": json.loads(row["origin_json"])}
+        with self.inbox.transaction() as conn:
+            if conn.execute("SELECT 1 FROM delegated_projects WHERE json_extract(workspace_json, "
+                            "'$.goal_state.operation_id')=? LIMIT 1", (identity,)).fetchone():
+                metadata["project_goal"] = True
+        content = event_prompt(prompt, "tool_operation", identity, metadata)
         _, pending = self.inbox.enqueue(content)
         if pending:
             from hermes_runtime.adapters.turns import forward_to_active_turn

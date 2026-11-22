@@ -78,6 +78,15 @@ def _finite_viewer_turn() -> bool:
     return finite_turn_required() is True
 
 
+def _empty_turn_reply(result, platform, history_len):
+    from gateway.run import _normalize_empty_agent_response, _sanitize_gateway_final_response
+
+    if result.get("_notification_reply_muted") is True:
+        return ""
+    text = _sanitize_gateway_final_response(platform, _normalize_empty_agent_response(result, "", history_len=history_len))
+    return text or (t("gateway.shared.warn_passthrough", error=result["error"]) if result.get("error") else "")
+
+
 def _persisted_turn(agent, agent_history, result, compressions) -> dict | None:
     """``message.complete.persisted_turn`` for this turn, the receipt the TUI gateway's own turns
     publish: clients bind the streamed reply to its stored row instead of comparing words. The
@@ -1167,7 +1176,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         every rebind. session_key propagates via contextvars (_set_session_env / set_current_session_key)
         — never os.environ["HERMES_SESSION_KEY"], which would misroute approvals across sessions.
         """
-        from gateway.run import _current_max_iterations, _normalize_empty_agent_response, _sanitize_gateway_final_response
+        from gateway.run import _current_max_iterations
         ctx = self._ctx
         runner = self._runner
         # Platform.LOCAL ("local") maps to the "cli" hint key the agent understands.
@@ -1340,6 +1349,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         # about to shrink.
         common = {
             "messages": result.get("messages", []), "api_calls": result.get("api_calls", 0),
+            **({"_notification_reply_muted": True} if result.get("_notification_reply_muted") is True else {}),
             "failed": result.get("failed", False), "failure_reason": result.get("failure_reason"),
             "partial": result.get("partial", False), "completed": result.get("completed"),
             "interrupted": result.get("interrupted", False), "interrupt_message": result.get("interrupt_message"),
@@ -1358,10 +1368,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
             **({"persisted_turn": persisted_turn} if persisted_turn else {}),
         }
         if not final_response:
-            final_response = _normalize_empty_agent_response(result, final_response or "", history_len=len(agent_history))
-            final_response = _sanitize_gateway_final_response(ctx.source.platform, final_response)
-            if not final_response:
-                final_response = t("gateway.shared.warn_passthrough", error=result["error"]) if result.get("error") else ""
+            final_response = _empty_turn_reply(result, ctx.source.platform, len(agent_history))
             # NOTE: deliberately omits agent_persisted/last_reasoning/response_* — the caller
             # defaults agent_persisted differently when the key is absent.
             return {"final_response": final_response, **common}

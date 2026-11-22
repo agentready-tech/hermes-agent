@@ -505,6 +505,12 @@ def delegate_task(
 
     requested_background = is_truthy_value(background, default=False) if background is not None else None
     normalized_action = (action or "").strip().lower()
+    if ephemeral and normalized_action in ("", "spawn"):
+        from hermes_runtime.adapters.goal_turn import current_segment
+
+        segment = current_segment(parent_agent)
+        if segment is not None and segment.project_ids:
+            return tool_error("A Project Goal requires persistent workers")
     from tools.delegate_tool_control import control_action
     control = control_action(parent_agent, normalized_action, subagent_id, message, event_id, query, timeout_seconds,
                              background=requested_background)
@@ -575,7 +581,8 @@ def delegate_task(
             project_tasks = [{**task, "images": task_images[i], "output_schema": task_schemas[i]}
                              for i, task in enumerate(task_list)]
             from tools.delegate_projects import project_action
-            return json.dumps(project_action(parent_agent, "spawn", tasks=project_tasks, background=background), ensure_ascii=False)
+            return json.dumps(project_action(parent_agent, "spawn", tasks=project_tasks, event_id=event_id,
+                                             background=background), ensure_ascii=False)
         except (ValueError, TypeError) as exc:
             return tool_error(str(exc))
 

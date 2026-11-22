@@ -133,6 +133,8 @@ def _watch_notification_metadata(evt: dict, source) -> dict[str, Any]:
     from agent.notification_presentation import diagnostic_process_event
     if diagnostic_process_event(evt):
         metadata["notification_category"] = "diagnostic"
+    if evt.get("goal_project_id"):
+        metadata["notification_category"] = "project_goal"
     if session_key.startswith("agent:"):
         metadata["gateway_session_key"] = session_key
     parent_session_id = str(evt.get("parent_session_id") or "").strip()
@@ -140,7 +142,7 @@ def _watch_notification_metadata(evt: dict, source) -> dict[str, Any]:
         metadata["gateway_session_id"] = parent_session_id
     if evt.get('_automation_identities'):
         metadata['automation_identities'] = evt['_automation_identities']
-    if source.platform == Platform.LOCAL:
+    if source.platform == Platform.LOCAL and not evt.get("goal_project_id"):
         # A local completion persists as the async-result card the in-process TUI wrote;
         # messaging rows stay internal_notification, as on main.
         metadata.update(_local_completion_card(evt))
@@ -1542,7 +1544,8 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
                 groups: dict[tuple[str, ...], list[dict]] = {}
                 for evt in async_events:
                     self._enrich_async_delegation_routing(evt)
-                    groups.setdefault(self._event_route_key(evt, self._ASYNC_GROUP_KEY_FIELDS), []).append(evt)
+                    key = self._event_route_key(evt, self._ASYNC_GROUP_KEY_FIELDS)
+                    groups.setdefault((*key, "project_goal" if evt.get("goal_project_id") else ""), []).append(evt)
                 for group in groups.values():
                     try:
                         delivered = await self._deliver_async_delegation_group(group)

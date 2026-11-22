@@ -41,6 +41,14 @@ def _dispatch_origin(parent, background):
         origin = {**origin, "wake": False}
     if not origin.get("wake"):
         origin["mail_results"] = True
+    from hermes_runtime.adapters.goal_turn import current_segment
+
+    segment = current_segment(parent)
+    if segment is not None and segment.project_ids and not segment.selected_id:
+        raise ValueError("Select the exact Project Goal before dispatching a persistent worker")
+    if segment is not None and segment.selected_id:
+        origin["goal_project_id"] = segment.selected_id
+        segment.touch(segment.selected_id)
     return origin
 
 
@@ -264,14 +272,71 @@ def include_projects(parent, payload, query=""):
     return payload
 
 
+def _wake_project_scope(parent, store):
+    from hermes_runtime.adapters.goal_turn import current_segment
+
+    segment = current_segment(parent)
+    if segment is None or not segment.internal or not segment.bound_project_ids:
+        return None
+    assigned = segment.bound_project_ids
+    links = store.db._read_all(
+        """SELECT p.subagent_id, json_extract(m.origin_json, '$.goal_project_id'), m.state,
+                  json_extract(p.workspace_json, '$.goal_owner_id')
+           FROM delegated_projects p LEFT JOIN delegated_project_messages m USING (subagent_id)
+           WHERE json_type(p.workspace_json, '$.goal_state') IS NULL"""
+    )
+    related = {worker for worker, goal, _, creator in links if goal in assigned or creator in assigned}
+    shared = {worker for worker, goal, state, _ in links
+              if goal not in assigned and state in {"pending", "running"}}
+    return assigned | (related - shared)
+
+
+def require_wake_control_scope(parent, subagent_id):
+    from hermes_runtime.adapters.goal_turn import current_segment
+
+    segment = current_segment(parent)
+    if segment is not None and segment.internal and segment.bound_project_ids:
+        with ProjectStore(parent) as store:
+            if subagent_id not in _wake_project_scope(parent, store):
+                raise ValueError("Project worker is outside the scope of this wake")
+
+
 def project_action(parent, action, *, tasks=None, subagent_id=None, message=None, query="", event_id=None, background=None):
     with ProjectStore(parent) as store:
-        return _project_action(parent, store, action, tasks, subagent_id, message, query, event_id, background)
+        scope = _wake_project_scope(parent, store)
+        if scope is not None and action in {"send", "read", "stop", "archive"} and subagent_id not in scope:
+            raise ValueError("Project worker is outside the scope of this wake")
+        return _project_action(parent, store, action, tasks, subagent_id, message, query, event_id, background, scope=scope)
 
 
-def _project_action(parent, store, action, tasks, subagent_id, message, query, event_id, background=None):
+def _spawn_keys(store, tasks, goal_id, scope):
+    if not tasks or any(not isinstance(t.get("goal"), str) or not t["goal"].strip() for t in tasks):
+        raise ValueError("Use a nonempty goal on every persistent task")
+    existing = {p["project_key"]: p for p in store.projects()}
+    keys = []
+    for index, task in enumerate(tasks, 1):
+        key = task.get("project")
+        if "project" in task and (not isinstance(key, str) or not key.strip()):
+            raise ValueError("project must be a nonempty string")
+        if task.get("context") is not None and not isinstance(task["context"], str):
+            raise ValueError("Project context must be text")
+        if task.get("group"):
+            raise ValueError("Persistent project messages return independently; omit group on project tasks")
+        key = key.strip() if key else (f"{goal_id}:worker:{index}" if goal_id else "task-" + uuid.uuid4().hex)
+        if saved := existing.get(key):
+            if saved["archived"]:
+                raise ValueError("A project in this batch is archived; choose another key")
+            if scope is not None and saved["subagent_id"] not in scope:
+                raise ValueError("Project worker is outside the scope of this wake")
+        keys.append(key)
+    return keys
+
+
+def _project_action(parent, store, action, tasks, subagent_id, message, query, event_id, background=None, *, scope=None):
     if action == "list":
         projects = store.projects(query)
+        if scope is not None:
+            projects = [p for p in projects if p["subagent_id"] in scope]
         fields = ("subagent_id", "session_id", "project_key", "goal", "status", "last_status", "last_summary", "last_message_id")
         return {"projects": [{k: p[k] for k in fields if k in p} for p in projects[:50]], "project_count": len(projects)}
     if action in ("stop", "archive"):
@@ -287,31 +352,25 @@ def _project_action(parent, store, action, tasks, subagent_id, message, query, e
         return {"project": {k: v for k, v in project.items() if k != "instruction"}, "messages": [{"role": m["role"], "content": str(m.get("content") or "")[:2000]} for m in history[-12:]],
                 "note": "Recent conversation excerpt; use session_search with this session_id for older evidence."}
     origin = _dispatch_origin(parent, background)
+    goal_id = origin.get("goal_project_id")
     entries = []
     if action == "spawn":
-        if not tasks or any(not isinstance(t.get("goal"), str) or not t["goal"].strip() for t in tasks):
-            raise ValueError("Use a nonempty goal on every persistent task")
         # Validate the whole batch before accepting any project input.
-        for task in tasks:
-            if "project" in task and (not isinstance(task["project"], str) or not task["project"].strip()):
-                raise ValueError("project must be a nonempty string")
-            if task.get("context") is not None and not isinstance(task["context"], str):
-                raise ValueError("Project context must be text")
-            if task.get("group"):
-                raise ValueError("Persistent project messages return independently; omit group on project tasks")
-        archived = {p["project_key"] for p in store.projects() if p["archived"]}
-        if any(t.get("project", "").strip() in archived for t in tasks):
-            raise ValueError("A project in this batch is archived; choose another key")
-        for task in tasks:
+        keys = _spawn_keys(store, tasks, goal_id, scope)
+        workspace = {"goal_owner_id": goal_id} if goal_id else None
+        for index, (task, key) in enumerate(zip(tasks, keys, strict=True), 1):
             from tools.delegate_tool_progress import _resolve_workspace_hint
-            key = task.get("project") or "task-" + uuid.uuid4().hex
-            project = store.create(key, task["goal"], task.get("context"), _resolve_workspace_hint(parent))
+            project = store.create(key, task["goal"], task.get("context"), _resolve_workspace_hint(parent),
+                                   workspace=workspace)
             text = task["goal"] + ("\n\n" + task["context"] if task.get("context") else "")
             options = {k: task[k] for k in ("images", "output_schema") if task.get(k) is not None}
-            seed = "spawn:" + hashlib.sha256(json.dumps([text, options], sort_keys=True).encode()).hexdigest()
+            stable = [goal_id, event_id, index] if goal_id and event_id else [text, options]
+            seed = "spawn:" + hashlib.sha256(json.dumps(stable, sort_keys=True).encode()).hexdigest()
             mid = store.enqueue(project, text, origin, seed, options)
             entries.append({"subagent_id": project["subagent_id"], "session_id": project["session_id"], "project": project["project_key"], "message_id": mid})
     elif action == "send":
+        if goal_id and (not isinstance(event_id, str) or not event_id.strip()):
+            raise ValueError("Send to a Goal worker requires a stable event_id")
         project = store.get(subagent_id)
         store.pause(subagent_id, False)
         mid = store.enqueue(project, message, origin, event_id)

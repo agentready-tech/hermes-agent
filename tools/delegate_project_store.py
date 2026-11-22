@@ -15,6 +15,38 @@ def _transaction():
     return transaction(_connect(), immediate=True)
 
 
+def write_workspace(conn, subagent_id, workspace, change):
+    result = change(workspace, conn)
+    conn.execute("UPDATE delegated_projects SET workspace_json=? WHERE subagent_id=?", (json.dumps(workspace), subagent_id))
+    return result
+
+
+def set_project_paused(conn, subagent_id, paused, archive):
+    conn.execute("UPDATE delegated_projects SET paused=?,archived=MAX(archived,?),updated_at=? WHERE subagent_id=?",
+                 (int(paused), int(archive), time.time(), subagent_id))
+    if archive:
+        conn.execute("UPDATE delegated_project_messages SET state='cancelled',completed_at=?,published=1 WHERE subagent_id=? AND state='pending'", (time.time(), subagent_id))
+
+
+def cancel_goal_inputs(conn, project_id):
+    conn.execute(
+        """UPDATE delegated_project_messages SET state='cancelled',completed_at=?,published=1
+           WHERE state='pending' AND json_extract(origin_json, '$.goal_project_id')=?""",
+        (time.time(), project_id),
+    )
+
+
+def _goal_input_closed(conn, message):
+    goal_id = json.loads(message["origin_json"]).get("goal_project_id")
+    if not goal_id:
+        return False
+    row = conn.execute(
+        "SELECT json_extract(workspace_json, '$.goal_state.status'), archived FROM delegated_projects WHERE subagent_id=?",
+        (goal_id,),
+    ).fetchone()
+    return row is None or row[1] == 1 or row[0] in {"closing", "done", "cancelled"}
+
+
 class ProjectStore:
     def __init__(self, parent):
         from hermes_constants import get_hermes_home
@@ -93,7 +125,7 @@ class ProjectStore:
             result.append(project)
         return sorted(result, key=lambda p: p.get("match_score", 0), reverse=True)
 
-    def create(self, key, goal, context, cwd=None):
+    def create(self, key, goal, context, cwd=None, *, workspace=None):
         if not isinstance(key, str) or not key.strip():
             raise ValueError("project must be a nonempty stable project/task key")
         key = key.strip()
@@ -107,7 +139,8 @@ class ProjectStore:
         identity = "project-" + uuid.uuid4().hex
         with _transaction() as conn:
             conn.execute("INSERT OR IGNORE INTO delegated_projects(subagent_id,parent_session_id,project_key,session_id,goal,context,created_at,updated_at,workspace_json) VALUES (?,?,?,?,?,?,?,?,?)",
-                         (identity, self.parent_id, key, identity, goal, context, now, now, json.dumps({"cwd": cwd})))
+                         (identity, self.parent_id, key, identity, goal, context, now, now,
+                          json.dumps({"cwd": cwd, **(workspace or {})})))
             subagent_id = conn.execute("SELECT subagent_id FROM delegated_projects WHERE parent_session_id=? AND project_key=?", (self.parent_id, key)).fetchone()[0]
         return self.get(subagent_id)
 
@@ -134,16 +167,20 @@ class ProjectStore:
             conn.row_factory = sqlite3.Row
             # BEGIN IMMEDIATE is owned by sqlite_util.transaction; one child turn per project.
             rows = conn.execute("SELECT * FROM delegated_project_messages WHERE subagent_id=? AND state IN ('pending','running') ORDER BY rowid", (project["subagent_id"],)).fetchall()
-            if not rows:
-                return None
-            row = dict(rows[0])
-            if row["state"] == "running" and (alive is None or alive(row["owner_pid"], row["owner_started_at"])):
-                return None
-            token = uuid.uuid4().hex
-            conn.execute("UPDATE delegated_project_messages SET state='running',owner_pid=?,owner_started_at=?,claim_token=? WHERE message_id=?",
-                         (os.getpid(), get_process_start_time(os.getpid()), token, row["message_id"]))
-            row.update(claim_token=token, recovering=row["state"] == "running")
-            return row
+            for entry in rows:
+                row = dict(entry)
+                if row["state"] == "running" and (alive is None or alive(row["owner_pid"], row["owner_started_at"])):
+                    return None
+                if _goal_input_closed(conn, row):
+                    conn.execute("UPDATE delegated_project_messages SET state='cancelled',completed_at=?,published=1,"
+                                 "owner_pid=NULL,claim_token=NULL WHERE message_id=?", (time.time(), row["message_id"]))
+                    continue
+                token = uuid.uuid4().hex
+                conn.execute("UPDATE delegated_project_messages SET state='running',owner_pid=?,owner_started_at=?,claim_token=? WHERE message_id=?",
+                             (os.getpid(), get_process_start_time(os.getpid()), token, row["message_id"]))
+                row.update(claim_token=token, recovering=row["state"] == "running")
+                return row
+            return None
 
     def settle(self, project, message, result):
         canonical = result.get("status") == "completed" and self.committed_result(project, message) is not None
@@ -183,19 +220,34 @@ class ProjectStore:
             return [dict(row) for row in conn.execute("SELECT * FROM delegated_project_messages WHERE subagent_id=? AND state NOT IN ('pending','running') AND published=0", (subagent_id,))]
 
     def pause(self, subagent_id, paused=True, archive=False):
-        self.get(subagent_id)
+        project = self.get(subagent_id)
+        if archive:
+            from tools.delegate_wait_timer import archive_project
+
+            return archive_project(self, project, paused)
         with _transaction() as conn:
-            conn.execute("UPDATE delegated_projects SET paused=?,archived=MAX(archived,?),updated_at=? WHERE subagent_id=?",
-                         (int(paused), int(archive), time.time(), subagent_id))
-            if archive:
-                conn.execute("UPDATE delegated_project_messages SET state='cancelled',completed_at=?,published=1 WHERE subagent_id=? AND state='pending'", (time.time(), subagent_id))
+            set_project_paused(conn, subagent_id, paused, False)
 
     def save_workspace(self, subagent_id, info):
-        project = self.get(subagent_id)
-        workspace = json.loads(project["workspace_json"])
-        workspace["worktree"] = info
+        self.mutate_workspace(subagent_id, lambda workspace, _conn: workspace.update(worktree=info), active_only=False)
+
+    def read_workspace(self, subagent_id):
+        with self.db._read_ctx() as conn:
+            row = conn.execute("SELECT * FROM delegated_projects WHERE subagent_id=?", (subagent_id,)).fetchone()
+        project = self._owned(row)
+        if project["archived"] or project["paused"]:
+            raise ValueError("Project is paused or archived")
+        return json.loads(project["workspace_json"])
+
+    def mutate_workspace(self, subagent_id, change, *, active_only=True):
+        owner = self.get(subagent_id)["parent_session_id"]
         with _transaction() as conn:
-            conn.execute("UPDATE delegated_projects SET workspace_json=? WHERE subagent_id=?", (json.dumps(workspace), subagent_id))
+            row = conn.execute("SELECT workspace_json, archived, paused FROM delegated_projects WHERE subagent_id=? AND parent_session_id=?",
+                               (subagent_id, owner)).fetchone()
+            if row is None or (active_only and (row[1] or row[2])):
+                raise ValueError("Unknown project subagent")
+            # Workspace metadata has multiple writers. Merge against the row protected by this transaction.
+            return write_workspace(conn, subagent_id, json.loads(row[0]), change)
 
     def instruction(self, subagent_id, proposed):
         # Native ephemeral child instructions are appended after the cached core

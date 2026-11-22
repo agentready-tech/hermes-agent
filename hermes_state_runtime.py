@@ -353,9 +353,10 @@ def _canonical_chain(conn, session_id):
         child = conn.execute(_CHAIN_STEP_SQL, (chain[-1],)).fetchone()
         if child is None:
             return chain
-        if child['id'] in chain:
+        child_id = child[0]  # One selected column, including on tuple-row workspace transactions.
+        if child_id in chain:
             raise RuntimeStoreError('admission_conflict')
-        chain.append(child['id'])
+        chain.append(child_id)
     raise RuntimeStoreError('admission_conflict')
 
 
