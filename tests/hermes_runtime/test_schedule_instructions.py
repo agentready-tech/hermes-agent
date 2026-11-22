@@ -1,5 +1,6 @@
 """Mandatory main scheduling instructions reach native requests without rewriting saved prompts."""
 
+import json
 import sqlite3
 from contextlib import nullcontext
 
@@ -124,5 +125,41 @@ def test_personality_changes_keep_the_main_scheduling_policy(runtime, monkeypatc
             assert not reset
             agent.run_conversation("Check reminders", conversation_history=session["history"])
             assert seen[-1]["messages"][0]["content"].count(MAIN_SCHEDULE_INSTRUCTIONS) == 1
+    finally:
+        agent.close()
+
+
+def test_main_browser_and_workspace_policy_with_an_existing_prompt(runtime):
+    from hermes_runtime.sessions import HOME_SESSION_ID
+
+    home, db, seen = runtime
+    agent = _agent(db, HOME_SESSION_ID)
+    browser_heading = "## Browser working tabs"
+    workspace_heading = "## Google Workspace и почта"
+    environment = "env_" + "a" * 32
+    try:
+        agent.run_conversation("First main turn")
+        saved = db.get_session(HOME_SESSION_ID)["system_prompt"]
+        assert browser_heading not in saved
+        assert workspace_heading not in saved
+        first = seen[0]["messages"][0]["content"]
+        assert first.count(browser_heading) == 1
+        assert workspace_heading not in first
+
+        for native, workspace_id, expected in (
+            (True, environment, 1),
+            (True, "env_" + "b" * 32, 0),
+            (False, environment, 0),
+        ):
+            (home / "config.yaml").write_text(json.dumps({"autonomous": {
+                "workspace": {"native": native, "environment_id": workspace_id},
+                "panel": {"environment_id": environment},
+            }}), encoding="utf-8")
+            agent.run_conversation("Continue the same main conversation")
+            system = seen[-1]["messages"][0]["content"]
+            assert system.startswith(saved)
+            assert system.count(browser_heading) == 1
+            assert system.count(workspace_heading) == expected
+            assert db.get_session(HOME_SESSION_ID)["system_prompt"] == saved
     finally:
         agent.close()
