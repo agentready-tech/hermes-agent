@@ -10,7 +10,7 @@ _KEY = "external_wait"
 _FIELDS = {
     "open": {"mode", "reply_criterion", "deadline", "return_path", "source_ref"},
     "select": {"wait_id"},
-    "close": {"wait_id", "reason"},
+    "close": {"wait_id", "reason", "reply_ref"},
 }
 
 
@@ -42,7 +42,10 @@ def native_schema(agent):
         "deadline": {"type": "string", "description": "Finite timezone-aware ISO timestamp"},
         "return_path": {"type": "string", "enum": ["timer"]},
         "source_ref": {"type": "string", "description": "Exact authorized source; browser-only"},
-        "reason": {"type": "string", "enum": ["cancelled", "closed", "expired", "access_lost"]},
+        "reason": {"type": "string", "enum": ["reply", "cancelled", "closed", "expired", "access_lost"]},
+        "reply_ref": {"type": "object", "properties": {
+            "kind": {"type": "string", "enum": ["session_admission"]}, "admission_id": {"type": "string"},
+        }, "required": ["kind", "admission_id"], "additionalProperties": False},
     }
     result = []
     for tool in agent.tools:
@@ -83,10 +86,26 @@ def _open(workspace, conn, fields):
         if current["state"] == "CLOSING" or any(current.get(k) != v for k, v in fields.items()):
             raise ValueError("This project already has a different or closing wait")
         return current
-    watermark = conn.execute("SELECT COALESCE(MAX(id), 0) FROM messages").fetchone()[0]
-    current = {**fields, "state": "OPEN", "wait_id": uuid4().hex, "job_id": None, "input_watermark": watermark}
+    current = {**fields, "state": "OPEN", "wait_id": uuid4().hex, "job_id": None}
+    if fields['mode'] == 'resume_main':
+        current['input_watermarks'] = _input_watermarks(conn)
     workspace[_KEY] = current
     return current
+
+
+def _input_watermarks(conn):
+    rows = conn.execute("SELECT name, seq FROM sqlite_sequence WHERE name IN ('session_admissions', 'messages')").fetchall()
+    result = {"session_admissions": 0, "messages": 0}
+    seen = set()
+    for name, seq in rows:
+        if name in seen or type(seq) is not int or seq < 0:
+            raise ValueError("Native input sequence is unavailable")
+        seen.add(name)
+        result[name] = seq
+    if ("session_admissions" not in seen and conn.execute("SELECT 1 FROM session_admissions LIMIT 1").fetchone()
+            or "messages" not in seen and conn.execute("SELECT 1 FROM messages LIMIT 1").fetchone()):
+        raise ValueError("Native input sequence is unavailable")
+    return result
 
 
 def _existing(workspace, wait_id):
@@ -96,10 +115,16 @@ def _existing(workspace, wait_id):
     return current
 
 
-def _close(workspace, wait_id, reason):
+def _close(workspace, conn, store, wait_id, args):
+    from hermes_runtime.adapters.external_wait_reply import proves_reply
+
     current = _existing(workspace, wait_id)
-    if reason not in ("cancelled", "closed", "expired", "access_lost"):
-        raise ValueError("Closing on a reply requires trusted evidence of the original input")
+    reason = args.get('reason')
+    if reason == 'reply':
+        if not proves_reply(conn, store.db_path.resolve().parent, store.parent_id, current, args.get('reply_ref')):
+            raise ValueError("Closing on a reply requires trusted evidence of the original input")
+    elif reason not in ("cancelled", "closed", "expired", "access_lost") or 'reply_ref' in args:
+        raise ValueError("Invalid close reason or unexpected reply evidence")
     if reason == "expired" and datetime.fromisoformat(current["deadline"]) > datetime.now(UTC):
         raise ValueError("The wait has not expired")
     if current["state"] != "CLOSING":
@@ -140,8 +165,30 @@ def _apply(store, project_id, op, args):
     if not _text(wait_id, 128):
         raise ValueError("Expected an exact wait_id")
     if op == "close":
-        return store.mutate_workspace(project_id, lambda workspace, _conn: _close(workspace, wait_id, args.get("reason")))
+        return store.mutate_workspace(project_id, lambda workspace, conn: _close(workspace, conn, store, wait_id, args))
     current = _existing(store.read_workspace(project_id), wait_id)
     if current["state"] == "CLOSING" or datetime.fromisoformat(current["deadline"]) <= datetime.now(UTC):
         raise ValueError("Cannot select a closing or expired wait")
     return current
+
+
+def selected_timer_proof(agent):
+    """None means the AGE-6 timer check does not apply to this turn."""
+    from cron.wait_evidence import has_live_timer
+    from tools.delegate_project_store import ProjectStore
+
+    pair = getattr(getattr(agent, '_agentready_active_turn', None), 'external_wait', None)
+    if pair is None or not _owns_main(agent):
+        return None
+    project_id, wait_id = pair
+    try:
+        with ProjectStore(agent) as store:
+            wait = _existing(store.read_workspace(project_id), wait_id)
+        now = datetime.now(UTC)
+        deadline = datetime.fromisoformat(wait['deadline'])
+    except (KeyError, ValueError, TypeError):
+        return None
+    if (wait.get('state') not in ('OPEN', 'RESERVED', 'BOUND') or wait.get('return_path') != 'timer'
+            or deadline.tzinfo is None or deadline <= now):
+        return None
+    return has_live_timer(wait, project_id, now)

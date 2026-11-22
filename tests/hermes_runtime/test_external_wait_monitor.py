@@ -1,5 +1,6 @@
 """AGE-6 managed monitor admission with a source that cannot touch the network."""
 
+from datetime import datetime, timedelta
 from threading import Event
 
 from tests.hermes_runtime.test_main_schedule_tools import _tool
@@ -9,7 +10,7 @@ pytest_plugins = ['tests.hermes_runtime.test_main_schedule_tools']
 
 def test_managed_monitor_baseline_quiet_change_failure_and_cancel(main_home, monkeypatch):
     from cron import monitor
-    from cron.jobs import get_job, list_jobs
+    from cron.jobs import advance_next_run, get_job, list_jobs
     from cron.scheduler import SILENT_MARKER, run_job
     from hermes_runtime.adapters.inbox import HomeInbox
 
@@ -36,10 +37,15 @@ def test_managed_monitor_baseline_quiet_change_failure_and_cancel(main_home, mon
     assert 'Monitor Baseline' in baseline
     assert 'untrusted_monitor_observation' in baseline
     stored_baseline = get_job(job_id)['monitor_state']
+    old_slot = datetime.fromisoformat(get_job(job_id)['next_run_at'])
+    now = old_slot + timedelta(seconds=1)
+    monkeypatch.setattr('cron.jobs._hermes_now', lambda: now)
+    assert advance_next_run(job_id)
     ok, doc, reply, err = fire('equal')
     assert ok and 'no_change' in doc and reply == SILENT_MARKER and err is None
     assert inbox.pending() == [(baseline_id, baseline)]
     assert get_job(job_id)['monitor_state'] == stored_baseline
+    assert datetime.fromisoformat(get_job(job_id)['next_run_at']) > now
     assert fire('change', extra_prompt='manual fixture instructions')[0]
     assert len(inbox.pending()) == 2
     changed = next(text for identity, text in inbox.pending() if identity != baseline_id)

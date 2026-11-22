@@ -186,11 +186,21 @@ def build_continuation_nudge(
         if not request or not final_response.strip():
             return None
 
+        from tools.delegate_external_wait import selected_timer_proof
+
+        timer_proof = selected_timer_proof(agent)
+        if timer_proof is False and _eligible(agent):
+            return ("[Continuation check] The exact selected wait has no confirmed future timer. "
+                    "Check its existing job before changing anything. If it cannot be confirmed, "
+                    "report the blocker rather than assuming it will wake this conversation.")
+
         from agent.tool_continuation import continuation_evidence
 
         payload = {"request": request, "recent_messages": _recent_messages(messages),
                    "candidate_response": _text(final_response, 4000),
                    "tool_continuations": continuation_evidence(agent)}
+        if timer_proof is True:
+            payload["selected_external_wait"] = {"return_path": "confirmed_native_timer"}
         action = _next_action(settings, payload)
         if not action:
             return None

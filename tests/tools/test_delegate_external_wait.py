@@ -64,7 +64,7 @@ def test_wait_open_select_and_cancel_preserve_project_workspace(owner):
     args = _args(project)
     opened = _call(owner, **args)
     assert opened['success'] and opened['state'] == 'OPEN' and opened['job_id'] is None
-    assert opened['input_watermark'] > 0
+    assert opened['input_watermarks']['messages'] > 0
     assert _call(owner, **args) == opened
     assert _call(owner, **{**args, 'reply_criterion': 'Different criterion'}).get('error')
     assert owner._agentready_active_turn.external_wait == (project, opened['wait_id'])
@@ -82,3 +82,26 @@ def test_wait_open_select_and_cancel_preserve_project_workspace(owner):
     assert owner._agentready_active_turn.external_wait is None
     assert _call(owner, op='select', **ids).get('error')
     assert _call(owner, **args)['wait_id'] != opened['wait_id']
+
+
+def test_open_marks_native_input_high_water_after_rows_are_deleted(owner):
+    from hermes_state_runtime import admit_session_input, begin_runtime_epoch
+    from tools.delegate_project_store import ProjectStore
+
+    db = owner._session_db
+    epoch = begin_runtime_epoch(db, instance_id='isolated-test')
+    admission = admit_session_input(db, epoch=epoch, principal_id='fixture', session_id=owner.session_id,
+                                    request_id='previous-input', payload={'text': 'Old input'})
+    db._execute_write(lambda conn: conn.execute('DELETE FROM session_admissions'))
+    owner._session_db.append_message(owner.session_id, 'user', 'Old transcript input')
+    with db._read_ctx() as conn:
+        high_water = conn.execute("SELECT seq FROM sqlite_sequence WHERE name='messages'").fetchone()[0]
+    db._execute_write(lambda conn: conn.execute('DELETE FROM messages'))
+
+    with ProjectStore(owner) as store:
+        project = store.create('order', 'Check supplier reply', '')['subagent_id']
+    args = _args(project)
+    opened = _call(owner, **args)
+    assert opened['input_watermarks'] == {'messages': high_water, 'session_admissions': admission['seq']}
+    db.append_message(owner.session_id, 'user', 'New input')
+    assert _call(owner, **args) == opened

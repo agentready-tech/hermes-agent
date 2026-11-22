@@ -194,7 +194,9 @@ class ProjectStore:
         self.mutate_workspace(subagent_id, lambda workspace, _conn: workspace.update(worktree=info), active_only=False)
 
     def read_workspace(self, subagent_id):
-        project = self.get(subagent_id)
+        with self.db._read_ctx() as conn:
+            row = conn.execute("SELECT * FROM delegated_projects WHERE subagent_id=?", (subagent_id,)).fetchone()
+        project = self._owned(row)
         if project["archived"] or project["paused"]:
             raise ValueError("Project is paused or archived")
         return json.loads(project["workspace_json"])
