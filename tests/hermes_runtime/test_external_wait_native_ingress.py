@@ -1,7 +1,4 @@
-"""AGE-6 T4: original cold native ingress is reply evidence across main compaction.
-
-No cron job is created or bound; this covers reply proof, not timer cleanup.
-"""
+"""Original native replies close the exact wait across main compaction."""
 
 import asyncio
 from datetime import UTC, datetime
@@ -14,7 +11,8 @@ pytest_plugins = ['tests.hermes_runtime.test_main_schedule_tools']
 
 
 @pytest.mark.asyncio
-async def test_native_main_reply_uses_original_admission_after_compaction(main_home, monkeypatch):
+@pytest.mark.parametrize('with_timer', [False, True])
+async def test_native_main_reply_uses_original_admission_after_compaction(main_home, monkeypatch, with_timer):
     from types import SimpleNamespace
 
     from gateway.config import GatewayConfig, Platform, PlatformConfig
@@ -61,6 +59,18 @@ async def test_native_main_reply_uses_original_admission_after_compaction(main_h
     opened = _call(owner, **_args(project))
     assert opened['input_watermarks']['session_admissions'] == earlier['seq']
     assert opened['job_id'] is None
+    job_id = other = None
+    if with_timer:
+        from cron.jobs import get_job
+        from tests.hermes_runtime.test_external_wait_timer import _timer
+        from tests.hermes_runtime.test_main_schedule_tools import _tool
+
+        timer = _timer(owner, {'action': 'create', 'project_id': project, 'wait_id': opened['wait_id'],
+                               'schedule': 'every 15m', 'prompt': 'Check the exact supplier order'})
+        assert timer['success'], timer
+        job_id = timer['job_id']
+        other = _tool('create', schedule='every 1h', prompt='Unrelated reminder')['job_id']
+        opened = _call(owner, op='select', project_id=project, wait_id=opened['wait_id'])
 
     child = 'compressed-main'
     db.publish_compression_child(
@@ -83,6 +93,8 @@ async def test_native_main_reply_uses_original_admission_after_compaction(main_h
     assert replayed['admission_id'] == earlier['admission_id']
     assert close(replayed).get('error')
     assert _call(owner, op='select', project_id=project, wait_id=opened['wait_id']) == opened
+    if with_timer:
+        assert get_job(job_id)['enabled']
 
     _, later = await deliver('102')
     assert (later['request_id'], later['status'], later['outcome']) == ('102', 'terminal', 'completed')
@@ -92,7 +104,9 @@ async def test_native_main_reply_uses_original_admission_after_compaction(main_h
     closed = close(later)
     assert closed.pop('success') is True
     assert closed.pop('project_id') == project
-    assert (closed['state'], closed['close_reason'], closed['job_id']) == ('CLOSED', 'reply', None)
+    assert (closed['state'], closed['close_reason'], closed['job_id']) == ('CLOSED', 'reply', job_id)
+    if with_timer:
+        assert get_job(job_id) is None and get_job(other)['enabled']
     with ProjectStore(owner) as store:
         assert store.read_workspace(project)['external_wait'] == closed
     with db._read_ctx() as conn:

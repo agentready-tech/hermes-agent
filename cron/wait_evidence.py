@@ -5,6 +5,7 @@ from datetime import datetime
 
 def has_live_timer(wait, project_id, now):
     from cron.jobs import _peek_jobs_unlocked
+    from cron.wait_binding import exact_job
     from hermes_runtime.standalone.events import main_schedule_origin, validate_main_schedule
 
     job_id = wait.get('job_id')
@@ -13,12 +14,12 @@ def has_live_timer(wait, project_id, now):
     jobs = _peek_jobs_unlocked()
     if jobs is None or any(not isinstance(job, dict) for job in jobs):
         return False
-    matches = [job for job in jobs if job.get('id') == job_id]
-    if len(matches) != 1:
+    try:
+        job = exact_job(jobs, job_id, project_id, wait['wait_id'])
+    except (ValueError, KeyError):
         return False
-    job = matches[0]
     binding = {'project_id': project_id, 'wait_id': wait['wait_id'], 'state': 'bound'}
-    if job.get('external_wait') != binding or sum(item.get('external_wait') == binding for item in jobs) != 1:
+    if job is None or job.get('external_wait') != binding:
         return False
     if (job.get('origin') != main_schedule_origin() or job.get('enabled') is not True
             or job.get('paused_at') or job.get('state') not in ('scheduled', 'running')):

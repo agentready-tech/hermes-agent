@@ -1,6 +1,7 @@
 """Native main selection of one durable wait in an existing delegated project."""
 
 import json
+import sqlite3
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -8,7 +9,7 @@ from tools.registry import tool_error
 
 _KEY = "external_wait"
 _FIELDS = {
-    "open": {"mode", "reply_criterion", "deadline", "return_path", "source_ref"},
+    "open": {"mode", "reply_criterion", "deadline", "return_path"},
     "select": {"wait_id"},
     "close": {"wait_id", "reason", "reply_ref"},
 }
@@ -37,11 +38,11 @@ def native_schema(agent):
         "op": {"type": "string", "enum": sorted(_FIELDS)},
         "project_id": {"type": "string", "description": "Exact ID of an existing parent-owned project"},
         "wait_id": {"type": "string", "description": "Required for select and close"},
-        "mode": {"type": "string", "enum": ["resume_main", "browser_only"]},
+        "mode": {"type": "string", "enum": ["resume_main"]},
         "reply_criterion": {"type": "string"},
         "deadline": {"type": "string", "description": "Finite timezone-aware ISO timestamp"},
         "return_path": {"type": "string", "enum": ["timer"]},
-        "source_ref": {"type": "string", "description": "Exact authorized source; browser-only"},
+
         "reason": {"type": "string", "enum": ["reply", "cancelled", "closed", "expired", "access_lost"]},
         "reply_ref": {"type": "object", "properties": {
             "kind": {"type": "string", "enum": ["session_admission"]}, "admission_id": {"type": "string"},
@@ -57,27 +58,33 @@ def native_schema(agent):
             props["action"] = {**action, "description": action["description"] +
                 " Native main only: external_wait accepts op=open/select/close for an existing project."}
             tool = {**tool, "function": {**fn, "parameters": {**params, "properties": props}}}
+        elif fn["name"] == "cronjob_manage":
+            params = fn["parameters"]
+            props = {**params["properties"], "project_id": fields["project_id"], "wait_id": {
+                "type": "string", "description": "With project_id on create: bind to the exact selected external wait"}}
+            tool = {**tool, "function": {**fn, "parameters": {**params, "properties": props}}}
         result.append(tool)
     return result
 
 
+def timer_tool(function_name, arguments):
+    if function_name == "cronjob_manage" and ("project_id" in arguments or "wait_id" in arguments):
+        from tools.delegate_wait_timer import create
+
+        return lambda agent, args, _context: create(agent, args)
+    return None
+
+
 def _open_fields(args):
     mode, criterion, deadline = (args.get(key) for key in ("mode", "reply_criterion", "deadline"))
-    if mode not in ("resume_main", "browser_only") or not _text(criterion, 2000) or not _text(deadline, 64):
+    if mode != "resume_main" or not _text(criterion, 2000) or not _text(deadline, 64):
         raise ValueError("Expected a mode, reply criterion and timezone-aware deadline")
     end = datetime.fromisoformat(deadline)
     if end.tzinfo is None or end <= datetime.now(UTC):
         raise ValueError("Expected a future timezone-aware deadline")
     if args.get("return_path") != "timer":
         raise ValueError("A timer must be explicitly selected; an event return path requires confirmed native evidence")
-    fields = {"mode": mode, "reply_criterion": criterion, "deadline": end.astimezone(UTC).isoformat(), "return_path": "timer"}
-    if mode == "browser_only":
-        if not _text(args.get("source_ref"), 2000):
-            raise ValueError("Browser-only waits require one exact authorized source")
-        fields["source_ref"] = args["source_ref"]
-    elif "source_ref" in args:
-        raise ValueError("Resume-main waits do not take a source address")
-    return fields
+    return {"mode": mode, "reply_criterion": criterion, "deadline": end.astimezone(UTC).isoformat(), "return_path": "timer"}
 
 
 def _open(workspace, conn, fields):
@@ -146,7 +153,7 @@ def dispatch(agent, args):
             raise ValueError("Unexpected fields for this external wait operation")
         with ProjectStore(agent) as store:
             current = _apply(store, project_id, op, args)
-    except ValueError as error:
+    except (ValueError, RuntimeError, OSError, sqlite3.Error) as error:
         return tool_error(str(error))
     turn = agent._agentready_active_turn
     pair = (project_id, current["wait_id"])
@@ -165,7 +172,9 @@ def _apply(store, project_id, op, args):
     if not _text(wait_id, 128):
         raise ValueError("Expected an exact wait_id")
     if op == "close":
-        return store.mutate_workspace(project_id, lambda workspace, conn: _close(workspace, conn, store, wait_id, args))
+        from tools.delegate_wait_timer import close
+
+        return close(store, project_id, wait_id, args)
     current = _existing(store.read_workspace(project_id), wait_id)
     if current["state"] == "CLOSING" or datetime.fromisoformat(current["deadline"]) <= datetime.now(UTC):
         raise ValueError("Cannot select a closing or expired wait")
@@ -175,6 +184,7 @@ def _apply(store, project_id, op, args):
 def selected_timer_proof(agent):
     """None means the AGE-6 timer check does not apply to this turn."""
     from cron.wait_evidence import has_live_timer
+    from cron.wait_binding import store_home
     from tools.delegate_project_store import ProjectStore
 
     pair = getattr(getattr(agent, '_agentready_active_turn', None), 'external_wait', None)
@@ -191,4 +201,8 @@ def selected_timer_proof(agent):
     if (wait.get('state') not in ('OPEN', 'RESERVED', 'BOUND') or wait.get('return_path') != 'timer'
             or deadline.tzinfo is None or deadline <= now):
         return None
+    try:
+        store_home()
+    except (ValueError, RuntimeError, OSError):
+        return False
     return has_live_timer(wait, project_id, now)

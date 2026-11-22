@@ -100,7 +100,9 @@ def admit_cron(job, *, extra_prompt=None, cancel_event=None, execution_id=None):
     Only jobs explicitly created for this inbox take this path. Native scripts,
     monitors and other jobs keep their normal execution and delivery semantics.
     """
-    if not is_main_schedule(job):
+    from cron.wait_binding import is_wait_timer
+    wait_timer = is_wait_timer(job)
+    if not wait_timer and not is_main_schedule(job):
         if main_scheduling_enabled():
             raise ValueError("Separate-session cron runs are disabled for managed Hermes. "
                              "Create a main-inbox schedule with cronjob_manage or hermes-autonomous schedule.")
@@ -115,6 +117,8 @@ def admit_cron(job, *, extra_prompt=None, cancel_event=None, execution_id=None):
         activate_home(get_hermes_home())
     request_id = execution_id or job.get("execution_id") or uuid.uuid4().hex
     job["execution_id"] = request_id
+    if wait_timer:
+        return _admit_wait_timer(job, request_id, cancel_event)
     # The managed validator above still rejects both external monitor inputs.
     from cron.scheduler import _apply_monitor_gate
     job.pop("_managed_monitor_no_change", None)
@@ -129,8 +133,28 @@ def admit_cron(job, *, extra_prompt=None, cancel_event=None, execution_id=None):
     metadata = {"job_id": job_id, "execution_id": request_id}
     if monitor_context is not None:
         metadata["untrusted_monitor_observation"] = monitor_context
-    receipt = _admit_scheduled_prompt("\n\n".join(p for p in (job.get("prompt"), extra_prompt) if p),
-                                     f"{job_id}:{request_id}", metadata)
+    return _admit_job_prompt(job_id, request_id, "\n\n".join(p for p in (job.get("prompt"), extra_prompt) if p), metadata)
+
+
+def _admit_wait_timer(job, request_id, cancel_event):
+    import sqlite3
+    from cron.wait_binding import admitted_binding
+
+    try:
+        with admitted_binding(job) as (tag, current):
+            if cancel_event is not None and cancel_event.is_set():
+                return False, "Schedule cancelled before admission", "", "cancelled"
+            job_id = current["id"]
+            return _admit_job_prompt(job_id, request_id, current["prompt"], {
+                "job_id": job_id, "execution_id": request_id,
+                "project_id": tag["project_id"], "wait_id": tag["wait_id"],
+            })
+    except (ValueError, RuntimeError, OSError, sqlite3.Error, KeyError, TypeError):
+        return False, "External wait timer not admitted", "", "external_wait_not_active"
+
+
+def _admit_job_prompt(job_id, request_id, prompt, metadata):
+    receipt = _admit_scheduled_prompt(prompt, f"{job_id}:{request_id}", metadata)
     response = f"Queued for main: {receipt['message_id']}. Timer handoff saved; see main history for task outcome."
     return True, response + "\n", response, None
 

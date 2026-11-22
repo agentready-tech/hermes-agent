@@ -1446,6 +1446,12 @@ def _resolve_sequential_dispatch(agent, ref: _ToolCallRef, messages: list) -> _S
     function_name, function_args, effective_task_id, tool_call_id, middleware_trace = (
         ref.name, ref.args, ref.task_id, ref.call_id, ref.trace,
     )
+    if function_name == "cronjob_manage":
+        from tools.delegate_external_wait import timer_tool
+
+        timer_executor = timer_tool(function_name, function_args)
+        if timer_executor is not None:
+            return _SequentialDispatch(lambda args: timer_executor(agent, args, None), finish_in_finally=False)
     if function_name != "delegate_task" and function_name in INLINE_TOOL_EXECUTORS:
         # Agent-level tools that need live AIAgent state; table shared with invoke_tool.
         inline_executor = INLINE_TOOL_EXECUTORS[function_name]

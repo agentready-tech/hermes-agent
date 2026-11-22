@@ -415,7 +415,7 @@ def fire_claim_fence(job_id: str, *, expected_owner: str):
 
 # Fields that must never change after creation: ``id`` is a path component under OUTPUT_DIR, so an
 # update could leak ``../escape``/absolute/nested values into output writes/deletes.
-_IMMUTABLE_JOB_FIELDS = frozenset({"id"})
+_IMMUTABLE_JOB_FIELDS = frozenset({"id", "external_wait"})
 
 
 def _job_output_dir(job_id: str) -> Path:
@@ -1805,6 +1805,7 @@ def create_job(
     paused_reason: Optional[str] = None,
     pinned: bool = False,
     interpreter: Optional[str] = None,
+    _wait_timer: Optional[tuple[str, str, str]] = None,
 ) -> dict[str, Any]:
     """Create a new cron job and return the stored record.
 
@@ -1831,7 +1832,7 @@ def create_job(
         repeat = 1
     if deliver is None:
         deliver = "origin" if origin else "local"
-    job_id = uuid.uuid4().hex[:12]
+    job_id = _wait_timer[0] if _wait_timer is not None else uuid.uuid4().hex[:12]
     now = _hermes_now().isoformat()
 
     raw = locals()
@@ -1907,6 +1908,9 @@ def create_job(
         if value is not None:
             job[key] = value
 
+    if _wait_timer is not None:
+        from cron.wait_binding import stage_job
+        return stage_job(job, _wait_timer)
     with _jobs_lock():
         save_jobs(load_jobs() + [job])
     return job
@@ -2089,6 +2093,14 @@ def update_job(job_id: str, updates: dict[str, Any]) -> Optional[dict[str, Any]]
         _normalize_job_updates(job, updates)
         _apply_pin_update(job, updates)
         updated = _apply_skill_fields({**job, **updates})
+        if "external_wait" in job:
+            from cron.wait_binding import validate_timer
+
+            validate_timer(updated)
+            if any(updated.get(field) != job.get(field) for field in ("prompt", "schedule", "repeat")):
+                raise ValueError("Close the exact external wait before changing its timer definition")
+            if job["external_wait"].get("state") == "staged" and is_job_runnable(updated):
+                raise ValueError("An external wait timer cannot run before binding")
         _reject_terminal_activation(job, updated, job_id)
         # Re-check on the MERGED record; scoped to changed fields so legacy records keep loading.
         if {"monitor_script", "monitor_url", "no_agent", "script"}.intersection(updates):

@@ -2520,7 +2520,7 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
         )
         return result
     tool_start_time = time.monotonic()
-    inline_executor = resolve_invoke_tool_executor(agent, function_name)
+    inline_executor = resolve_invoke_tool_executor(agent, function_name, function_args)
     if inline_executor is not None:
         inline_ctx = InlineToolContext(
             effective_task_id=effective_task_id, tool_call_id=tool_call_id, messages=messages

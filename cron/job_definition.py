@@ -8,6 +8,7 @@ from typing import Any, Dict
 
 from cron.jobs import _apply_schedule_update, _jobs_lock, is_job_runnable, load_jobs, parse_schedule, save_jobs
 from cron.quota_hold import clear_state as _clear_quota_hold
+from cron.wait_binding import is_wait_timer
 from hermes_time import now as _hermes_now
 
 JOB_DEFINITION_FIELDS = frozenset({
@@ -72,6 +73,8 @@ def import_job_definitions(shipped: dict[str, dict[str, Any]], *, paused_reason:
 
 def _merge_or_name(local: dict[str, Any], authored: dict[str, Any]) -> dict[str, Any]:
     try:
+        if is_wait_timer(local) or is_wait_timer(authored):
+            raise ValueError("External wait timers belong to their owning profile and cannot be imported")
         return merge_job_definition(local, authored)
     except ValueError as exc:
         raise ValueError(f"cron job {authored.get('name') or local.get('id')!r}: {exc}") from exc

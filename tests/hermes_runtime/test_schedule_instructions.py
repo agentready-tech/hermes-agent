@@ -61,10 +61,10 @@ def test_scheduling_policy_is_mandatory_only_for_the_main_owner(runtime, monkeyp
         assert "Existing host instructions" in text
         for rule in (
             "stable project_id and wait_id",
-            "exact recorded job_id",
+            "Retry the same arguments for an unresolved receipt",
             "future next_run_at",
-            "at most once per tick",
-            "use only computer_use for desktop UI",
+            "cron does not check the source",
+            "The wake is not evidence of a reply",
         ):
             assert (rule in text) == (kind == "main")
         if kind == "main":
