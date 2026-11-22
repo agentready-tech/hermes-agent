@@ -254,29 +254,40 @@ def _input_segment(agent, kwargs, records):
     return segment, only_stale
 
 
-def run_segment(agent, turn, proceed, *args, goal_records=(), **kwargs):
-    from agent.notification_presentation import notification_turn
+def _home_recovery_records(turn):
+    receipts = _automation_receipts(_automation(admitted_input.get() or {}))
+    if len(receipts) == 1 and receipts[0].startswith("home-recovery-"):
+        return turn.take_records(only_if=goal_inbox_event)
+    return []
+
+
+def _queued_prompt(records, steer, kwargs):
     from hermes_runtime.events import combine_event_content
+
+    kwargs.pop("user_message", None)
+    kwargs.pop("persist_user_message", None)
+    kwargs["persist_user_platform_id"] = records[0][0] if records else None
+    kwargs["persist_user_display_metadata"] = {"agentready_inbox_ids": [i for i, _ in records]}
+    return combine_event_content([*([steer] if steer else []), *(content for _, content in records)])
+
+
+def run_segment(agent, turn, proceed, *args, goal_records=(), goal_steer=None, **kwargs):
+    from agent.notification_presentation import notification_turn
     from tools.delegate_external_wait import _owns_main
 
     if not _owns_main(agent):
         return proceed(*args, **kwargs)
-    if not goal_records:
-        receipts = _automation_receipts(_automation(admitted_input.get() or {}))
-        if len(receipts) == 1 and receipts[0].startswith("home-recovery-"):
-            goal_records = turn.take_records(only_if=goal_inbox_event)
-            if goal_records:
-                args = (combine_event_content([content for _, content in goal_records]), *args[1:])
-                kwargs.pop("user_message", None)
-                kwargs.pop("persist_user_message", None)
-                kwargs["persist_user_platform_id"] = goal_records[0][0]
-                kwargs["persist_user_display_metadata"] = {"agentready_inbox_ids": [i for i, _ in goal_records]}
+    goal_records = goal_records or _home_recovery_records(turn)
     segment, only_stale = _input_segment(agent, kwargs, goal_records)
     turn.goal_segment = segment
-    _without_obsolete(turn, segment, goal_records)
-    if only_stale:
+    retained = _without_obsolete(turn, segment, goal_records)
+    if only_stale and not goal_steer:
         return {"final_response": "", "messages": kwargs.get("conversation_history", []), "completed": True,
                 "session_id": agent.session_id, "_notification_reply_muted": True}
+    if goal_records:
+        args = (_queued_prompt(retained, goal_steer, kwargs), *args[1:])
+    if goal_steer:
+        segment.quiet_source = False
     original = args[0] if args else kwargs.get("user_message")
     if segment.project_ids and isinstance(original, str):
         prompt = original + "\n\nResume these saved Project Goals by exact project_id: " + ", ".join(sorted(segment.project_ids))
@@ -325,7 +336,7 @@ def _working(store, project_id):
     ))
 
 
-def _waiting(store, project_id, *, include_due=False):
+def _waiting(store, project_id, *, until_deadline=False):
     from cron.wait_binding import store_home
     from cron.wait_evidence import has_live_timer
 
@@ -336,7 +347,7 @@ def _waiting(store, project_id, *, include_due=False):
         store_home()
     except (ValueError, RuntimeError, OSError):
         return None
-    if has_live_timer(wait, project_id, datetime.now(UTC), include_due=include_due):
+    if has_live_timer(wait, project_id, datetime.now(UTC), until_deadline=until_deadline):
         return wait["wait_id"]
     return None
 
@@ -351,7 +362,7 @@ def _branch(store, project_id, goal):
         return {"status": "running", "wake_id": None, "attempts_without_progress": 0}
     if _awaiting_operation(store, goal):
         return {"status": "awaiting_operation", "wake_id": None, "attempts_without_progress": 0}
-    if wait_id := _waiting(store, project_id, include_due=goal["status"] == "waiting"):
+    if wait_id := _waiting(store, project_id, until_deadline=goal["status"] == "waiting"):
         return {"status": "waiting", "wait_id": wait_id, "wake_id": None, "attempts_without_progress": 0}
     return {"status": "ready"}
 
@@ -485,7 +496,7 @@ def recover():
                     close_goal(store, project_id, goal["outcome"], goal["final_evidence"])
                 elif goal["status"] == "ready":
                     _recover_ready(store, project_id, goal)
-                elif (goal["status"] == "waiting" and not _waiting(store, project_id, include_due=True)
+                elif (goal["status"] == "waiting" and not _waiting(store, project_id, until_deadline=True)
                       or goal["status"] == "awaiting_operation" and not _awaiting_operation(store, goal)):
                     branch = _branch(store, project_id, goal)
                     current = _write_transition(store, project_id, branch, None, None)

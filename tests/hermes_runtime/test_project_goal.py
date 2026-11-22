@@ -466,7 +466,7 @@ def test_confirmed_native_operation_returns_to_its_goal_without_cron(main_home, 
 def test_recovery_leaves_due_slot_to_owning_cron(main_home, monkeypatch):
     from datetime import datetime, timedelta
 
-    from cron.jobs import get_job
+    from cron.jobs import _jobs_lock, _peek_jobs_unlocked, get_job, save_jobs
     from hermes_runtime.adapters import goal_turn
     from hermes_runtime.adapters.inbox import HomeInbox
 
@@ -485,6 +485,15 @@ def test_recovery_leaves_due_slot_to_owning_cron(main_home, monkeypatch):
     assert HomeInbox().pending() == []
 
     after_deadline = datetime.fromisoformat(wait["deadline"]) + timedelta(seconds=1)
+    # Cron advances the recurrence before handing off its last valid occurrence.
+    with _jobs_lock(strict=True):
+        jobs = _peek_jobs_unlocked()
+        next(record for record in jobs if record["id"] == job)["next_run_at"] = after_deadline.isoformat()
+        save_jobs(jobs)
+    goal_turn.recover()
+    assert _snapshot(actor, goal)["status"] == "waiting"
+    assert HomeInbox().pending() == []
+
     monkeypatch.setattr(goal_turn, "datetime", SimpleNamespace(now=lambda _tz: after_deadline))
     goal_turn.recover()
     assert _snapshot(actor, goal)["status"] == "ready"
@@ -539,6 +548,8 @@ def test_cancel_discards_only_the_goals_queued_work_and_abandoned_claim(main_hom
 
 
 def test_bound_wake_cannot_modify_a_second_goal(main_home):
+    from tools.delegate_projects import project_action
+
     _, db = main_home
     actor = _actor(db)
     bound = _open(actor, "First task")
@@ -550,6 +561,19 @@ def test_bound_wake_cannot_modify_a_second_goal(main_home):
         result = json.loads(dispatch(actor, {"action": "project_goal", "op": operation, "project_id": other}))
         assert "outside the scope" in result["error"]
     assert "outside the scope" in _call(actor, **_args(other))["error"]
+    for action in ("archive", "stop", "send"):
+        with pytest.raises(ValueError, match="outside the scope"):
+            project_action(actor, action, subagent_id=other, message="Do unrelated work", event_id="second")
+    with ProjectStore(actor) as store:
+        other_key = store.get(other)["project_key"]
+        worker = store.create("shared-pending", "Handle multiple goals", "")
+        store.enqueue(worker, "Bound work", {"goal_project_id": bound}, "bound")
+        store.enqueue(worker, "Unrelated work", {"goal_project_id": other}, "other")
+    with pytest.raises(ValueError, match="outside the scope"):
+        project_action(actor, "spawn", tasks=[{"project": other_key, "goal": "Do unrelated work"}])
+    with pytest.raises(ValueError, match="outside the scope"):
+        project_action(actor, "stop", subagent_id=worker["subagent_id"])
+    assert [p["subagent_id"] for p in project_action(actor, "list")["projects"]] == [bound]
     assert segment.project_ids == {bound}
     assert _snapshot(actor, other)["status"] == "ready"
 
@@ -585,3 +609,35 @@ def test_human_followup_keeps_its_reply_during_a_quiet_goal_wake(main_home, monk
     assert result["final_response"] == "The current step is saved."
     assert not result.get("_notification_reply_muted")
     assert _snapshot(actor, goal)["status"] == "ready"
+
+
+def test_expired_input_is_removed_from_mixed_segment_and_retired(main_home, monkeypatch):
+    from hermes_runtime.adapters import goal_turn
+    from hermes_runtime.adapters.inbox import HomeInbox
+    from hermes_runtime.events import event_prompt
+
+    _, db = main_home
+    actor = _actor(db)
+    abandoned = _open(actor, "Cancelled task")
+    monkeypatch.setattr("hermes_runtime.adapters.state.main_gateway_origin", dict)
+    goal_turn.finish_segment(actor, "Queued.")
+    inbox = HomeInbox()
+    [obsolete] = inbox.pending()
+    _goal(actor, "cancel", project_id=abandoned)
+
+    followup = event_prompt("Check the current status", "agentready", "panel:new-input", {})
+    identity, _ = inbox.enqueue(followup)
+    records = [obsolete, (identity, followup)]
+    turn = SimpleNamespace(inbox=inbox)
+    actor._agentready_active_turn = turn
+
+    def model(prompt, **kwargs):
+        assert "Check the current status" in prompt and "Continue the saved Project Goal" not in prompt
+        assert kwargs["persist_user_platform_id"] == identity
+        assert kwargs["persist_user_display_metadata"]["agentready_inbox_ids"] == [identity]
+        return {"completed": True, "final_response": "Current status."}
+
+    result = goal_turn.run_segment(actor, turn, model, "old and new inputs", goal_records=records,
+                                   goal_steer="A separate clarification", conversation_history=[])
+    assert result["final_response"] == "Current status."
+    assert inbox.pending() == [(identity, followup)]

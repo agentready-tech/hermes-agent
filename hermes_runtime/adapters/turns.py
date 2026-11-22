@@ -337,7 +337,8 @@ def run_conversation(self, proceed, *args, **kwargs):
                 continuation["persist_user_platform_id"] = records[0][0] if records else None
                 continuation["persist_user_display_kind"] = None
                 continuation["persist_user_display_metadata"] = {"agentready_inbox_ids": [identity for identity, _ in records]}
-                result = run_segment(self, turn, proceed, combine_event_content(pending), goal_records=records, **continuation)
+                result = run_segment(self, turn, proceed, combine_event_content(pending),
+                                     goal_records=records, goal_steer=leftover, **continuation)
             turn.finish(result=result)
             return result
         except BaseException as error:
