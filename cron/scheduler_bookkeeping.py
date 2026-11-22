@@ -86,7 +86,11 @@ def finish_completed_run(d, fire_owner: Optional[str], execution_id: str, *, rec
         mark_kwargs["status"] = "blocked_config"
     from hermes_runtime.standalone.events import is_main_schedule
     main_admitted = d.success and not d.delivery_error and not d.blocked_config and is_main_schedule(job)
-    if main_admitted:
+    no_change = job.pop("_managed_monitor_no_change", False) and main_admitted
+    if no_change:
+        main_admitted = False
+        mark_kwargs["status"] = "no_change"
+    elif main_admitted:
         # This fire saved the handoff; the main conversation owns the eventual task outcome.
         mark_kwargs["status"] = "admitted"
     # A run that removed its own record has nothing left to mark; the delivery above is its result.

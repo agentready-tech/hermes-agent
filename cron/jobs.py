@@ -287,15 +287,12 @@ def _release_flock(lock_fd) -> None:
 
 
 @contextlib.contextmanager
-def _jobs_lock():
-    """Serialize a load_jobs→modify→save_jobs critical section: in-process RLock (parallel tick
-    threads) plus a cross-process flock on ``<cron dir>/.jobs.lock`` (gateway vs. CLI writes —
-    otherwise a `cron pause` could be clobbered and keep firing). Nested calls in one thread
-    reuse the held lock. Without a flock backend, or on flock timeout (logged loudly), it
-    degrades to in-process-only locking: a briefly torn cross-process write beats a dead
-    scheduler."""
+def _jobs_lock(*, strict=False):
+    """Serialize load/modify/save; refuse legacy in-process degradation in strict mode."""
     depth = getattr(_jobs_lock_state, "depth", 0)
     if depth:
+        if strict and _jobs_lock_state.locked_path != _jobs_lock_file():
+            raise RuntimeError("Cron write requires the owning profile's cross-process jobs lock")
         _jobs_lock_state.depth = depth + 1
         try:
             yield
@@ -305,39 +302,36 @@ def _jobs_lock():
 
     with _jobs_file_lock:
         _jobs_lock_state.depth = 1
-        # jobs.json stamp as of this section's load_jobs(): lets _save_jobs_unlocked skip the
-        # shrink-merge parse when the file provably hasn't changed. Reset on entry/exit so stale
-        # stamps from unlocked loads or prior sections can never suppress a needed merge.
-        # See #80703.
-        _jobs_lock_state.load_stamp = None
+        # A prior section's stamp must not suppress a needed shrink-merge (#80703).
+        _jobs_lock_state.load_stamp = _jobs_lock_state.locked_path = None
         lock_fd = None
         try:
             try:
                 ensure_dirs()
-                lock_fd = open(_jobs_lock_file(), "a+", encoding="utf-8-sig")
+                path = _jobs_lock_file()
+                lock_fd = open(path, "a+", encoding="utf-8-sig")
                 lock_fd.seek(0)
-                if _acquire_flock(lock_fd, _JOBS_LOCK_TIMEOUT_SECONDS) is False:
-                    logger.error(
-                        "Timed out after %.0fs waiting for the cron "
-                        "jobs lock (%s) — another process is holding "
-                        "it. Proceeding with in-process locking only "
-                        "so the scheduler stays alive (#60703).",
-                        _JOBS_LOCK_TIMEOUT_SECONDS, _jobs_lock_file())
+                acquired = _acquire_flock(lock_fd, _JOBS_LOCK_TIMEOUT_SECONDS)
+                if acquired is True:
+                    _jobs_lock_state.locked_path = path
+                elif acquired is False:
+                    logger.error("Timed out after %.0fs waiting for the cron jobs lock (%s) (#60703)",
+                                 _JOBS_LOCK_TIMEOUT_SECONDS, path)
                     with contextlib.suppress(OSError):
                         lock_fd.close()
                     lock_fd = None
             except OSError as e:
-                # A locking failure must never take down cron writes — in-process lock still held.
-                logger.warning("jobs.json cross-process lock unavailable (%s); "
-                               "proceeding with in-process lock only", e)
+                logger.warning("jobs.json cross-process lock unavailable (%s)", e)
             try:
+                if strict and _jobs_lock_state.locked_path is None:
+                    raise RuntimeError("Cron write requires the owning profile's cross-process jobs lock")
                 yield
             finally:
                 if lock_fd is not None:
                     _release_flock(lock_fd)
         finally:
             _jobs_lock_state.depth = 0
-            _jobs_lock_state.load_stamp = None
+            _jobs_lock_state.load_stamp = _jobs_lock_state.locked_path = None
 
 
 @contextlib.contextmanager

@@ -61,3 +61,47 @@ def test_managed_monitor_baseline_quiet_change_failure_and_cancel(main_home, mon
     assert len(inbox.pending()) == 2
     assert get_job(job_id)['monitor_state'] == stored_change
     assert [job['id'] for job in list_jobs()] == [job_id]
+
+
+def test_equal_monitor_output_is_silent_through_scheduler_tick(main_home, monkeypatch):
+    from unittest.mock import Mock
+
+    from cron import jobs, monitor, scheduler, scheduler_tick
+    from cron.executions import latest_execution
+    from hermes_runtime.adapters.inbox import HomeInbox
+
+    monkeypatch.setattr('hermes_runtime.adapters.state.main_gateway_origin', dict)
+    result = _tool('create', schedule='every 1h', prompt='Review offline fixture')
+    assert result['success'], result
+    job_id = result['job_id']
+    monkeypatch.setattr(monitor, 'job_has_monitor', lambda job: job['id'] == job_id)
+    read_source = Mock(return_value=(True, 'unchanged fixture'))
+    monkeypatch.setattr(monitor, '_run_monitor_source', read_source)
+    monkeypatch.setattr(scheduler, '_launch_external_cron_worker', Mock(return_value=False))
+    monkeypatch.setattr(scheduler_tick, '_pre_dispatch_housekeeping', Mock())
+    for name in ('_maybe_run_worktree_maintenance', '_sweep_mcp_orphans', '_sweep_stale_inflight_for_tick'):
+        monkeypatch.setattr(scheduler, name, Mock())
+    monkeypatch.setattr(scheduler, '_should_yield_tick_to_fresh_gateway', Mock(return_value=None))
+    model = Mock(side_effect=AssertionError('A quiet tick must not create an agent'))
+    monkeypatch.setattr('run_agent.AIAgent', model)
+
+    job = jobs.get_job(job_id)
+    assert scheduler.run_job(job, execution_id='fixture-baseline')[0]
+    hash_before = jobs.get_job(job_id)['monitor_state']
+    inbox_before = HomeInbox().pending()
+    due = datetime.fromisoformat(jobs.get_job(job_id)['next_run_at'])
+    monkeypatch.setattr(jobs, '_hermes_now', lambda: due)
+    monkeypatch.setattr(scheduler, '_hermes_now', lambda: due)
+    assert scheduler.tick(verbose=False) == 1
+
+    receipt = latest_execution(job_id)
+    assert receipt['status'] == 'completed'
+    assert receipt['delivery_outcome'] == 'suppressed'
+    current = jobs.get_job(job_id)
+    assert current['last_status'] == 'no_change'
+    assert datetime.fromisoformat(current['next_run_at']) > due
+    assert current['monitor_state'] == hash_before
+    assert [record['id'] for record in jobs.list_jobs()] == [job_id]
+    assert HomeInbox().pending() == inbox_before
+    assert read_source.call_count == 2
+    model.assert_not_called()

@@ -117,11 +117,14 @@ def admit_cron(job, *, extra_prompt=None, cancel_event=None, execution_id=None):
     job["execution_id"] = request_id
     # The managed validator above still rejects both external monitor inputs.
     from cron.scheduler import _apply_monitor_gate
+    job.pop("_managed_monitor_no_change", None)
     job_id = job["id"]
     early, extra_prompt, monitor_context = _apply_monitor_gate(
         job, job_id, job.get("name") or job_id, extra_prompt,
     )
     if early is not None:
+        if early[0]:
+            job["_managed_monitor_no_change"] = True
         return early
     metadata = {"job_id": job_id, "execution_id": request_id}
     if monitor_context is not None:
