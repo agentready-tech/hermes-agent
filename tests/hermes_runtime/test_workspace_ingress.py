@@ -35,8 +35,10 @@ def test_partial_admission_and_failed_cursor_write_replay_safely(tmp_path):
 
 def test_real_home_inbox_deduplicates_replayed_mail(monkeypatch, tmp_path):
     from hermes_constants import get_hermes_home
+    from hermes_runtime.adapters import hermes
 
     home = get_hermes_home()
+    monkeypatch.setattr(hermes, '_home', None)
     activate_home(home)
     monkeypatch.setattr("hermes_runtime.adapters.turns.forward_to_active_turn", lambda *args: None)
     admit_batches(home, batch(), {}, save=lambda value: None)
@@ -44,3 +46,39 @@ def test_real_home_inbox_deduplicates_replayed_mail(monkeypatch, tmp_path):
     with HomeInbox().transaction() as conn:
         keys = [json.loads(row[0]) for row in conn.execute("SELECT event_key FROM agentready_inbox")]
     assert sum(key[0] == "email:fixture" for key in keys) == 3
+
+
+def test_cursor_retries_real_rollback_without_forwarding_replays(monkeypatch):
+    import sqlite3
+
+    from hermes_constants import get_hermes_home
+    from hermes_runtime.adapters import hermes
+
+    home = get_hermes_home()
+    monkeypatch.setattr(hermes, '_home', None)
+    activate_home(home)
+    inbox = HomeInbox(home)
+    forwarded, saves, cursors = [], [], {}
+    monkeypatch.setattr('hermes_runtime.adapters.turns.forward_to_active_turn', forwarded.append)
+    with inbox.transaction() as conn:
+        conn.execute("""CREATE TRIGGER fixture_mail_writer BEFORE INSERT ON agentready_inbox
+            WHEN json_extract(NEW.event_key, '$[1]')='2'
+            BEGIN SELECT RAISE(ABORT,'fixture mail write'); END""")
+    with pytest.raises(sqlite3.IntegrityError, match='fixture mail write'):
+        admit_batches(home, batch(), cursors, save=saves.append)
+    first = inbox.pending()
+    assert len(first) == len(forwarded) == 1 and not saves and not cursors
+    with inbox.transaction() as conn:
+        conn.execute('DROP TRIGGER fixture_mail_writer')
+
+    def fail_save(_value):
+        raise OSError('fixture cursor write')
+
+    with pytest.raises(OSError, match='fixture cursor write'):
+        admit_batches(home, batch(), cursors, save=fail_save)
+    all_pending = inbox.pending()
+    assert not cursors and len(all_pending) == len(forwarded) == 3
+    assert first[0] in all_pending
+    admit_batches(home, batch(), cursors, save=saves.append)
+    assert inbox.pending() == all_pending and len(forwarded) == 3
+    assert saves == [cursors] == [{'mail-fixture': {'uid': 3}}]

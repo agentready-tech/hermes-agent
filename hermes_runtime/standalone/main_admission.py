@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from functools import partial
+import hashlib
 import json
 from pathlib import Path
 from typing import Literal
@@ -25,6 +26,15 @@ class LinearInput:
 class LinearReceipt:
     status: Literal['accepted', 'duplicate', 'ignored']
     admission_id: str | None = None
+
+
+@dataclass(frozen=True)
+class WorkspaceMail:
+    prompt: str
+    source: str
+    event_id: str
+    metadata: dict | None = None
+    session_store: object = None
 
 
 def _require_home(home):
@@ -107,8 +117,52 @@ async def _admit_linear(home, incoming):
             then=committed, ordered=True, after=schedule)
 
 
+def _write_mail(conn, inbox, incoming):
+    from hermes_runtime.adapters.state import current_home_session_id, main_gateway_origin
+    from hermes_runtime.events import event_prompt
+    from tools.delegate_project_recovery import _write_wakeup_in_transaction
+
+    key = json.dumps([incoming.source, incoming.event_id])
+    legacy = conn.execute('SELECT message_id,delivered_at FROM agentready_inbox WHERE event_key=?', (key,)).fetchone()
+    if legacy is not None:
+        return {'message_id': legacy[0], 'pending': legacy[1] is None}, False
+    identity = 'main-mail-' + hashlib.sha256(key.encode()).hexdigest()
+    if conn.execute('SELECT 1 FROM async_delegations WHERE delegation_id=?', (identity,)).fetchone():
+        return {'message_id': identity}, False
+
+    content = event_prompt(incoming.prompt, incoming.source, incoming.event_id, incoming.metadata)
+    origin = main_gateway_origin(session_store=incoming.session_store)
+    if origin:
+        _write_wakeup_in_transaction(conn, identity, current_home_session_id(), origin, content, agent_message=False,
+                                     goal='Process the incoming email in the existing main conversation')
+        return {'message_id': identity}, False
+    _, identity = inbox._enqueue_identity(content, None)
+    message_id, pending = inbox._enqueue_in_transaction(conn, content, key=key, identity=identity)
+    return {'message_id': message_id, 'pending': pending}, pending
+
+
+def _admit_mail(home, incoming):
+    from hermes_runtime.adapters.inbox import HomeInbox
+    from hermes_runtime.standalone.events import _forward_pending_event
+    from tools.async_delegation_worker import require_ledger_owner
+
+    _require_home(home)
+    require_ledger_owner()
+    if not str(incoming.prompt).strip() or not incoming.event_id or not incoming.source:
+        raise ValueError('An event requires nonempty content, source and stable event_id')
+    inbox = HomeInbox(home)
+    with inbox.transaction() as conn:
+        receipt, forward = _write_mail(conn, inbox, incoming)
+    if forward:
+        _forward_pending_event(inbox, receipt['message_id'])
+    return receipt
+
+
 def admit_main(home, incoming):
-    """Linear returns an awaitable on the owning gateway loop."""
-    if not isinstance(incoming, LinearInput):
-        raise TypeError('Expected a checked Linear input')
-    return _admit_linear(Path(home).resolve(), incoming)
+    """Workspace poll commits synchronously; Linear runs on the owning gateway loop."""
+    home = Path(home).resolve()
+    if isinstance(incoming, WorkspaceMail):
+        return _admit_mail(home, incoming)
+    if isinstance(incoming, LinearInput):
+        return _admit_linear(home, incoming)
+    raise TypeError('Expected Workspace mail or a checked Linear input')
