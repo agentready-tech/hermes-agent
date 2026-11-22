@@ -1,4 +1,6 @@
 """Physical worker rotation cannot re-key an accepted input or unblock its FIFO."""
+from contextlib import closing
+
 import pytest
 
 from agent.runtime_session_store import RuntimeSessionStore
@@ -7,6 +9,37 @@ from hermes_state_runtime import (
     admit_session_input, begin_runtime_epoch, claim_session_input,
     get_session_admission, mutate_worker_execution, register_worker_execution,
 )
+
+
+def test_admission_guard_metadata_rolls_back_and_exact_retry_does_not_repeat_it(tmp_path):
+    class Abort(Exception):
+        pass
+
+    path = tmp_path / 'state.db'
+    with closing(SessionDB(path)) as db:
+        db.create_session('root', 'cli')
+        epoch = begin_runtime_epoch(db, instance_id='owner')
+        request = dict(epoch=epoch, principal_id='fixture', session_id='root',
+                       request_id='event', payload={'text': 'Inert input'})
+
+        def abort(conn):
+            db.set_meta('fixture.guard', 'uncommitted', cursor=conn.cursor())
+            raise Abort()
+
+        with pytest.raises(Abort):
+            admit_session_input(db, **request, _authorize_write=abort)
+        assert db.get_meta('fixture.guard') is None
+        assert db._read_one('SELECT COUNT(*) FROM session_admissions')[0] == 0
+
+        def stage(conn):
+            db.set_meta('fixture.guard', 'committed', cursor=conn.cursor())
+
+        row = admit_session_input(db, **request, _authorize_write=stage)
+
+    with closing(SessionDB(path)) as db:
+        assert db.get_meta('fixture.guard') == 'committed'
+        assert admit_session_input(db, **request, _authorize_write=abort)['admission_id'] == row['admission_id']
+        assert db.get_meta('fixture.guard') == 'committed'
 
 
 def test_rotation_preserves_admission_identity_and_lost_ack_fifo(tmp_path):

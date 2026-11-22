@@ -112,3 +112,41 @@ async def test_main_automation_rejects_foreign_or_stale_delivery_before_commit(m
     with pytest.raises(RuntimeStoreError):
         await authority.admit_automation(adapter, event, 'fixture-producer')
     assert list_session_admissions(db, session_id='agentready_home', pending_only=False) == []
+
+
+@pytest.mark.asyncio
+async def test_queued_main_producer_keeps_its_owner_after_compaction_and_reopen(main_home, monkeypatch):
+    from contextlib import closing
+
+    from gateway.platforms.event import MessageEvent
+    from gateway.session_automation import restore_local_automation
+    from hermes_state import SessionDB
+    from hermes_state_runtime import admit_session_input, claim_session_input, get_session_admission
+
+    home, db = main_home
+    runner, authority = await owner(home, db, monkeypatch, 'fixture-before-compaction')
+    root = 'agentready_home'
+    live = authority.sessions[root]
+    adapter = runner._adapter_for_source(live.source)
+    admit_session_input(db, epoch=authority.epoch, principal_id='fixture', session_id=root,
+                        request_id='held', payload={'text': 'Earlier input'})
+    assert claim_session_input(db, epoch=authority.epoch, session_id=root)['request_id'] == 'held'
+    event = MessageEvent(text='Inert producer input', source=live.source, internal=True,
+                         metadata={'gateway_session_key': live.route, 'gateway_session_id': root})
+    receipt = await authority.admit_automation(adapter, event, 'fixture-producer')
+    assert (await authority.admit_automation(adapter, event, 'fixture-producer')).admission_id == receipt.admission_id
+    assert claim_session_input(db, epoch=authority.epoch, session_id=root) is None
+
+    tip = 'fixture-compaction-tip'
+    db.publish_compression_child(parent_session_id=root, child_session_id=tip, source='agentready',
+                                 messages=[{'role': 'assistant', 'content': 'Inert summary'}],
+                                 require_compression_lease=False)
+    assert runner.session_store.advance_compression_session(live.route, root, tip) is not None
+    assert authority.physical_target(receipt.ref) == tip
+    with closing(SessionDB(db_path=home / 'state.db')) as reopened:
+        row = get_session_admission(reopened, admission_id=receipt.admission_id)
+        assert (row['status'], row['target_session_id']) == ('queued', root)
+        assert reopened.get_compression_tip(root) == tip
+    restored = restore_local_automation(authority, receipt.ref, row)
+    assert restored.metadata['gateway_session_id'] == tip
+    assert restored.source.to_dict() == live.source.to_dict()
