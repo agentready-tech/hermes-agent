@@ -280,12 +280,13 @@ def _wake_project_scope(parent, store):
         return None
     assigned = segment.bound_project_ids
     links = store.db._read_all(
-        """SELECT m.subagent_id, json_extract(m.origin_json, '$.goal_project_id'), m.state
-           FROM delegated_project_messages m JOIN delegated_projects p USING (subagent_id)
+        """SELECT p.subagent_id, json_extract(m.origin_json, '$.goal_project_id'), m.state,
+                  json_extract(p.workspace_json, '$.goal_owner_id')
+           FROM delegated_projects p LEFT JOIN delegated_project_messages m USING (subagent_id)
            WHERE json_type(p.workspace_json, '$.goal_state') IS NULL"""
     )
-    related = {worker for worker, goal, _ in links if goal in assigned}
-    shared = {worker for worker, goal, state in links
+    related = {worker for worker, goal, _, creator in links if goal in assigned or creator in assigned}
+    shared = {worker for worker, goal, state, _ in links
               if goal not in assigned and state in {"pending", "running"}}
     return assigned | (related - shared)
 
@@ -356,9 +357,11 @@ def _project_action(parent, store, action, tasks, subagent_id, message, query, e
     if action == "spawn":
         # Validate the whole batch before accepting any project input.
         keys = _spawn_keys(store, tasks, goal_id, scope)
+        workspace = {"goal_owner_id": goal_id} if goal_id else None
         for index, (task, key) in enumerate(zip(tasks, keys, strict=True), 1):
             from tools.delegate_tool_progress import _resolve_workspace_hint
-            project = store.create(key, task["goal"], task.get("context"), _resolve_workspace_hint(parent))
+            project = store.create(key, task["goal"], task.get("context"), _resolve_workspace_hint(parent),
+                                   workspace=workspace)
             text = task["goal"] + ("\n\n" + task["context"] if task.get("context") else "")
             options = {k: task[k] for k in ("images", "output_schema") if task.get(k) is not None}
             stable = [goal_id, event_id, index] if goal_id and event_id else [text, options]

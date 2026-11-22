@@ -611,6 +611,28 @@ def test_human_followup_keeps_its_reply_during_a_quiet_goal_wake(main_home, monk
     assert _snapshot(actor, goal)["status"] == "ready"
 
 
+def test_scoped_spawn_reuses_the_worker_after_interruption_before_first_input(main_home, monkeypatch):
+    from tools.delegate_projects import project_action
+
+    _, db = main_home
+    actor = _actor(db)
+    goal = _open(actor, "Reuse the reserved worker")
+    segment = GoalSegment(None, True)
+    segment.bind(goal)
+    actor._agentready_active_turn.goal_segment = segment
+    monkeypatch.setattr("tools.delegate_projects.recover_projects", Mock(return_value=[]))
+    args = {"tasks": [{"goal": "Handle the verified next step"}], "event_id": "goal-step"}
+    with monkeypatch.context() as interrupted:
+        interrupted.setattr(ProjectStore, "enqueue", Mock(side_effect=OSError("interrupted after create")))
+        with pytest.raises(OSError, match="interrupted"):
+            project_action(actor, "spawn", **args)
+    with ProjectStore(actor) as store:
+        [reserved] = [p for p in store.projects() if p["subagent_id"] != goal]
+    resumed = project_action(actor, "spawn", **args)["projects"][0]
+    assert resumed["subagent_id"] == reserved["subagent_id"]
+    assert project_action(actor, "spawn", **args)["projects"][0]["message_id"] == resumed["message_id"]
+
+
 def test_expired_input_is_removed_from_mixed_segment_and_retired(main_home, monkeypatch):
     from hermes_runtime.adapters import goal_turn
     from hermes_runtime.adapters.inbox import HomeInbox
