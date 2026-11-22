@@ -191,11 +191,26 @@ class ProjectStore:
                 conn.execute("UPDATE delegated_project_messages SET state='cancelled',completed_at=?,published=1 WHERE subagent_id=? AND state='pending'", (time.time(), subagent_id))
 
     def save_workspace(self, subagent_id, info):
+        self.mutate_workspace(subagent_id, lambda workspace, _conn: workspace.update(worktree=info), active_only=False)
+
+    def read_workspace(self, subagent_id):
         project = self.get(subagent_id)
-        workspace = json.loads(project["workspace_json"])
-        workspace["worktree"] = info
+        if project["archived"] or project["paused"]:
+            raise ValueError("Project is paused or archived")
+        return json.loads(project["workspace_json"])
+
+    def mutate_workspace(self, subagent_id, change, *, active_only=True):
+        owner = self.get(subagent_id)["parent_session_id"]
         with _transaction() as conn:
+            row = conn.execute("SELECT workspace_json, archived, paused FROM delegated_projects WHERE subagent_id=? AND parent_session_id=?",
+                               (subagent_id, owner)).fetchone()
+            if row is None or (active_only and (row[1] or row[2])):
+                raise ValueError("Unknown project subagent")
+            # Workspace metadata has multiple writers. Merge against the row protected by this transaction.
+            workspace = json.loads(row[0])
+            result = change(workspace, conn)
             conn.execute("UPDATE delegated_projects SET workspace_json=? WHERE subagent_id=?", (json.dumps(workspace), subagent_id))
+            return result
 
     def instruction(self, subagent_id, proposed):
         # Native ephemeral child instructions are appended after the cached core

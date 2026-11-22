@@ -115,8 +115,19 @@ def admit_cron(job, *, extra_prompt=None, cancel_event=None, execution_id=None):
         activate_home(get_hermes_home())
     request_id = execution_id or job.get("execution_id") or uuid.uuid4().hex
     job["execution_id"] = request_id
+    # The managed validator above still rejects both external monitor inputs.
+    from cron.scheduler import _apply_monitor_gate
+    job_id = job["id"]
+    early, extra_prompt, monitor_context = _apply_monitor_gate(
+        job, job_id, job.get("name") or job_id, extra_prompt,
+    )
+    if early is not None:
+        return early
+    metadata = {"job_id": job_id, "execution_id": request_id}
+    if monitor_context is not None:
+        metadata["untrusted_monitor_observation"] = monitor_context
     receipt = _admit_scheduled_prompt("\n\n".join(p for p in (job.get("prompt"), extra_prompt) if p),
-                                     f"{job['id']}:{request_id}", {"job_id": job["id"], "execution_id": request_id})
+                                     f"{job_id}:{request_id}", metadata)
     response = f"Queued for main: {receipt['message_id']}. Timer handoff saved; see main history for task outcome."
     return True, response + "\n", response, None
 
