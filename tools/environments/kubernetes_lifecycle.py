@@ -37,16 +37,20 @@ class SandboxLifecycle:
 
     @contextmanager
     def _lock(self, name: str, flags: int):
+        geteuid = getattr(os, "geteuid", None)
+        if geteuid is None:
+            raise EnvironmentConnectionError("Kubernetes sandbox lifecycle requires POSIX file locks")
         import fcntl
 
+        uid = geteuid()
         self.root.mkdir(mode=0o700, exist_ok=True)
         directory = self.root.lstat()
-        if not stat.S_ISDIR(directory.st_mode) or directory.st_mode & 0o077 or directory.st_uid != os.geteuid():
+        if not stat.S_ISDIR(directory.st_mode) or directory.st_mode & 0o077 or directory.st_uid != uid:
             raise EnvironmentConnectionError("Unsafe Kubernetes sandbox lifecycle directory")
         fd = os.open(self.root / name, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
             metadata = os.fstat(fd)
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077:
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != uid or metadata.st_mode & 0o077:
                 raise EnvironmentConnectionError("Unsafe Kubernetes sandbox lifecycle lock")
             fcntl.flock(fd, flags)
             yield fd

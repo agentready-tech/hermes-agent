@@ -186,7 +186,7 @@ def _base_subprocess_env() -> dict:
     return env
 
 
-_HARNESS_RUNTIME_BASES = ('/tmp', '/dev/shm') if sys.platform == 'linux' else ('/tmp',)
+_HARNESS_RUNTIME_BASES = ('/tmp', '/dev/shm') if sys.platform == 'linux' else ('/tmp',)  # no-tmp: ok — AF_UNIX needs a short, ownership-checked runtime base
 
 
 def _harness_runtime_base(uid):
@@ -222,7 +222,7 @@ def configure_harness_runtime(env: dict) -> None:
     if len(os.fsencode(runtime / (stem + '.sock'))) <= limit:
         return
 
-    uid = os.geteuid()
+    uid = os.geteuid()  # windows-footgun: ok — this function exits on hosts without geteuid
     # Kubernetes emptyDirs may give /tmp mode 0777, without the sticky bit.
     base = _harness_runtime_base(uid)
     key = hashlib.sha256(os.fsencode(runtime) + b'\0' + name.encode()).hexdigest()[:24]

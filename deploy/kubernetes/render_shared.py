@@ -9,6 +9,7 @@ NAMESPACE = 'agentsee-runtime'
 NAME = 'hermes-shared'
 HOME = '/root/.hermes'
 FIRECRACKER_SOCKETS = '/run/agentsee-firecracker'
+POD_TMP = '/tmp'  # no-tmp: ok — this is the emptyDir mount inside the rendered Pod
 
 
 def sandbox_binding(namespace):
@@ -35,11 +36,11 @@ def render_shared(*, worker, root, image, panel_ip, memory_limit):
         raise ValueError('Set an explicit worker memory limit')
     labels = {'app': NAME}
     env = {'HOME': '/root', 'HERMES_HOME': HOME, 'HERMES_WRITE_SAFE_ROOT': HOME,
-           'HERMES_ALLOW_ROOT_GATEWAY': '1', 'XDG_RUNTIME_DIR': '/tmp/hermes-runtime',
+           'HERMES_ALLOW_ROOT_GATEWAY': '1', 'XDG_RUNTIME_DIR': f'{POD_TMP}/hermes-runtime',
            'KUBERNETES_SERVICE_HOST': address, 'KUBERNETES_SERVICE_PORT': '6443'}
     mounts = [{'name': 'runtime', 'mountPath': HOME, 'mountPropagation': 'HostToContainer'},
               {'name': 'firecracker-sockets', 'mountPath': FIRECRACKER_SOCKETS, 'readOnly': True},
-              {'name': 'tmp', 'mountPath': '/tmp'}, {'name': 'kubectl-cache', 'mountPath': '/root/.kube'},
+              {'name': 'tmp', 'mountPath': POD_TMP}, {'name': 'kubectl-cache', 'mountPath': '/root/.kube'},
               {'name': 'opt-data', 'mountPath': '/opt/data'}]
     pod = {'nodeSelector': {'agentsee.io/worker': worker}, 'serviceAccountName': NAME,
            'imagePullSecrets': [{'name': 'agentsee-ghcr-pull'}], 'terminationGracePeriodSeconds': 60,
