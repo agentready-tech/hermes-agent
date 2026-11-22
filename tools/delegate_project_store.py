@@ -106,7 +106,7 @@ class ProjectStore:
             result.append(project)
         return sorted(result, key=lambda p: p.get("match_score", 0), reverse=True)
 
-    def create(self, key, goal, context, cwd=None):
+    def create(self, key, goal, context, cwd=None, *, workspace=None):
         if not isinstance(key, str) or not key.strip():
             raise ValueError("project must be a nonempty stable project/task key")
         key = key.strip()
@@ -120,7 +120,8 @@ class ProjectStore:
         identity = "project-" + uuid.uuid4().hex
         with _transaction() as conn:
             conn.execute("INSERT OR IGNORE INTO delegated_projects(subagent_id,parent_session_id,project_key,session_id,goal,context,created_at,updated_at,workspace_json) VALUES (?,?,?,?,?,?,?,?,?)",
-                         (identity, self.parent_id, key, identity, goal, context, now, now, json.dumps({"cwd": cwd})))
+                         (identity, self.parent_id, key, identity, goal, context, now, now,
+                          json.dumps({"cwd": cwd, **(workspace or {})})))
             subagent_id = conn.execute("SELECT subagent_id FROM delegated_projects WHERE parent_session_id=? AND project_key=?", (self.parent_id, key)).fetchone()[0]
         return self.get(subagent_id)
 

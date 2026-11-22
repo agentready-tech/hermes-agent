@@ -65,3 +65,12 @@ class HomeInbox:
                     recorded = any(identity in json.loads(row[0]).get("agentready_inbox_ids", []) for row in candidates)
                 if recorded:
                     conn.execute("UPDATE agentready_inbox SET delivered_at=?,content='null' WHERE message_id=?", (time.time(), identity))
+
+    def acknowledge_obsolete(self, identities):
+        """Retire exact Goal inputs the owning main already proved obsolete."""
+        with self.transaction() as conn:
+            conn.executemany(
+                "UPDATE agentready_inbox SET delivered_at=?,content='null' "
+                "WHERE message_id=? AND delivered_at IS NULL",
+                [(time.time(), identity) for identity in identities],
+            )

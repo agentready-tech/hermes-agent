@@ -61,9 +61,9 @@ def _owner(runner, event, authority):
 def automation_notification_metadata(metadata):
     """Validate trusted producer category; omit the default from old fingerprints."""
     category = metadata.get('notification_category', 'result')
-    if category not in ('result', 'diagnostic'):
+    if category not in ('result', 'diagnostic', 'project_goal'):
         raise RuntimeStoreError('invalid_params')
-    return {'notification_category': category} if category == 'diagnostic' else {}
+    return {'notification_category': category} if category != 'result' else {}
 
 
 def mailbox_wake_disposition(authority, ref, payload):

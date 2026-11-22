@@ -177,13 +177,16 @@ def apply_stop_gates(
         return verdict
     from agent.continuation_guard import build_continuation_nudge
     from agent.tool_continuation import review_tool_continuation
+    from hermes_runtime.adapters.goal_turn import current_segment, finish_segment
 
     _continuation, notice = review_tool_continuation(agent)
     if notice:
         final_response = (final_response or "") + "\n\n" + notice
         final_msg["api_content" if "api_content" in final_msg else "content"] = final_response
     elif not _continuation:
-        _continuation = build_continuation_nudge(agent, messages, final_response or "", user_message=user_message)
+        segment = current_segment(agent)
+        if segment is None or not segment.project_ids:
+            _continuation = build_continuation_nudge(agent, messages, final_response or "", user_message=user_message)
     if _continuation:
         agent._continuation_guard_nudges = getattr(agent, "_continuation_guard_nudges", 0) + 1
         final_msg["finish_reason"] = "continuation_required"
@@ -194,7 +197,7 @@ def apply_stop_gates(
         return _continue(_continuation, "_verification_stop_synthetic")
 
     return StopGateVerdict(
-        continue_turn=False, final_response=final_response,
+        continue_turn=False, final_response=finish_segment(agent, final_response, final_message=final_msg),
         pending_verification_response=pending_verification_response,
         pending_verification_response_previewed=pending_verification_response_previewed,
     )

@@ -115,14 +115,14 @@ def matches_wait(wait, wait_id, job_id):
             == (wait_id, job_id, 'resume_main', 'timer'))
 
 
-def _active_wait(home, project_id, wait_id, job_id):
+def _active_workspace(home, project_id, wait_id, job_id):
     with closing(sqlite3.connect((home / 'state.db').as_uri() + '?mode=ro', uri=True)) as conn:
         workspace, archived, paused = _owned_project(conn, project_id)
         wait = workspace.get('external_wait')
         if archived or paused or not matches_wait(wait, wait_id, job_id) or wait.get('state') != 'BOUND':
-            return False
+            return None
         deadline = datetime.fromisoformat(wait['deadline'])
-        return deadline.tzinfo is not None and datetime.now(UTC) < deadline
+        return workspace if deadline.tzinfo is not None and datetime.now(UTC) < deadline else None
 
 
 def _job_identity(job):
@@ -221,6 +221,7 @@ def admitted_binding(job):
                     or is_terminal_job(current)):
                 raise ValueError('External wait timer is not runnable')
             validate_timer(current)
-        if not _active_wait(home, project_id, wait_id, job_id):
+        workspace = _active_workspace(home, project_id, wait_id, job_id)
+        if workspace is None:
             raise ValueError('External wait timer does not match an active project wait')
-        yield tag, current
+        yield tag, current, workspace

@@ -41,6 +41,14 @@ def _dispatch_origin(parent, background):
         origin = {**origin, "wake": False}
     if not origin.get("wake"):
         origin["mail_results"] = True
+    from hermes_runtime.adapters.goal_turn import current_segment
+
+    segment = current_segment(parent)
+    if segment is not None and segment.project_ids and not segment.selected_id:
+        raise ValueError("Select the exact Project Goal before dispatching a persistent worker")
+    if segment is not None and segment.selected_id:
+        origin["goal_project_id"] = segment.selected_id
+        segment.touch(segment.selected_id)
     return origin
 
 
@@ -287,6 +295,7 @@ def _project_action(parent, store, action, tasks, subagent_id, message, query, e
         return {"project": {k: v for k, v in project.items() if k != "instruction"}, "messages": [{"role": m["role"], "content": str(m.get("content") or "")[:2000]} for m in history[-12:]],
                 "note": "Recent conversation excerpt; use session_search with this session_id for older evidence."}
     origin = _dispatch_origin(parent, background)
+    goal_id = origin.get("goal_project_id")
     entries = []
     if action == "spawn":
         if not tasks or any(not isinstance(t.get("goal"), str) or not t["goal"].strip() for t in tasks):
@@ -302,16 +311,19 @@ def _project_action(parent, store, action, tasks, subagent_id, message, query, e
         archived = {p["project_key"] for p in store.projects() if p["archived"]}
         if any(t.get("project", "").strip() in archived for t in tasks):
             raise ValueError("A project in this batch is archived; choose another key")
-        for task in tasks:
+        for index, task in enumerate(tasks, 1):
             from tools.delegate_tool_progress import _resolve_workspace_hint
-            key = task.get("project") or "task-" + uuid.uuid4().hex
+            key = task.get("project") or (f"{goal_id}:worker:{index}" if goal_id else "task-" + uuid.uuid4().hex)
             project = store.create(key, task["goal"], task.get("context"), _resolve_workspace_hint(parent))
             text = task["goal"] + ("\n\n" + task["context"] if task.get("context") else "")
             options = {k: task[k] for k in ("images", "output_schema") if task.get(k) is not None}
-            seed = "spawn:" + hashlib.sha256(json.dumps([text, options], sort_keys=True).encode()).hexdigest()
+            stable = [goal_id, event_id, index] if goal_id and event_id else [text, options]
+            seed = "spawn:" + hashlib.sha256(json.dumps(stable, sort_keys=True).encode()).hexdigest()
             mid = store.enqueue(project, text, origin, seed, options)
             entries.append({"subagent_id": project["subagent_id"], "session_id": project["session_id"], "project": project["project_key"], "message_id": mid})
     elif action == "send":
+        if goal_id and (not isinstance(event_id, str) or not event_id.strip()):
+            raise ValueError("Send to a Goal worker requires a stable event_id")
         project = store.get(subagent_id)
         store.pause(subagent_id, False)
         mid = store.enqueue(project, message, origin, event_id)

@@ -96,6 +96,7 @@ async def test_exact_timer_runs_same_native_main_then_closes_only_its_job(main_h
 
     monkeypatch.setattr(AIAgent, '_interruptible_api_call', offline_model)
     monkeypatch.setattr(AIAgent, '_interruptible_streaming_api_call', offline_model)
+    monkeypatch.setattr('agent.prompt_builder._probe_remote_backend', lambda *_: 'Linux Docker fixture')
 
     async def offline_model_boundary(event, _source, key, _generation):
         sid = runner.session_store.peek_session_id(key)

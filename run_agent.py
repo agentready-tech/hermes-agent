@@ -290,6 +290,7 @@ class AIAgent(
             from tools.delegate_external_wait import native_schema
 
             self.tools = native_schema(self)
+            self.valid_tool_names = {tool["function"]["name"] for tool in self.tools}
 
     def _get_session_db_for_recall(self):
         """SessionDB for recall, opening the default state DB when no ``session_db`` was passed so the
@@ -1349,6 +1350,10 @@ class AIAgent(
 
     def _dispatch_delegate_task(self, function_args: dict) -> str:
         """Single call site for delegate_task dispatch; new DELEGATE_TASK_SCHEMA fields are added only here."""
+        if function_args.get("action") == "project_goal":
+            from tools.delegate_project_goal import dispatch
+
+            return dispatch(self, function_args)
         if function_args.get("action") == "external_wait":
             from tools.delegate_external_wait import dispatch
 

@@ -30,12 +30,27 @@ def _owns_main(agent):
             and not is_delegated_child_context() and resolve_home(agent.session_id) is not None)
 
 
-def native_schema(agent):
+def native_schema(agent, tool_defs=None, *, enabled_toolsets=None, disabled_toolsets=None):
     """Copy only the native main's schema, not the registry/MCP definition."""
-    if not _owns_main(agent):
-        return agent.tools
+    tool_defs = agent.tools if tool_defs is None else tool_defs
+    names = {tool["function"]["name"] for tool in tool_defs}
+    if "delegate_task" not in names or not _owns_main(agent):
+        return tool_defs
+    from tools.delegate_project_goal import FIELDS as goal_operations, schema_fields
+
+    if "cronjob_manage" not in names:
+        from model_tools import get_tool_definitions
+
+        # The bound operation needs live main state. Keep its native entry available
+        # even when Tool Search defers the ordinary registry schema.
+        available = get_tool_definitions(
+            enabled_toolsets=enabled_toolsets if enabled_toolsets is not None else agent.enabled_toolsets,
+            disabled_toolsets=disabled_toolsets if disabled_toolsets is not None else agent.disabled_toolsets,
+            quiet_mode=True, skip_tool_search_assembly=True,
+        )
+        tool_defs = [*tool_defs, *(tool for tool in available if tool["function"]["name"] == "cronjob_manage")]
     fields = {
-        "op": {"type": "string", "enum": sorted(_FIELDS)},
+        "op": {"type": "string", "enum": sorted(_FIELDS.keys() | goal_operations.keys())},
         "project_id": {"type": "string", "description": "Exact ID of an existing parent-owned project"},
         "wait_id": {"type": "string", "description": "Required for select and close"},
         "mode": {"type": "string", "enum": ["resume_main"]},
@@ -47,16 +62,18 @@ def native_schema(agent):
         "reply_ref": {"type": "object", "properties": {
             "kind": {"type": "string", "enum": ["session_admission"]}, "admission_id": {"type": "string"},
         }, "required": ["kind", "admission_id"], "additionalProperties": False},
+        **schema_fields(),
     }
     result = []
-    for tool in agent.tools:
+    for tool in tool_defs:
         fn = tool["function"]
         if fn["name"] == "delegate_task":
             params = fn["parameters"]
             props = {**params["properties"], **fields}
             action = props["action"]
             props["action"] = {**action, "description": action["description"] +
-                " Native main only: external_wait accepts op=open/select/close for an existing project."}
+                " Native main only: project_goal opens and continues accepted assignments. "
+                "external_wait accepts op=open/select/close for an existing project."}
             tool = {**tool, "function": {**fn, "parameters": {**params, "properties": props}}}
         elif fn["name"] == "cronjob_manage":
             params = fn["parameters"]
