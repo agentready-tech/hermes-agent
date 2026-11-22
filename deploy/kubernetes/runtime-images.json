@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.21.1",
+  "defaultRuntimeVersion": "2026.11.22.1",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -4916,6 +4916,43 @@
         "releaseRegressionTestsPassed": 81
       },
       "description": "Complete catalog MCP OAuth through protected input in Panel and Telegram."
+    },
+    "2026.11.22.1": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:ae84828cc827d2ee4cec7d35372d46283596dcf3f8321b3fddefc623aee4bac9",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.22.1",
+      "configDigest": "sha256:1dd6012321c4e034278a39cb13270ba215443caa4fdd2f626e29ae784676693c",
+      "platform": "linux/amd64",
+      "sourceRevision": "fc83c8c88204186fc3f9cd3c26845e446e561eb7",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:ae84828cc827d2ee4cec7d35372d46283596dcf3f8321b3fddefc623aee4bac9",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.22.1",
+        "digest": "sha256:ae84828cc827d2ee4cec7d35372d46283596dcf3f8321b3fddefc623aee4bac9",
+        "configDigest": "sha256:1dd6012321c4e034278a39cb13270ba215443caa4fdd2f626e29ae784676693c",
+        "sourceRevision": "fc83c8c88204186fc3f9cd3c26845e446e561eb7",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 45000173449,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:eec74b81c5b2ef77e75e59f95d1a1e56c10df0764015c865971137a4ff0c31c5",
+        "deployRunId": 45001302877
+      },
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml",
+      "validation": {
+        "runtimeReady": true,
+        "futureDefaultConfigured": true,
+        "releaseRegressionTestsPassed": 84
+      },
+      "description": "Keep human clarifications and replies visible during coordination wakes; acknowledge each inbox submission once."
     }
   },
   "supersededRuntimeAttempts": {

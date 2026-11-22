@@ -75,12 +75,33 @@ def _preserve_completed_reply(agent, result, pending):
     from hermes_runtime.adapters.goal_turn import goal_inbox_event
 
     text = result.get("final_response")
-    if (isinstance(text, str) and text.strip() and not result.get("failed") and not result.get("interrupted")
+    if (not getattr(agent, "_mute_notification_reply", False)
+            and isinstance(text, str) and text.strip() and not result.get("failed") and not result.get("interrupted")
             and not is_intentional_silence_agent_result(result, text)
             and any(_human_followup(content) or goal_inbox_event(content) for content in pending)):
         emit = getattr(agent, "_managed_completed_reply_callback", None)
         if emit is not None:
             emit(result)
+
+
+def _present_human_followups(agent, pending, *, messages=None):
+    events = [event for content in pending if (event := _human_followup(content))]
+    if not events:
+        return True
+    resume = getattr(agent, "_resume_notification_presentation", None)
+    if resume is not None:
+        # Commit the diagnostic prefix while its visibility still applies. Only
+        # the newly admitted input and subsequent work belong to the user-facing run.
+        if messages is not None and agent._flush_messages_to_session_db(messages) is False:
+            agent._incremental_persistence_failed = True
+            return False
+        resume()
+    notify = getattr(agent, "_managed_input_display_callback", None)
+    if notify is not None:
+        for header, text in events:
+            if header["source"] == "telegram":
+                notify(header, text)
+    return True
 
 
 def forward_to_active_turn(content, *, wait=False, input_id=None):
@@ -304,6 +325,7 @@ def run_conversation(self, proceed, *args, **kwargs):
                 # its own response. Keep the completed reply visible before
                 # continuing this same owned conversation.
                 _preserve_completed_reply(self, result, pending)
+                _present_human_followups(self, pending)
                 # A final model response has no tool boundary. Continue
                 # in this same owned session instead of losing the event.
                 continuation = dict(kwargs)
@@ -329,16 +351,22 @@ def run_conversation(self, proceed, *args, **kwargs):
 
 
 def after_tool_group(agent, messages):
-    turn = getattr(agent, "_agentready_active_turn", None)
-    if turn is not None:
-        from hermes_runtime.adapters.goal_turn import ingest_records
+    from hermes_runtime.adapters.goal_turn import ingest_records
 
-        for identity, content in ingest_records(agent, turn.take_records()):
-            messages.append({"role": "user", "content": content, "platform_message_id": identity})
-            notify = getattr(agent, "_managed_input_display_callback", None)
-            if notify is not None and (event := _human_followup(content)) and event[0]["source"] == "telegram":
-                header, text = event
-                notify(text, header.get("received_at"))
+    turn = getattr(agent, "_agentready_active_turn", None)
+    records = ingest_records(agent, turn.take_records()) if turn is not None else []
+    if not records:
+        return
+    contents = [content for _, content in records]
+    if not _present_human_followups(agent, contents, messages=messages):
+        return
+    # Consecutive inputs share one model message. Persist every receipt on that
+    # row so sequence repair cannot leave the later inputs pending for replay.
+    messages.append({
+        "role": "user", "content": combine_event_content(contents),
+        "platform_message_id": records[0][0],
+        "display_metadata": {"agentready_inbox_ids": [identity for identity, _ in records]},
+    })
 
 
 def steer(agent, content):

@@ -154,6 +154,21 @@ def test_managed_project_refreshes_loaded_skill_on_next_native_turn(tmp_path, mo
         original = db.get_messages_as_conversation(sid)
         old_tool = next(message for message in original if message["role"] == "tool")
         assert "Old project procedure." in json.loads(old_tool["content"])["content"]
+        browser_heading = "## Browser working tabs"
+        workspace_heading = "## Google Workspace и почта"
+        first = requests[0][1][0]["content"]
+        assert first.count(browser_heading) == 1
+        assert workspace_heading not in first
+        saved = db.get_session(sid)["system_prompt"]
+        with sqlite3.connect(home / "state.db") as conn:
+            instruction = conn.execute(
+                "SELECT instruction FROM delegated_projects WHERE subagent_id=?", (project["subagent_id"],)
+            ).fetchone()[0]
+        assert browser_heading not in saved
+        assert browser_heading not in instruction
+        (home / "config.yaml").write_text(json.dumps({"autonomous": {
+            "workspace": {"native": True, "environment_id": "env_" + "a" * 32},
+        }}), encoding="utf-8")
 
         skill.write_text(header + "Current project procedure.", encoding="utf-8")
         result = json.loads(delegate_task(action="send", subagent_id=project["subagent_id"],
@@ -167,6 +182,13 @@ def test_managed_project_refreshes_loaded_skill_on_next_native_turn(tmp_path, mo
         assert "Old project procedure." not in content
         assert "Keep the project-specific instructions." in replayed[0]["content"]
         assert "Parent identity fixture." not in replayed[0]["content"]
+        assert replayed[0]["content"].count(browser_heading) == 1
+        assert replayed[0]["content"].count(workspace_heading) == 1
+        assert db.get_session(sid)["system_prompt"] == saved
+        with sqlite3.connect(home / "state.db") as conn:
+            assert conn.execute(
+                "SELECT instruction FROM delegated_projects WHERE subagent_id=?", (project["subagent_id"],)
+            ).fetchone()[0] == instruction
         assert db.get_messages_as_conversation(sid)[:len(original)] == original
 
         skill.unlink()

@@ -84,9 +84,11 @@ async def test_busy_main_queues_once_and_preserves_single_history(main_chat, sta
 
 
 @pytest.mark.asyncio
-async def test_panel_text_reaches_next_model_call_in_active_tool_turn(main_chat, main_home, monkeypatch):
+@pytest.mark.parametrize('diagnostic', [False, True], ids=['user-turn', 'diagnostic-wake'])
+async def test_panel_text_reaches_next_model_call_in_active_tool_turn(main_chat, main_home, monkeypatch, diagnostic):
     from unittest.mock import patch
 
+    from agent.notification_presentation import notification_turn
     from hermes_cli.gateway_client import GatewayRPCError
     from hermes_runtime.sessions import HOME_SESSION_ID
     from hermes_state_runtime import list_session_admissions
@@ -130,15 +132,23 @@ async def test_panel_text_reaches_next_model_call_in_active_tool_turn(main_chat,
     monkeypatch.setattr(agent, '_interruptible_api_call', model)
     monkeypatch.setattr(agent, '_interruptible_streaming_api_call', model)
     monkeypatch.setattr('model_tools.handle_function_call', execute_tool)
-    turn = asyncio.create_task(asyncio.to_thread(agent.run_conversation, 'Run the fixture tool',
-                                                task_id=HOME_SESSION_ID))
+    def run_turn():
+        with notification_turn(agent, muted=diagnostic, session_id=HOME_SESSION_ID):
+            return agent.run_conversation('Run the fixture tool', task_id=HOME_SESSION_ID)
+
+    turn = asyncio.create_task(asyncio.to_thread(run_turn))
     request = {'method': 'prompt.submit', 'params': {'session_id': HOME_SESSION_ID,
         'submission_id': 'stable-panel-clarification', 'text': clarify}}
+    another_text = 'Also keep the label'
+    another = {'method': 'prompt.submit', 'params': {'session_id': HOME_SESSION_ID,
+        'submission_id': 'second-panel-clarification', 'text': another_text}}
     try:
         await async_wait_until(tool_started.is_set, timeout=10, what='running terminal tool')
         confirmations = await asyncio.gather(chat.dispatch(request), chat.dispatch(request))
         assert confirmations[0] == confirmations[1]
         assert confirmations[0]['status'] == 'steered'
+        second = await chat.dispatch(another)
+        assert second['status'] == 'steered'
         assert list_session_admissions(db, session_id=HOME_SESSION_ID) == []
         release.set()
         result = await asyncio.wait_for(asyncio.shield(turn), timeout=10)
@@ -148,6 +158,16 @@ async def test_panel_text_reaches_next_model_call_in_active_tool_turn(main_chat,
                    if row['role'] == 'user' and clarify in str(row.get('content'))]
         assert len(indices) == 1
         assert model_input[indices[0] - 1]['tool_call_id'] == 'tool-before-clarification'
+        assert another_text in model_input[indices[0]]['content']
+        rows = db.get_messages(HOME_SESSION_ID)
+        assert next(row for row in rows if row['content'] == 'Run the fixture tool').get('display_kind') == (
+            'hidden' if diagnostic else None)
+        for text in (clarify, another_text, result['final_response']):
+            matching = [row for row in rows if text in str(row['content'])]
+            assert len(matching) == 1 and matching[0].get('display_kind') != 'hidden'
+        with db._read_ctx() as conn:
+            delivered = conn.execute('SELECT message_id FROM agentready_inbox WHERE delivered_at IS NOT NULL').fetchall()
+        assert {row[0] for row in delivered} == {confirmations[0]['admission_id'], second['admission_id']}
         assert await chat.dispatch(request) == confirmations[0]
         conflict = {**request, 'params': {**request['params'], 'text': 'Different input with the same nonce'}}
         with pytest.raises(GatewayRPCError, match='admission_conflict'):

@@ -168,25 +168,33 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
             return authority.publish_execution(session_id, generation, event_type, payload)
         return False
 
-    def _show_managed_telegram_input(self, text, received_at):
-        if self._ctx._run_still_current():
-            self._publish_execution("agentready.event.received", {
-                "source": "telegram", "text": text, "timestamp": received_at,
-            })
+    def _show_managed_telegram_input(self, header, text):
+        ctx = self._ctx
+        if not ctx._run_still_current():
+            return
+        sender = header["metadata"]
+        if (ctx.mute_notification_reply and ctx.source.platform == Platform.TELEGRAM
+                and str(ctx.source.chat_id or "") == sender.get("chat_id")
+                and str(ctx.source.thread_id or "") == sender.get("thread_id")):
+            # This real Telegram input owns a reply on the existing binding.
+            ctx.mute_notification_reply = False
+        self._publish_execution("agentready.event.received", {
+            "source": "telegram", "text": text, "timestamp": header.get("received_at"),
+        })
 
     def _deliver_managed_completed_reply(self, result):
         """Keep a completed reply owed while a late inbox entry continues the same session."""
         from gateway.run import _sanitize_gateway_final_response
 
         ctx = self._ctx
-        if ctx.mute_notification_reply or not ctx._run_still_current():
+        if not ctx._run_still_current():
             return
         text = _sanitize_gateway_final_response(ctx.source.platform, result["final_response"])
         self._publish_execution("message.interim", {
             "text": text, "already_streamed": False, "timestamp": time.time(),
         })
         adapter = self._runner._delivery_adapter_for(ctx.source)
-        if ctx.source.platform != Platform.TELEGRAM or adapter is None:
+        if ctx.mute_notification_reply or ctx.source.platform != Platform.TELEGRAM or adapter is None:
             return
 
         from gateway.platforms.event import MessageEvent
@@ -214,7 +222,9 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
 
     def _setup_stream_consumer(self, platform_key):
         ctx = self._ctx
-        if ctx.mute_notification_reply:
+        from hermes_runtime.sessions import HOME_SESSION_ID
+        managed_viewer = self._approval_owner is not None and self._approval_owner[1] == HOME_SESSION_ID
+        if ctx.mute_notification_reply and not managed_viewer:
             return None, None, None, False
         stream_consumer = None
         # The streaming-TTS consumer is created on the outer loop thread before run_sync launches;
@@ -232,7 +242,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         # delivery, or a final that arrives as commentary (codex app-server) suppresses the reply.
         want_interim_messages = (bool(ctx.interim_assistant_messages_enabled) and not ctx.scheduled_heartbeat
                                  and not _finite_viewer_turn())
-        if want_stream_deltas or want_interim_messages:
+        if not ctx.mute_notification_reply and (want_stream_deltas or want_interim_messages):
             try:
                 from gateway.stream_consumer import GatewayStreamConsumer
                 adapter = self._runner._delivery_adapter_for(ctx.source)
@@ -298,8 +308,6 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
             if not ctx._run_still_current():
                 return
             unseen = False
-            from hermes_runtime.sessions import HOME_SESSION_ID
-            managed_viewer = self._approval_owner is not None and self._approval_owner[1] == HOME_SESSION_ID
             if (local_viewer_route or managed_viewer) and not already_streamed and str(text or "").strip():
                 # LocalSessionAdapter.send publishes nothing, so unstreamed commentary handed to the
                 # consumer would be recorded as delivered while no viewer saw it. A codex app-server
@@ -319,7 +327,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
                 return
             if stream_consumer is not None:
                 stream_consumer.on_segment_break() if already_streamed else stream_consumer.on_commentary(text)
-            elif not already_streamed and ctx._status_adapter and str(text or "").strip():
+            elif not ctx.mute_notification_reply and not already_streamed and ctx._status_adapter and str(text or "").strip():
                 self._send_status_text(text, ctx._status_thread_metadata, "interim_assistant_callback scheduling error")
 
         return stream_consumer, stream_delta_cb, interim_assistant_cb, want_interim_messages
@@ -486,16 +494,6 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         # Thinking between tool calls is independent of tool_progress mode (Mattermost opts in
         # per platform so global scratch-text doesn't leak into threads).
         agent.thinking_progress = ctx._thinking_enabled
-        if ctx.mute_notification_reply:
-            # Controls and operational event/step callbacks remain wired. These
-            # presentation callbacks are rebound on every next turn.
-            agent.tool_progress_callback = None
-            agent.tool_start_callback = None
-            agent.tool_complete_callback = None
-            # Keep diagnostic observers installed; concrete sinks veto display.
-            agent.stream_delta_callback = None
-            agent.interim_assistant_callback = None
-            agent.thinking_progress = False
         ctx.agent_holder[0] = agent  # interrupt support
         if self._approval_owner is not None:
             authority, owner_id, generation = self._approval_owner

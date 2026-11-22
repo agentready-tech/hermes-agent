@@ -54,24 +54,36 @@ def notification_policy_snapshot(agent, platform, config):
 
 @contextmanager
 def notification_turn(agent, *, muted: bool, session_id: str = ""):
-    """Freeze the current turn's presentation without touching prompts or tool schemas."""
+    """Mute the diagnostic segment until the turn ends or receives a human message."""
     if not muted:
         yield
         return
     missing = object()
-    keys = (*_PRESENTATION_CALLBACKS, "suppress_status_output", "_mute_notification_reply")
+    keys = (*_PRESENTATION_CALLBACKS, "suppress_status_output", "thinking_progress", "_mute_notification_reply",
+            "_resume_notification_presentation")
     saved = {key: getattr(agent, key, missing) for key in keys}
     token = _muted_surface.set(session_id)
-    try:
-        for key in _PRESENTATION_CALLBACKS:
-            setattr(agent, key, None)
-        agent.suppress_status_output = True
-        agent._mute_notification_reply = True
-        yield
-    finally:
+    resumed = False
+
+    def resume():
+        nonlocal resumed
+        if resumed:
+            return
+        resumed = True
         for key, value in saved.items():
             if value is missing:
                 delattr(agent, key)
             else:
                 setattr(agent, key, value)
         _muted_surface.reset(token)
+
+    try:
+        for key in _PRESENTATION_CALLBACKS:
+            setattr(agent, key, None)
+        agent.suppress_status_output = True
+        agent.thinking_progress = False
+        agent._mute_notification_reply = True
+        agent._resume_notification_presentation = resume
+        yield
+    finally:
+        resume()

@@ -40,6 +40,9 @@ def stale_soul(agent, prompt: str | None) -> bool:
 
 
 def prepare_turn_prompt(agent, system_message, history, restore_or_build) -> None:
+    from hermes_runtime.standalone.instructions import install_execution_instructions
+
+    install_execution_instructions(agent)
     snapshot_soul(agent)
     if agent._cached_system_prompt is None or stale_soul(agent, agent._cached_system_prompt):
         restore_or_build(agent, system_message, history)
