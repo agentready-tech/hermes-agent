@@ -128,7 +128,8 @@ def test_main_schedule_rejects_separate_session_options_without_saving(main_home
     ("monitor_url", "https://fixture.invalid"),
     ("monitor_script", "fixture.py"),
 ])
-def test_managed_monitor_is_rejected_at_create_update_and_admission(main_home, monkeypatch, field, monitor):
+@pytest.mark.parametrize("use_alias", [False, True], ids=["field", "alias"])
+def test_managed_monitor_is_rejected_at_create_update_and_admission(main_home, monkeypatch, field, monitor, use_alias):
     from cron.jobs import get_job, list_jobs
     from cron.scheduler import run_job
     from hermes_runtime.standalone import events
@@ -144,7 +145,8 @@ def test_managed_monitor_is_rejected_at_create_update_and_admission(main_home, m
         (scripts / monitor).touch()
 
     args = {"prompt": "Check the fixture later", "schedule": "every 1h"}
-    rejected = _tool("create", **args, monitor=monitor)
+    options = {"monitor" if use_alias else field: monitor}
+    rejected = _tool("create", **args, **options)
     assert rejected["success"] is False
     assert "Main-inbox schedules accept prompts" in rejected["error"]
     assert list_jobs() == []
@@ -152,7 +154,7 @@ def test_managed_monitor_is_rejected_at_create_update_and_admission(main_home, m
     assert created["success"] is True
     job_id = created["job_id"]
     before = get_job(job_id)
-    rejected = _tool("update", job_id=job_id, monitor=monitor)
+    rejected = _tool("update", job_id=job_id, **options)
     assert rejected["success"] is False
     assert "Main-inbox schedules accept prompts" in rejected["error"]
     assert get_job(job_id) == before
