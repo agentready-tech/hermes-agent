@@ -33,34 +33,29 @@ def continuation_evidence(agent):
     return evidence
 
 
-def review_tool_continuation(agent):
-    """Return (correction, terminal notice). Never dispatch or blindly retry a tool.
+def review_tool_continuation(agent) -> tuple[str | None, bool]:
+    """Return the internal correction and whether rechecking is exhausted.
 
     Give each skipped batch one reassessment, bounded by the existing turn limit.
-    A model ignoring that correction must leave a visible unresolved outcome.
+    Leave unresolved receipts in the execution log for reconciliation.
     """
     evidence = continuation_evidence(agent)
     missing = [item for item in evidence if not item["return_guaranteed"]]
     if not missing:
-        return None, None
+        return None, False
     from agent.continuation_guard import _config, _eligible
 
     names = ", ".join(dict.fromkeys(item["tool"] for item in missing))
-    notice = (
-        f"Execution check: {names} has no confirmed completion or automatic return. "
-        "Any still-required work is incomplete, with no confirmed automatic continuation. "
-        "Check existing outcomes before retrying an uncertain action."
-    )
     if not _eligible(agent):
         budget = getattr(agent, "iteration_budget", None)
         if budget is not None and budget.remaining <= 0 and not getattr(agent, "_interrupt_requested", False):
             logger.warning("Unconfirmed tool continuation at budget limit (session=%s tools=%s)", agent.session_id, names)
-            return None, notice
-        return None, None
+            return None, True
+        return None, False
     if (getattr(agent, "_managed_tool_recheck_requested", False)
             or getattr(agent, "_continuation_guard_nudges", 0) >= _config().max_continuations):
         logger.warning("Tool continuation remains unresolved (session=%s tools=%s)", agent.session_id, names)
-        return None, notice
+        return None, True
     agent._managed_tool_recheck_requested = True
     logger.info("Native tool continuation recheck required (session=%s tools=%s)", agent.session_id, names)
     return (
@@ -71,5 +66,5 @@ def review_tool_continuation(agent):
         "operation, establish its actual outcome first; do not repeat an unknown external action. "
         "Do not promise a completion notification without a confirmed owning operation and "
         "return path. If blocked or superseded, explain that clearly instead of promising later work.",
-        None,
+        False,
     )

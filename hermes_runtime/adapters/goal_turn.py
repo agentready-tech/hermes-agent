@@ -368,15 +368,17 @@ def run_segment(agent, turn, proceed, *args, goal_records=(), goal_steer=None, *
 
 def _goal_judgments(goals):
     from agent.auxiliary_client import call_llm
-    from hermes_cli.goals import _call_goal_judge_llm, _goal_judge_timeout
+    from hermes_cli.goals import _call_goal_judge_llm, _extract_json_object, _goal_judge_timeout
 
     prompt = json.dumps(goals, ensure_ascii=False)
     try:
-        result = json.loads(_call_goal_judge_llm(call_llm, _JUDGE, prompt, _goal_judge_timeout()))
+        raw = _call_goal_judge_llm(call_llm, _JUDGE, prompt, _goal_judge_timeout())
     except Exception as error:  # health: allow BLE001 -- provider errors may contain the prompt or credentials
         logger.warning("Project Goal verification failed (%s); checkpoints remain saved", type(error).__name__)
         return {}
-    if not isinstance(result, dict):
+    result = _extract_json_object(raw)
+    if result is None:
+        logger.warning("Project Goal verification returned no JSON object; checkpoints remain saved")
         return {}
     return {
         project_id: tuple(evidence)
@@ -497,12 +499,11 @@ def resume_paused_goal(store, project_id):
     return read_goal(store, project_id)
 
 
-def finish_segment(agent, response, *, verify=True, final_message=None):
+def finish_segment(agent, response, *, verify=True):
     """Finalize selected goals before the model's final response is presented."""
     segment = current_segment(agent)
     if segment is None or not segment.project_ids:
         return response
-    blockers = []
     with ProjectStore(agent) as store:
         snapshots = {pid: read_goal(store, pid) for pid in sorted(segment.project_ids)}
         candidates = {
@@ -530,9 +531,6 @@ def finish_segment(agent, response, *, verify=True, final_message=None):
             current = _write_transition(store, project_id, _branch(store, project_id, goal),
                                         goal["revision"] if evidence is not None else None,
                                         segment.wake_ids.get(project_id))
-            if current["status"] == "blocked":
-                blockers.append(f'{goal["contract"]["outcome"]}\n{current["blocker"]}. {current["unblock"]}.')
-                segment.notify = True
             try:
                 _publish(project_id, current)
             except (OSError, RuntimeError, sqlite3.Error):
@@ -540,10 +538,6 @@ def finish_segment(agent, response, *, verify=True, final_message=None):
     if segment.quiet_source:
         segment.quiet = not segment.notify
         agent._mute_notification_reply = segment.quiet
-    if blockers:
-        response = "\n\n".join(filter(None, (response, *blockers)))
-        if final_message is not None:
-            final_message["api_content" if "api_content" in final_message else "content"] = response
     return response
 
 

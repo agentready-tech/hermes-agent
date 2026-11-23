@@ -88,7 +88,7 @@ def test_incoming_before_dispatch_rechecks_unstarted_work_without_a_wakeup(manag
 
 
 @pytest.mark.parametrize("budget,expected_calls", [(None, 3), (2, 2)])
-def test_model_ignoring_the_recheck_gets_a_bounded_visible_incomplete_outcome(managed_agent, monkeypatch, budget, expected_calls):
+def test_native_recheck_is_bounded_without_leaking_diagnostics(managed_agent, monkeypatch, budget, expected_calls):
     from hermes_runtime.adapters.turns import forward_to_active_turn
 
     agent, db, _ = managed_agent
@@ -111,7 +111,6 @@ def test_model_ignoring_the_recheck_gets_a_bounded_visible_incomplete_outcome(ma
     result = agent.run_conversation("Do the requested work.")
 
     assert len(requests) == expected_calls
-    assert "no confirmed automatic continuation" in result["final_response"].lower()
-    assert "incomplete" in result["final_response"].lower()
+    assert result["final_response"] == "I will report later."
     assert db.get_messages_as_conversation(agent.session_id)[-1]["content"] == result["final_response"]
     handler.assert_not_called()

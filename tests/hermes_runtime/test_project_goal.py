@@ -46,12 +46,12 @@ def _snapshot(actor, project_id):
         return read_goal(store, project_id)
 
 
-def _agent(db):
+def _agent(db, *, toolsets=("delegation", "cronjob")):
     from run_agent import AIAgent
 
     return AIAgent(model="gpt-4.1", provider="custom", base_url="http://127.0.0.1:9/v1",
                    api_key="inert", api_mode="chat_completions", session_id=HOME_SESSION_ID, session_db=db,
-                   enabled_toolsets=["delegation", "cronjob"], skip_context_files=True, load_soul_identity=False,
+                   enabled_toolsets=list(toolsets), skip_context_files=True, load_soul_identity=False,
                    skip_memory=True, quiet_mode=True)
 
 
@@ -67,6 +67,61 @@ def _deny_decisions(monkeypatch):
     spy = Mock(side_effect=AssertionError("Goal-owned work must not enter Continuation Guard"))
     monkeypatch.setattr("agent.continuation_guard.build_continuation_nudge", spy)
     return spy
+
+
+def test_project_goal_uses_fenced_verdict_with_exact_evidence(main_home, monkeypatch):
+    from hermes_runtime.adapters.goal_turn import finish_segment
+
+    _, db = main_home
+    actor = _actor(db)
+    done = _open(actor, "Return the verified result")
+    other = _open(actor, "Finish the second assignment", slot=2)
+    _goal(actor, "checkpoint", project_id=done, deliverable="The verified result")
+    _goal(actor, "checkpoint", project_id=other, deliverable="The current draft")
+    monkeypatch.setattr("hermes_runtime.adapters.state.main_gateway_origin", dict)
+
+    def judge(**kwargs):
+        goals = json.loads(kwargs["messages"][-1]["content"])
+        assert set(goals) == {done, other}
+        [receipt] = goals[done]["evidence"]
+        verdict = json.dumps({done: [receipt], other: [receipt]})
+        return _response(f"```json\n{verdict}\n```")
+
+    reviewer = Mock(side_effect=judge)
+    monkeypatch.setattr("agent.auxiliary_client.call_llm", reviewer)
+    finish_segment(actor, "The verified result")
+
+    reviewer.assert_called_once()
+    assert _snapshot(actor, done)["status"] == "done"
+    assert _snapshot(actor, other)["status"] == "ready"
+
+
+def test_exhausted_goal_budget_stays_blocked_and_quiet(main_home, monkeypatch):
+    from hermes_runtime.adapters import goal_turn
+    from hermes_runtime.adapters.inbox import HomeInbox
+
+    _, db = main_home
+    actor = _actor(db)
+    project_id = _open(actor, "Complete the saved work")
+    monkeypatch.setattr("hermes_cli.goals.DEFAULT_MAX_TURNS", 1)
+    monkeypatch.setattr("hermes_runtime.adapters.state.main_gateway_origin", dict)
+    goal_turn.finish_segment(actor, "Queued.")
+    inbox = HomeInbox()
+    [wake] = inbox.pending()
+    turn = SimpleNamespace(inbox=inbox)
+    actor._agentready_active_turn = turn
+
+    def model(_prompt, **_kwargs):
+        return {"completed": True, "final_response": goal_turn.finish_segment(actor, ".")}
+
+    result = goal_turn.run_segment(actor, turn, model, wake[1], goal_records=[wake], conversation_history=[])
+
+    state = _snapshot(actor, project_id)
+    assert state["status"] == "blocked"
+    assert state["attempts_without_progress"] == 1
+    assert state["blocker"] and state["wake_id"] is None
+    assert result["final_response"] == ""
+    assert result["_notification_reply_muted"]
 
 
 @pytest.mark.asyncio
@@ -283,6 +338,134 @@ async def test_worker_report_resumes_only_its_goal_then_retires_its_timer(main_h
     assert get_job(job_id) is None and get_job(waits[unrelated]) is not None
     assert len(calls) == 2 and message_id in calls[0]
     guard.assert_not_called()
+
+
+@pytest.fixture
+def browser_main(main_home):
+    home, db = main_home
+    config = home / "config.yaml"
+    config.write_text(config.read_text() + "browser:\n  backend: browser-use\n")
+    agent = _agent(db, toolsets=("delegation", "cronjob", "browser", "terminal"))
+    try:
+        assert "browser_exec" in agent.valid_tool_names
+        yield agent, _actor(db)
+    finally:
+        agent.close()
+
+
+def _admitted_turn(agent, input_id, prompt):
+    token = admitted_input.set({"admission_id": input_id, "payload": {}})
+    try:
+        return agent.run_conversation(prompt)
+    finally:
+        admitted_input.reset(token)
+
+
+def test_one_shot_browser_read_runs_without_goal(browser_main, monkeypatch):
+    from tools import browser_use_cli
+
+    agent, actor = browser_main
+    call = _response(args={"code": "print('No new replies')"})
+    call.choices[0].message.tool_calls[0].function.name = "browser_exec"
+    read = Mock(return_value=json.dumps({"success": True, "text": "No new replies"}))
+    verify_goal = Mock()
+
+    def model(_agent, payload, *_ignored, **_kwargs):
+        if payload["messages"][-1]["role"] == "user":
+            return call
+        if read.called:
+            return _response("There are no new replies.")
+        return _response("The browser did not run.")
+
+    monkeypatch.setattr(browser_use_cli, "browser_exec", read)
+    monkeypatch.setattr("agent.continuation_guard.build_continuation_nudge", lambda *_a, **_kw: None)
+    _models(monkeypatch, model, verify_goal)
+    result = _admitted_turn(agent, "one-shot-chat-read", "Look in the chat for new replies now.")
+
+    read.assert_called_once()
+    assert result["completed"]
+    assert result["final_response"] == "There are no new replies."
+    verify_goal.assert_not_called()
+    with ProjectStore(actor) as store:
+        assert store.projects() == []
+
+
+def test_browser_send_resumes_goal_accepted_before_confirmation(browser_main, monkeypatch):
+    from cron.jobs import get_job
+    from tools import browser_use_cli
+
+    agent, actor = browser_main
+    planned, sent = {}, []
+    rounds = iter(["open", "block", "confirm", "resume", "send", "checkpoint", "wait", "timer", "answer"])
+
+    def execute(**_kwargs):
+        project_id = planned["project_id"]
+        sent.append(project_id)
+        saved = _snapshot(actor, project_id)
+        assert saved["status"] == "ready"
+        assert saved["source"]["id"] == "original-assignment"
+        return json.dumps({"success": True, "message_id": "approval-request"})
+
+    def model(_agent, payload, *_ignored, **_kwargs):
+        step = next(rounds)
+        if step == "open":
+            return _response(args={"action": "project_goal", "op": "open", "goal": "Get approval in chat",
+                                   "verification": "Approval received in the chat after the request"})
+        if step == "confirm":
+            return _response("The approval request is drafted. Send it?")
+        if step == "resume":
+            assert payload["messages"][-1]["content"] == "Send it."
+            return _response(args={"action": "project_goal", "op": "resume", "project_id": planned["project_id"]})
+        content = next(row["content"] for row in reversed(payload["messages"]) if row["role"] == "tool")
+        if step == "checkpoint":
+            assert "approval-request" in content
+            return _response(args={"action": "project_goal", "op": "checkpoint", "project_id": planned["project_id"],
+                                   "evidence_tool_name": "browser_exec", "stage": "Approval requested",
+                                   "next_step": "Check the chat for approval"})
+        if step == "wait":
+            return _response(args={"action": "external_wait", **_args(planned["project_id"]),
+                                   "reply_criterion": "Approval received"})
+        result = json.loads(content)
+        assert result["success"], result
+        if step == "block":
+            planned["project_id"] = result["project_id"]
+            return _response(args={"action": "project_goal", "op": "block", "project_id": result["project_id"],
+                                   "blocker": "The draft is awaiting permission to send",
+                                   "unblock": "The user confirms the message may be sent"})
+        if step == "send":
+            assert result["project_id"] == planned["project_id"] and result["status"] == "ready"
+            response = _response(args={"code": "print('approval request sent')"})
+            call = response.choices[0].message.tool_calls[0]
+            call.id = "send-approval-request"
+            call.function.name = "browser_exec"
+            return response
+        project_id = planned["project_id"]
+        if step == "timer":
+            response = _response(args={"action": "create", "project_id": project_id, "wait_id": result["wait_id"],
+                                       "schedule": "every 15m", "prompt": "Check the chat for approval"})
+            response.choices[0].message.tool_calls[0].function.name = "cronjob_manage"
+            return response
+        planned["timer"] = result["job_id"]
+        return _response("Approval requested. I’ll follow up in the same chat.")
+
+    monkeypatch.setattr(browser_use_cli, "browser_exec", execute)
+    _models(monkeypatch, model, lambda _goals: {})
+    first = _admitted_turn(agent, "original-assignment", "Get approval in chat. Ask me before sending.")
+    project_id = planned["project_id"]
+    assert first["final_response"] == "The approval request is drafted. Send it?"
+    assert _snapshot(actor, project_id)["status"] == "blocked"
+    assert not sent
+
+    result = _admitted_turn(agent, "send-confirmation", "Send it.")
+    assert result["completed"], result["final_response"]
+    assert sent == [project_id], "browser_exec must run exactly once with a saved Goal"
+    assert result["final_response"] == "Approval requested. I’ll follow up in the same chat."
+    goal = _snapshot(actor, project_id)
+    assert goal["status"] == "waiting"
+    assert "tool:send-approval-request" in goal["evidence"]
+    assert get_job(planned["timer"])["external_wait"]["project_id"] == project_id
+    with ProjectStore(actor) as store:
+        assert [project["subagent_id"] for project in store.projects()] == [project_id]
 
 
 @pytest.mark.asyncio
