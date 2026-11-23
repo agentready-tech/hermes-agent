@@ -104,7 +104,7 @@ class MainChat:
                 raise ValueError('Only the main conversation is available')
             return await self.snapshot(history_native=params.get('history_native') is True)
         if method in {'panel.subagents.list', 'panel.subagents.history', 'panel.subagents.assignments',
-                      'panel.subagents.graph', 'panel.subagents.control'}:
+                      'panel.subagents.graph', 'panel.subagents.timeline', 'panel.subagents.control'}:
             if not self.session_id:
                 raise ValueError('Resume the main conversation first')
             return await self.client.rpc(method, **params)

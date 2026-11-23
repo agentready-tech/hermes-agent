@@ -54,6 +54,26 @@ def main_chat(main_home, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_subagent_timeline_loads_through_main_chat(main_chat):
+    from hermes_runtime.sessions import HOME_SESSION_ID
+
+    chat, _authority, db, _client = main_chat
+    child = 'timeline-child'
+    db.create_session(child, source='subagent', parent_session_id=HOME_SESSION_ID)
+    db.append_message(child, 'user', 'Check the report')
+    db.append_message(child, 'assistant', 'The report is ready', finish_reason='stop')
+
+    await chat.dispatch({'method': 'session.resume', 'params': {'history_native': True}})
+    graph = await chat.dispatch({'method': 'panel.subagents.graph', 'params': {'limit': 6}})
+    node = next(node for node in graph['nodes'] if node['id'] == child)
+    timeline = await chat.dispatch({'method': 'panel.subagents.timeline', 'params': {
+        'node_ids': [{'id': node['id'], 'parent_id': node['parent_id']}], 'tools': False,
+    }})
+
+    assert [event['text'] for event in timeline['events']] == ['Check the report', 'The report is ready']
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('started', [False, True])
 async def test_busy_main_queues_once_and_preserves_single_history(main_chat, started):
     from hermes_state_runtime import claim_session_input, list_session_admissions
