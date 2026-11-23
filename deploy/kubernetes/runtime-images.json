@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.22.2",
+  "defaultRuntimeVersion": "2026.11.23.1",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -4988,6 +4988,43 @@
         "releaseRegressionTestsPassed": 85
       },
       "description": "Continue assignments across turns and checkpoints, and load browser and Google Workspace instructions in managed turns.",
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml"
+    },
+    "2026.11.23.1": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:54b38306e1bbec607e493de3822d01335ebbce61de5f97d5e3fecf38b44d45f2",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.23.1",
+      "configDigest": "sha256:63ab09ece4e8aade9f55699bfa4cf83a89a870e73588c7f8429f3486261cc19e",
+      "platform": "linux/amd64",
+      "sourceRevision": "32a574808865305f81d834b26a54776ec919ae4c",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:54b38306e1bbec607e493de3822d01335ebbce61de5f97d5e3fecf38b44d45f2",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.23.1",
+        "digest": "sha256:54b38306e1bbec607e493de3822d01335ebbce61de5f97d5e3fecf38b44d45f2",
+        "configDigest": "sha256:63ab09ece4e8aade9f55699bfa4cf83a89a870e73588c7f8429f3486261cc19e",
+        "sourceRevision": "32a574808865305f81d834b26a54776ec919ae4c",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 45205171199,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:1449fc299c1a2f47115b6a9b8a3fc98ec833c9c27d4c5a986f96c5df7d219f16",
+        "deployRunId": 45207604701
+      },
+      "validation": {
+        "runtimeReady": true,
+        "futureDefaultConfigured": true,
+        "releaseRegressionTestsPassed": 99
+      },
+      "description": "Show live assignments, subagent history and controls in Panel, with scoped mailbox delivery and recovery.",
       "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
       "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml"
     }
