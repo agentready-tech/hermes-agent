@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.23.1",
+  "defaultRuntimeVersion": "2026.11.23.2",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -5025,6 +5025,43 @@
         "releaseRegressionTestsPassed": 99
       },
       "description": "Show live assignments, subagent history and controls in Panel, with scoped mailbox delivery and recovery.",
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml"
+    },
+    "2026.11.23.2": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:c87c2a740b5578ed8565ef5121b49f42b26656c6f0ff655061626b603f02798d",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.23.2",
+      "configDigest": "sha256:a3be82bf45a034869d4c0fe62d6b5ebde8dfad382f1cef8e2437e7b967c9acf4",
+      "platform": "linux/amd64",
+      "sourceRevision": "c8a7410dcb6da33c51f7a506fea3720a8f7a0c37",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:c87c2a740b5578ed8565ef5121b49f42b26656c6f0ff655061626b603f02798d",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.23.2",
+        "digest": "sha256:c87c2a740b5578ed8565ef5121b49f42b26656c6f0ff655061626b603f02798d",
+        "configDigest": "sha256:a3be82bf45a034869d4c0fe62d6b5ebde8dfad382f1cef8e2437e7b967c9acf4",
+        "sourceRevision": "c8a7410dcb6da33c51f7a506fea3720a8f7a0c37",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 45210413930,
+        "workflowAttempt": 2,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:54b38306e1bbec607e493de3822d01335ebbce61de5f97d5e3fecf38b44d45f2",
+        "deployRunId": 45214831548
+      },
+      "validation": {
+        "runtimeReady": true,
+        "futureDefaultConfigured": true,
+        "releaseRegressionTestsPassed": 100
+      },
+      "description": "Restore subagent conversation history in Panel through the native Hermes chat connection.",
       "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
       "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml"
     }
