@@ -3,8 +3,13 @@
 import json
 from types import SimpleNamespace
 
-from tools.delegate_mail_store import MailStore
-from tools.delegate_project_store import _transaction
+from tools.async_delegation import _owner_liveness
+from tools.delegate_mail_store import MailStore, pending_mail_rows
+from tools.delegate_project_store import _goal_input_state, _transaction, mail_wake_satisfied, project_input_goal_id
+
+
+class MailboxDeferred(ValueError):
+    """A claimed mailbox wake must return to the queue for reevaluation."""
 
 
 def _below(store, target, ancestor):
@@ -26,24 +31,36 @@ def ensure_mail_input(parent, projects, project):
     with MailStore(parent) as mail:
         mail.acknowledge_recorded()
         with _transaction() as conn:
-            rows = conn.execute("SELECT message_id,target_session_id FROM delegation_mail WHERE delivered_at IS NULL ORDER BY rowid").fetchall()
-            active = conn.execute("SELECT 1 FROM delegated_project_messages WHERE subagent_id=? AND state IN ('pending','running')",
-                                  (project["subagent_id"],)).fetchone()
+            rows = pending_mail_rows(conn)
+            active = conn.execute("SELECT * FROM delegated_project_messages WHERE subagent_id=? AND state IN ('pending','running')",
+                                  (project["subagent_id"],)).fetchall()
+            if any(_blocks_mail(conn, row) for row in active):
+                return
             previous = conn.execute("SELECT origin_json FROM delegated_project_messages WHERE subagent_id=? ORDER BY rowid DESC LIMIT 1",
                                     (project["subagent_id"],)).fetchone()
-        if active:
-            return
-        first = next((identity for identity, target in rows if _below(mail, target, project["session_id"])), None)
+        first = next((row for row in rows if _below(mail, row['target_session_id'], project['session_id'])), None)
         if first is None:
             return
         from tools.delegate_projects import _origin
         origin = json.loads(previous[0]) if previous else _origin()
+        origin.pop("goal_project_id", None)
+        if first['goal_project_id']:
+            origin['goal_project_id'] = first['goal_project_id']
         if getattr(parent, "_delegate_depth", 0):
             origin = {**origin, "wake": False}
         if not origin.get("wake"):
             origin["mail_results"] = True
         projects.enqueue(project, "Continue your existing task and handle pending agent messages. "
-                         "Their contents will enter your conversation at a safe boundary.", origin, "mail-wake:" + first, {"agent_mail_wake": True})
+                         "Their contents will enter your conversation at a safe boundary.", origin,
+                         'mail-wake:' + first['message_id'], {'agent_mail_wake': True, 'agent_mail_id': first['message_id']})
+
+
+def _blocks_mail(conn, row):
+    if row['state'] == 'running':
+        alive = _owner_liveness()
+        if alive is None or alive(row['owner_pid'], row['owner_started_at']):
+            return True
+    return _goal_input_state(conn, project_input_goal_id(row)) == 'open' and not mail_wake_satisfied(conn, row)
 
 
 def result_mail(parent, project, message, result):
@@ -72,11 +89,14 @@ def stage_mail_input(child, message, history):
     """The inbox wake's first user row carries the actual mail, never a blind request to repeat old work."""
     with MailStore(child) as mail:
         live_ids = {identity for row in history if (identity := row.get("message_id") or row.get("platform_message_id"))}
-        row = mail.delivery(live_ids)
+        first_id = json.loads(message['options_json']).get('agent_mail_id')
+        row = mail.delivery(live_ids, first_id=first_id, request_id=message['message_id'])
         if row is None:
+            if first_id:
+                with _transaction() as conn:
+                    if (_goal_input_state(conn, project_input_goal_id(message)) != 'open'
+                            or mail_wake_satisfied(conn, message)):
+                        raise MailboxDeferred
             return message["content"], None
-        metadata = {**row["display_metadata"], "agent_mail_delivery_id": message["message_id"]}
-        with _transaction() as conn:
-            conn.executemany("UPDATE delegation_mail SET delivery_id=? WHERE message_id=? AND delivered_at IS NULL",
-                             [(message["message_id"], identity) for identity in metadata["agent_message_ids"]])
+        metadata = {**row['display_metadata'], 'agent_mail_delivery_id': row['message_id']}
         return row["content"], metadata

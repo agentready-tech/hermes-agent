@@ -49,18 +49,25 @@ def read_goal(store, project_id):
     return goal
 
 
-def mutate_goal(store, project_id, change, *, retire_pending=False):
+def mutate_goal(store, project_id, change, *, retire_pending=False, when_paused=None):
     def apply(workspace, conn):
         current = workspace.get(KEY)
         if not isinstance(current, dict):
             raise ValueError("No Goal is open for this project")
+        if when_paused:
+            paused, archived = conn.execute(
+                "SELECT paused, archived FROM delegated_projects WHERE subagent_id=?", (project_id,),
+            ).fetchone()
+            if archived or (paused and when_paused == "skip"):
+                return {**current, "status": "inactive"}
         updated = change(current)
         if retire_pending and updated["status"] == "closing":
-            from tools.delegate_project_store import cancel_goal_inputs
+            from tools.delegate_project_store import cancel_goal_inputs, set_project_paused
 
+            set_project_paused(conn, project_id, False, False)
             cancel_goal_inputs(conn, project_id)
         return updated
-    return store.mutate_workspace(project_id, apply)
+    return store.mutate_workspace(project_id, apply, active_only=when_paused is None)
 
 
 def active_goal(goal):
@@ -215,7 +222,8 @@ def close_goal(store, project_id, outcome, evidence=()):
             goal.update(status="closing", outcome=outcome, final_evidence=list(evidence))
         return goal
 
-    current = mutate_goal(store, project_id, begin, retire_pending=True)
+    current = mutate_goal(store, project_id, begin, retire_pending=True,
+                          when_paused="apply" if outcome == "cancelled" else "skip")
     if current["status"] != "closing":
         return current
     close_wait(store, project_id, "cancelled" if outcome == "cancelled" else "closed")
@@ -225,6 +233,33 @@ def close_goal(store, project_id, outcome, evidence=()):
         return goal
 
     return mutate_goal(store, project_id, finish)
+
+
+def set_goal_paused(store, project_id, paused):
+    """Pause this Goal's admissions without pausing or archiving its workers."""
+    from tools.delegate_project_store import goal_has_recoverable_input, set_project_paused
+
+    def change(workspace, conn):
+        goal = workspace.get(KEY)
+        row = conn.execute("SELECT paused, archived FROM delegated_projects WHERE subagent_id=?", (project_id,)).fetchone()
+        if not isinstance(goal, dict) or row[1] or not active_goal(goal):
+            raise ValueError("Goal cannot be paused or resumed")
+        if bool(row[0]) != paused:
+            set_project_paused(conn, project_id, paused, False)
+            # A wake already admitted before the pause cannot start this Goal later.
+            goal["wake_id"] = None
+            if not paused and goal["status"] != "blocked":
+                # A ready Goal is recoverable even if the gateway exits now. Its
+                # continuation checks the saved wait, operation and worker state.
+                goal.update(status="ready", attempts_without_progress=0)
+                if goal_has_recoverable_input(conn, project_id):
+                    # A prior recovery event may have been consumed during the
+                    # pause. Mint a fresh wake for deferred or abandoned work.
+                    goal["wake_sequence"] += 1
+                    goal["wake_id"] = f'{project_id}:{goal["wake_sequence"]}'
+        return goal
+
+    return store.mutate_workspace(project_id, change, active_only=False)
 
 
 def _change_status(store, segment, project_id, op, args):

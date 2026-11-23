@@ -103,7 +103,8 @@ class MainChat:
             if params.get('session_id', HOME_SESSION_ID) != HOME_SESSION_ID:
                 raise ValueError('Only the main conversation is available')
             return await self.snapshot(history_native=params.get('history_native') is True)
-        if method in {'panel.subagents.list', 'panel.subagents.history'}:
+        if method in {'panel.subagents.list', 'panel.subagents.history', 'panel.subagents.assignments',
+                      'panel.subagents.graph', 'panel.subagents.control'}:
             if not self.session_id:
                 raise ValueError('Resume the main conversation first')
             return await self.client.rpc(method, **params)
@@ -229,10 +230,13 @@ async def bridge_chat(remote_url, credential, options):
                 response = {'jsonrpc': '2.0', 'id': request.get('id')}
                 try:
                     response['result'] = await chat.dispatch(request)
-                except (GatewayRPCError, ValueError):
+                except (GatewayRPCError, ValueError) as error:
                     # No CLI diagnostics, internal ids, request text, paths or credentials.
                     response['error'] = {'code': 4090, 'message':
                         'Сообщение не отправлено. Проверьте подключение к сотруднику и повторите отправку.'}
+                    if (isinstance(error, GatewayRPCError) and request['method'].startswith('panel.subagents.')
+                            and str(error) in {'invalid_transition', 'unknown_method'}):
+                        response['error']['data'] = {'reason': str(error)}
                 await remote.send(json.dumps(response))
                 if request.get('method') == 'prompt.submit' and response.get('result', {}).get('status') == 'terminal':
                     # A lost-ACK retry can find a turn already complete. Repaint from the actual

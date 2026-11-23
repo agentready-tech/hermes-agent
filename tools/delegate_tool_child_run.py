@@ -790,6 +790,7 @@ class _ChildRun:
     ) -> dict[str, Any]:
         """Shared tail of every failure path: emit ``subagent.complete`` (``status`` defaults to the entry's), note
         the steer text that won the race with the failure, report the worktree."""
+        self.record_outcome(entry["status"])
         _safe_progress(
             self.child_progress_cb, "subagent.complete", preview=preview, status=status or entry["status"],
             duration_seconds=entry["duration_seconds"], summary=summary,
@@ -1030,9 +1031,21 @@ class _ChildRun:
                     {"session_id": s.id, "command": s.command[:200], "exit_code": s.exit_code,
                      "output_tail": _output_tail(s, 600)} for s in unread]
 
+    def record_outcome(self, status: str) -> None:
+        """Persist the short verdict for a one-shot whose session close has no outcome field."""
+        child = self.child
+        if isinstance(getattr(child, "_persistent_project_id", None), str):
+            return  # Its exact per-input receipt carries the verdict.
+        db = getattr(child, "_session_db", None)
+        sid = getattr(child, "session_id", None)
+        if db is not None and isinstance(sid, str):
+            with _quiet("Could not save one-shot delegation outcome: %s"):
+                db.patch_session_model_config(sid, {"_delegate_status": status})
+
     def emit_complete(self, result: dict[str, Any], entry: dict[str, Any], duration: float) -> None:
         """Fire ``subagent.complete`` with the per-branch observability payload (tokens, cost, files touched,
         tool-output tail); every field is optional and degrades gracefully on the client."""
+        self.record_outcome(entry["status"])
         if not self.child_progress_cb:
             return
         child = self.child

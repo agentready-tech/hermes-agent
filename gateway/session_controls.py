@@ -183,6 +183,8 @@ class AuthorityConnection:
         from hermes_runtime.adapters.main_subagents import rpc as subagent_read
         handlers['panel.subagents.list'] = partial(subagent_read, self)
         handlers['panel.subagents.history'] = partial(subagent_read, self, history=True)
+        from hermes_runtime.adapters.main_assignments import handlers as assignment_handlers
+        handlers.update(assignment_handlers(self))
         from hermes_runtime.adapters.main_history import rpc as history_read
         handlers['panel.history.before'] = partial(history_read, self)
         handlers['panel.prompt.submit'] = partial(self.submit, panel_followup=True)

@@ -2,10 +2,11 @@
 
 import hashlib
 import json
+import sqlite3
 import time
 
 from tools.async_delegation import _owner_liveness
-from tools.delegate_project_store import _transaction
+from tools.delegate_project_store import _transaction, mail_wake_satisfied, project_input_goal_id
 
 
 def repair_legacy_completion_route(conn, event, payload):
@@ -57,24 +58,34 @@ def publish_recovery_wakeups():
     if alive is None:
         return mail_count
     with _transaction() as conn:
-        rows = conn.execute("SELECT p.parent_session_id,p.project_key,p.subagent_id,m.message_id,m.origin_json,"
-            "COALESCE(m.owner_pid,a.owner_pid),CASE WHEN m.owner_pid IS NOT NULL THEN m.owner_started_at ELSE a.owner_started_at END "
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT p.parent_session_id,p.project_key,p.subagent_id,m.message_id,m.origin_json,m.options_json,"
+            "COALESCE(m.owner_pid,a.owner_pid) AS pid,CASE WHEN m.owner_pid IS NOT NULL THEN m.owner_started_at ELSE a.owner_started_at END AS started,"
+            "(COALESCE(g.paused,0) OR COALESCE(g.archived,0) OR COALESCE("
+            "json_extract(g.workspace_json, '$.goal_state.status') IN ('closing','done','cancelled','inactive','blocked'),0)) AS goal_quiet "
             "FROM delegated_project_messages m JOIN delegated_projects p USING(subagent_id) "
             "LEFT JOIN async_delegations a ON a.delegation_id=m.message_id "
+            "LEFT JOIN delegated_projects g ON g.subagent_id=json_extract(m.origin_json, '$.goal_project_id') "
+            "AND (COALESCE(json_extract(m.options_json, '$.agent_mail_wake'),0)=0 "
+            "     OR json_extract(m.options_json, '$.agent_mail_id') IS NOT NULL) "
             "WHERE (m.state IN ('pending','running') OR m.published=0) AND p.archived=0 AND p.paused=0").fetchall()
+        live_projects = {row['subagent_id'] for row in rows if row['pid'] and alive(row['pid'], row['started'])}
+        rows = [row for row in rows if not row['goal_quiet'] and not mail_wake_satisfied(conn, row)]
     count = mail_count
-    live_projects = {sid for _, _, sid, _, _, pid, started in rows if pid and alive(pid, started)}
-    for parent, key, sid, mid, raw_origin, pid, started in rows:
-        if sid in live_projects:
+    for row in rows:
+        sid, mid = row['subagent_id'], row['message_id']
+        origin = json.loads(row['origin_json'])
+        if sid in live_projects or not origin.get('wake'):
             continue
-        origin = json.loads(raw_origin)
-        if not origin.get("wake"):
-            continue
-        identity = "project-recovery-" + hashlib.sha256(f"{mid}:{pid}:{started}".encode()).hexdigest()
-        summary = (f"Project {key}, persistent subagent {sid}, has accepted work or a saved result awaiting delivery ({mid}). "
+        if not project_input_goal_id(row):
+            origin.pop('goal_project_id', None)
+        if json.loads(row['options_json']).get('agent_mail_id'):
+            origin['mail_project_message_id'] = mid
+        identity = 'project-recovery-' + hashlib.sha256(f"{mid}:{row['pid']}:{row['started']}".encode()).hexdigest()
+        summary = (f"Project {row['project_key']}, persistent subagent {sid}, has accepted work or a saved result awaiting delivery ({mid}). "
                    "Its old execution process is gone. Resume the saved project queue and inspect the existing "
                    "history/results before repeating external actions. Do not create another project child.")
-        if publish_wakeup(identity, parent, origin, summary):
+        if publish_wakeup(identity, row['parent_session_id'], origin, summary):
             count += 1
     return count
 

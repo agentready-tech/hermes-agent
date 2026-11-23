@@ -52,7 +52,7 @@ def _before(value):
 
 
 @contextmanager
-def _store(connection):
+def _store(connection, capability='session:read'):
     from hermes_runtime.adapters.hermes import enabled
     from hermes_runtime.adapters.main_transport import require_owner
     from hermes_runtime.sessions import HOME_SESSION_ID
@@ -67,7 +67,7 @@ def _store(connection):
         raise RuntimeStoreError('permission_denied')
     from gateway.session_contract import SessionRef
     ref = SessionRef(authority.profile_id, HOME_SESSION_ID)
-    authority.authorize(connection.actor, ref, 'session:read')
+    authority.authorize(connection.actor, ref, capability)
     parent = SimpleNamespace(_session_db=authority.db, session_id=authority.physical_target(ref))
     with ProjectStore(parent) as store:
         yield store
@@ -255,6 +255,10 @@ def _changed(turn, event_type):
     if (not enabled() or sid != HOME_SESSION_ID or Path(authority.profile_id).resolve() != managed_home()
             or getattr(authority, 'retired', False)):
         return
+    publish_change(authority, sid)
+
+
+def publish_change(authority, sid):
     live = authority.sessions.get(sid)
     if live is not None:
         live.event_stream.publish(sid, {}, event_type='panel.subagents.changed')

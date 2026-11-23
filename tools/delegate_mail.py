@@ -4,7 +4,7 @@ import json
 import threading
 import time
 
-from tools.delegate_mail_store import MailStore
+from tools.delegate_mail_store import MailStore, pending_mail_rows
 
 
 def mail_action(actor, action, recipient=None, message=None, event_id=None, timeout_seconds=30):
@@ -37,13 +37,14 @@ def publish_pending_mail():
     from tools.delegate_project_store import _transaction
     from tools.delegate_project_recovery import publish_wakeup
     with _transaction() as conn:
-        rows = conn.execute("SELECT message_id,root_session_id,target_session_id,origin_json FROM delegation_mail WHERE delivered_at IS NULL").fetchall()
+        rows = pending_mail_rows(conn)
     count = 0
-    for identity, root, target, raw in rows:
-        origin = json.loads(raw)
+    for row in rows:
+        origin = json.loads(row['origin_json'])
         if origin.get("wake"):
-            created = publish_wakeup(identity, root, origin,
-                f"Coordination mail is waiting for agent {target}. Resume existing project work and handle the saved "
+            identity = row['message_id']
+            created = publish_wakeup(identity, row['root_session_id'], origin,
+                f"Coordination mail is waiting for agent {row['target_session_id']}. Resume existing project work and handle the saved "
                 "mailbox. This is an intermediate message, not a subagent finishing its task.", agent_message=True)
             count += bool(created)
             if created:

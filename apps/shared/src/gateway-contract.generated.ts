@@ -5324,6 +5324,100 @@ export interface PanelSubagentHistoryPage {
   before: number
   has_more: boolean
 }
+export interface PanelAssignmentPageParams {
+  before?: string | null
+  limit?: number | null
+}
+export interface PanelAssignmentList {
+  goals: PanelAssignment[]
+  page: PanelAssignmentPage
+}
+export interface PanelAssignment {
+  project_id: string
+  title: string
+  status: string
+  stage: string
+  created_at: number
+}
+export interface PanelAssignmentPage {
+  before: string | null
+  has_more: boolean
+}
+export interface PanelAssignmentGraphParams {
+  before?: string | null
+  limit?: number | null
+  project_id?: string | null
+  parent_id?: string | null
+}
+export interface PanelAssignmentGraph {
+  goal: PanelAssignmentDetail | null
+  nodes: PanelAssignmentNode[]
+  page: PanelAssignmentPage
+}
+export interface PanelAssignmentDetail {
+  project_id: string
+  title: string
+  status: string
+  stage: string
+  created_at: number
+  description: string
+  verification: string
+  constraints: string
+  next_step: string
+  blocker: string
+  unblock: string
+  source: string | null
+  next_check_at: string | null
+}
+export interface PanelAssignmentNode {
+  id: string
+  parent_id: string
+  time: number
+  kind: 'project' | 'session'
+  name: string
+  goal: string
+  status: string
+  child_page?: PanelAssignmentPage | null
+}
+export interface PanelAssignmentTimelineParams {
+  before?: string | null
+  limit?: number | null
+  project_id?: string | null
+  node_ids: PanelAssignmentNodeKey[]
+  tools?: boolean
+  selection?: PanelAssignmentSelection | null
+}
+export interface PanelAssignmentNodeKey {
+  id: string
+  parent_id: string
+}
+export interface PanelAssignmentSelection {
+  id: string
+  type: 'node' | 'edge'
+}
+export interface PanelAssignmentTimeline {
+  events: PanelAssignmentEvent[]
+  page: PanelAssignmentPage
+}
+export interface PanelAssignmentEvent {
+  id: string
+  time: number
+  kind: 'goal' | 'task' | 'message' | 'result' | 'tool'
+  from: string
+  to: string
+  from_name?: string | null
+  to_name?: string | null
+  status?: string | null
+  tool?: string | null
+  text: string
+}
+export interface PanelAssignmentControlParams {
+  project_id: string
+  action: 'pause' | 'resume' | 'cancel'
+}
+export interface PanelAssignmentControlResult {
+  goal: PanelAssignmentDetail
+}
 /** ``answers`` rides only on a reconnect replay (locks the server already accepted; null = skipped). */
 export interface ClarifyRequestParams {
   session_id: string
@@ -6809,8 +6903,12 @@ export interface CanonicalRpcMethods {
   'kanban.run': { params: KanbanRunParams; result: KanbanRunResult }
   'panel.history.before': { params: PanelHistoryParams; result: PanelHistoryResult }
   'panel.prompt.submit': { params: PanelSubmitParams; result: PanelSubmitResult }
+  'panel.subagents.assignments': { params: PanelAssignmentPageParams; result: PanelAssignmentList }
+  'panel.subagents.control': { params: PanelAssignmentControlParams; result: PanelAssignmentControlResult }
+  'panel.subagents.graph': { params: PanelAssignmentGraphParams; result: PanelAssignmentGraph }
   'panel.subagents.history': { params: PanelSubagentHistoryParams; result: PanelSubagentHistoryResult }
   'panel.subagents.list': { params: PanelSubagentListParams; result: PanelSubagentListResult }
+  'panel.subagents.timeline': { params: PanelAssignmentTimelineParams; result: PanelAssignmentTimeline }
   'profiles.list': { params: CanonicalProfilesParams; result: CanonicalProfilesResult }
   /** Retire a still-queued admission; a started one is unaffected. */
   'prompt.cancel': { params: PromptCancelParams; result: AdmissionStatus }
@@ -6873,8 +6971,12 @@ export const CANONICAL_RPC_METHODS = [
   'kanban.run',
   'panel.history.before',
   'panel.prompt.submit',
+  'panel.subagents.assignments',
+  'panel.subagents.control',
+  'panel.subagents.graph',
   'panel.subagents.history',
   'panel.subagents.list',
+  'panel.subagents.timeline',
   'profiles.list',
   'prompt.cancel',
   'prompt.receipt',

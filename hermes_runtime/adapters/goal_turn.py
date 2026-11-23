@@ -54,6 +54,13 @@ def current_segment(agent):
     return segment if isinstance(segment, GoalSegment) else None
 
 
+def dispatch_goal_id(agent):
+    """The main's selection or the child run's exact accepted dispatch."""
+    segment = current_segment(agent)
+    identity = segment.selected_id if segment is not None else getattr(agent, '_project_input_goal_id', None)
+    return identity if isinstance(identity, str) else None
+
+
 def goal_in_scope(agent, project_id):
     segment = current_segment(agent)
     return (segment is None or not segment.internal or not segment.bound_project_ids
@@ -134,16 +141,19 @@ def _bound_event(store, segment, header):
 
 
 def _record_result(store, segment, project_id, identity, kind, result):
-    current = read_goal(store, project_id)
-    if (not active_goal(current) or current["status"] == "blocked"
-            or identity in current["evidence"] and current["revision"] == current["checked_revision"]):
-        return False
-
     def record(goal):
-        if active_goal(goal) and add_evidence(goal, identity, kind, result[:6000]):
+        if (not active_goal(goal) or goal["status"] == "blocked"
+                or identity in goal["evidence"] and goal["revision"] == goal["checked_revision"]):
+            return None
+        if add_evidence(goal, identity, kind, result[:6000]):
             goal["status"] = "ready"
+        return goal
 
-    mutate_goal(store, project_id, record)
+    saved = mutate_goal(store, project_id, record, when_paused="apply")
+    # Keep a report that finished during a pause as evidence for the next resume,
+    # without giving the report its own turn while its Goal is paused.
+    if not saved or not active_goal(saved) or not active_goal(read_goal(store, project_id)):
+        return False
     segment.bind(project_id)
     return True
 
@@ -174,6 +184,51 @@ def _tool_completion(store, segment, identity):
     return recognized
 
 
+def _native_mail(store, segment, identity):
+    row = store.db._read_one(
+        """SELECT root_session_id, delivered_at, json_extract(origin_json, '$.message_goal_project_id') AS project_id
+           FROM delegation_mail WHERE message_id=? AND kind='message'""",
+        (identity,),
+    )
+    if row is None or not row['project_id'] or store.resolve(row['root_session_id']) != store.resolve(store.parent_id):
+        return False
+    try:
+        goal = read_goal(store, row['project_id'])
+    except ValueError:
+        segment.stale_inputs += 1
+    else:
+        if row['delivered_at'] is None and active_goal(goal):
+            segment.bind(row['project_id'])
+        else:
+            segment.stale_inputs += 1
+    return True
+
+
+def _native_recovery(store, segment, event):
+    if mail_input := event.get('mail_project_message_id'):
+        from tools.delegate_project_store import _transaction, mail_wake_satisfied
+
+        message = store.message(mail_input)
+        if message:
+            with _transaction() as conn:
+                if mail_wake_satisfied(conn, message):
+                    segment.stale_inputs += 1
+                    return True
+    project_id = event.get('goal_project_id')
+    if not isinstance(project_id, str):
+        return False
+    try:
+        goal = read_goal(store, project_id)
+    except ValueError:
+        segment.stale_inputs += 1
+    else:
+        if active_goal(goal) and goal['status'] != 'blocked':
+            segment.bind(project_id)
+        else:
+            segment.stale_inputs += 1
+    return True
+
+
 def _native_completion(store, segment, identity):
     if identity.startswith("project-msg-"):
         message = store.message(identity)
@@ -194,6 +249,11 @@ def _native_completion(store, segment, identity):
     if not row or not row[0]:
         return False
     event = json.loads(row[0])
+    if identity.startswith('agent-mail-') and event.get('agent_message') is True:
+        return _native_mail(store, segment, identity)
+    if (identity.startswith('project-recovery-') and event.get('durable_recovery') is True
+            and _native_recovery(store, segment, event)):
+        return True
     return _bound_event(store, segment, event.get("main_project_event", {}))
 
 
@@ -390,7 +450,7 @@ def _write_transition(store, project_id, branch, checked_revision, consumed):
             goal["wake_sequence"] += 1
             goal["wake_id"] = f'{project_id}:{goal["wake_sequence"]}'
         return goal
-    return mutate_goal(store, project_id, advance)
+    return mutate_goal(store, project_id, advance, when_paused="skip")
 
 
 def _publish(project_id, goal):
@@ -428,6 +488,15 @@ def _recover_ready(store, project_id, goal):
     _publish(project_id, goal)
 
 
+def resume_paused_goal(store, project_id):
+    from tools.delegate_project_goal import set_goal_paused
+
+    goal = set_goal_paused(store, project_id, False)
+    if goal["status"] == "ready":
+        _recover_ready(store, project_id, goal)
+    return read_goal(store, project_id)
+
+
 def finish_segment(agent, response, *, verify=True, final_message=None):
     """Finalize selected goals before the model's final response is presented."""
     segment = current_segment(agent)
@@ -450,10 +519,12 @@ def finish_segment(agent, response, *, verify=True, final_message=None):
             evidence = verdicts.get(project_id)
             if evidence:
                 try:
-                    close_goal(store, project_id, "done", evidence)
+                    closed = close_goal(store, project_id, "done", evidence)
                 except (ValueError, OSError, RuntimeError, sqlite3.Error):
                     logger.warning("Project Goal cleanup deferred", exc_info=True)
                 else:
+                    if closed["status"] != "done":
+                        continue
                     segment.notify = True
                 continue
             current = _write_transition(store, project_id, _branch(store, project_id, goal),

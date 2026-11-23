@@ -24866,6 +24866,615 @@
         "title": "PaneRevealPayload",
         "type": "object"
       },
+      "PanelAssignment": {
+        "additionalProperties": false,
+        "properties": {
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "number"
+          }
+        },
+        "required": [
+          "project_id",
+          "title",
+          "status",
+          "stage",
+          "created_at"
+        ],
+        "title": "PanelAssignment",
+        "type": "object"
+      },
+      "PanelAssignmentControlParams": {
+        "additionalProperties": false,
+        "properties": {
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "action": {
+            "enum": [
+              "pause",
+              "resume",
+              "cancel"
+            ],
+            "title": "Action",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "action"
+        ],
+        "title": "PanelAssignmentControlParams",
+        "type": "object"
+      },
+      "PanelAssignmentControlResult": {
+        "additionalProperties": false,
+        "properties": {
+          "goal": {
+            "$ref": "#/components/schemas/PanelAssignmentDetail"
+          }
+        },
+        "required": [
+          "goal"
+        ],
+        "title": "PanelAssignmentControlResult",
+        "type": "object"
+      },
+      "PanelAssignmentDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "number"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "verification": {
+            "title": "Verification",
+            "type": "string"
+          },
+          "constraints": {
+            "title": "Constraints",
+            "type": "string"
+          },
+          "next_step": {
+            "title": "Next Step",
+            "type": "string"
+          },
+          "blocker": {
+            "title": "Blocker",
+            "type": "string"
+          },
+          "unblock": {
+            "title": "Unblock",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "next_check_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Check At"
+          }
+        },
+        "required": [
+          "project_id",
+          "title",
+          "status",
+          "stage",
+          "created_at",
+          "description",
+          "verification",
+          "constraints",
+          "next_step",
+          "blocker",
+          "unblock",
+          "source",
+          "next_check_at"
+        ],
+        "title": "PanelAssignmentDetail",
+        "type": "object"
+      },
+      "PanelAssignmentEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "time": {
+            "title": "Time",
+            "type": "number"
+          },
+          "kind": {
+            "enum": [
+              "goal",
+              "task",
+              "message",
+              "result",
+              "tool"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "from": {
+            "title": "From",
+            "type": "string"
+          },
+          "to": {
+            "title": "To",
+            "type": "string"
+          },
+          "from_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "From Name"
+          },
+          "to_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "To Name"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Status"
+          },
+          "tool": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tool"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "time",
+          "kind",
+          "from",
+          "to",
+          "text"
+        ],
+        "title": "PanelAssignmentEvent",
+        "type": "object"
+      },
+      "PanelAssignmentGraph": {
+        "additionalProperties": false,
+        "properties": {
+          "goal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PanelAssignmentDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/PanelAssignmentNode"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PanelAssignmentPage"
+          }
+        },
+        "required": [
+          "goal",
+          "nodes",
+          "page"
+        ],
+        "title": "PanelAssignmentGraph",
+        "type": "object"
+      },
+      "PanelAssignmentGraphParams": {
+        "additionalProperties": false,
+        "properties": {
+          "before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Before"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Project Id"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parent Id"
+          }
+        },
+        "title": "PanelAssignmentGraphParams",
+        "type": "object"
+      },
+      "PanelAssignmentList": {
+        "additionalProperties": false,
+        "properties": {
+          "goals": {
+            "items": {
+              "$ref": "#/components/schemas/PanelAssignment"
+            },
+            "title": "Goals",
+            "type": "array"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PanelAssignmentPage"
+          }
+        },
+        "required": [
+          "goals",
+          "page"
+        ],
+        "title": "PanelAssignmentList",
+        "type": "object"
+      },
+      "PanelAssignmentNode": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "parent_id": {
+            "title": "Parent Id",
+            "type": "string"
+          },
+          "time": {
+            "title": "Time",
+            "type": "number"
+          },
+          "kind": {
+            "enum": [
+              "project",
+              "session"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "goal": {
+            "title": "Goal",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "child_page": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PanelAssignmentPage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "id",
+          "parent_id",
+          "time",
+          "kind",
+          "name",
+          "goal",
+          "status"
+        ],
+        "title": "PanelAssignmentNode",
+        "type": "object"
+      },
+      "PanelAssignmentNodeKey": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "parent_id": {
+            "title": "Parent Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "parent_id"
+        ],
+        "title": "PanelAssignmentNodeKey",
+        "type": "object"
+      },
+      "PanelAssignmentPage": {
+        "additionalProperties": false,
+        "properties": {
+          "before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before"
+          },
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "before",
+          "has_more"
+        ],
+        "title": "PanelAssignmentPage",
+        "type": "object"
+      },
+      "PanelAssignmentPageParams": {
+        "additionalProperties": false,
+        "properties": {
+          "before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Before"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          }
+        },
+        "title": "PanelAssignmentPageParams",
+        "type": "object"
+      },
+      "PanelAssignmentSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "node",
+              "edge"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type"
+        ],
+        "title": "PanelAssignmentSelection",
+        "type": "object"
+      },
+      "PanelAssignmentTimeline": {
+        "additionalProperties": false,
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/PanelAssignmentEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PanelAssignmentPage"
+          }
+        },
+        "required": [
+          "events",
+          "page"
+        ],
+        "title": "PanelAssignmentTimeline",
+        "type": "object"
+      },
+      "PanelAssignmentTimelineParams": {
+        "additionalProperties": false,
+        "properties": {
+          "before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Before"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Project Id"
+          },
+          "node_ids": {
+            "items": {
+              "$ref": "#/components/schemas/PanelAssignmentNodeKey"
+            },
+            "title": "Node Ids",
+            "type": "array"
+          },
+          "tools": {
+            "default": false,
+            "title": "Tools",
+            "type": "boolean"
+          },
+          "selection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PanelAssignmentSelection"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "node_ids"
+        ],
+        "title": "PanelAssignmentTimelineParams",
+        "type": "object"
+      },
       "PanelChildDisplayRow": {
         "additionalProperties": false,
         "properties": {
@@ -47530,6 +48139,60 @@
       }
     },
     {
+      "name": "panel.subagents.assignments",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PanelAssignmentPageParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PanelAssignmentList"
+        }
+      }
+    },
+    {
+      "name": "panel.subagents.control",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PanelAssignmentControlParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PanelAssignmentControlResult"
+        }
+      }
+    },
+    {
+      "name": "panel.subagents.graph",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PanelAssignmentGraphParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PanelAssignmentGraph"
+        }
+      }
+    },
+    {
       "name": "panel.subagents.history",
       "summary": "",
       "params": [
@@ -47562,6 +48225,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/PanelSubagentListResult"
+        }
+      }
+    },
+    {
+      "name": "panel.subagents.timeline",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PanelAssignmentTimelineParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PanelAssignmentTimeline"
         }
       }
     },

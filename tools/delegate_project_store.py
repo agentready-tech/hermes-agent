@@ -31,20 +31,68 @@ def set_project_paused(conn, subagent_id, paused, archive):
 def cancel_goal_inputs(conn, project_id):
     conn.execute(
         """UPDATE delegated_project_messages SET state='cancelled',completed_at=?,published=1
-           WHERE state='pending' AND json_extract(origin_json, '$.goal_project_id')=?""",
+           WHERE state='pending' AND json_extract(origin_json, '$.goal_project_id')=?
+             AND (COALESCE(json_extract(options_json, '$.agent_mail_wake'),0)=0
+                  OR json_extract(options_json, '$.agent_mail_id') IS NOT NULL)""",
         (time.time(), project_id),
     )
 
 
-def _goal_input_closed(conn, message):
-    goal_id = json.loads(message["origin_json"]).get("goal_project_id")
+def project_input_goal_id(message):
+    options = json.loads(message['options_json'])
+    if options.get('agent_mail_wake') and not options.get('agent_mail_id'):
+        return None  # Legacy mailbox wakes copied the previous dispatch's route.
+    return json.loads(message['origin_json']).get('goal_project_id')
+
+
+def mail_wake_satisfied(conn, message):
+    """A mailbox request is obsolete if its receipt was handled by another turn."""
+    mail_id = json.loads(message['options_json']).get('agent_mail_id')
+    return bool(mail_id and conn.execute(
+        """SELECT 1 FROM delegation_mail mail WHERE mail.message_id=? AND mail.delivered_at IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.platform_message_id=? AND m.role='user'
+               AND m.display_kind='agent_message' AND json_extract(
+                 CASE WHEN json_valid(m.display_metadata) THEN m.display_metadata END,
+                 '$.agent_mail_delivery_id')=mail.delivery_id AND EXISTS (SELECT 1 FROM json_each(
+                 CASE WHEN json_valid(m.display_metadata) THEN m.display_metadata END, '$.agent_message_ids')
+                 WHERE value=mail.message_id))""",
+        (mail_id, message['message_id']),
+    ).fetchone())
+
+
+def _goal_input_state(conn, goal_id):
     if not goal_id:
-        return False
+        return "open"
     row = conn.execute(
-        "SELECT json_extract(workspace_json, '$.goal_state.status'), archived FROM delegated_projects WHERE subagent_id=?",
+        "SELECT json_extract(workspace_json, '$.goal_state.status'), archived, paused "
+        "FROM delegated_projects WHERE subagent_id=?",
         (goal_id,),
     ).fetchone()
-    return row is None or row[1] == 1 or row[0] in {"closing", "done", "cancelled"}
+    if row is None or row[1] or row[0] in {None, "closing", "done", "cancelled", "inactive"}:
+        return "closed"
+    return "paused" if row[2] else "open"
+
+
+def goal_has_recoverable_input(conn, project_id):
+    if conn.execute(
+        """SELECT 1 FROM delegation_mail WHERE delivered_at IS NULL
+           AND json_extract(origin_json, '$.message_goal_project_id')=? LIMIT 1""",
+        (project_id,),
+    ).fetchone():
+        return True
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """SELECT m.message_id,m.options_json,m.state,m.owner_pid,m.owner_started_at FROM delegated_project_messages m
+           JOIN delegated_projects p USING(subagent_id)
+           WHERE p.paused=0 AND p.archived=0 AND m.state IN ('pending','running')
+             AND json_extract(m.origin_json, '$.goal_project_id')=?
+             AND (COALESCE(json_extract(m.options_json, '$.agent_mail_wake'),0)=0
+                  OR json_extract(m.options_json, '$.agent_mail_id') IS NOT NULL)""",
+        (project_id,),
+    ).fetchall()
+    alive = _owner_liveness()
+    return any((row['state'] == 'pending' or (alive is not None and not alive(row['owner_pid'], row['owner_started_at'])))
+               and not mail_wake_satisfied(conn, row) for row in rows)
 
 
 class ProjectStore:
@@ -151,6 +199,15 @@ class ProjectStore:
             raise ValueError("A nonempty project message is required")
         message_id = "project-msg-" + uuid.uuid4().hex
         with _transaction() as conn:
+            if event_key is not None and (goal_id := origin.get("goal_project_id")):
+                old = conn.execute(
+                    "SELECT message_id FROM delegated_project_messages WHERE subagent_id=? AND event_key=? "
+                    "AND json_extract(origin_json,'$.goal_project_id')=?",
+                    (project["subagent_id"], event_key, goal_id),
+                ).fetchone()
+                if old is not None:
+                    return old[0]
+                event_key = f"goal:{goal_id}:{event_key}"
             conn.execute("INSERT OR IGNORE INTO delegated_project_messages(message_id,subagent_id,event_key,content,origin_json,accepted_at,options_json) VALUES (?,?,?,?,?,?,?)",
                          (message_id, project["subagent_id"], event_key, content, json.dumps(origin), time.time(), json.dumps(options or {})))
             if event_key is not None:
@@ -171,7 +228,10 @@ class ProjectStore:
                 row = dict(entry)
                 if row["state"] == "running" and (alive is None or alive(row["owner_pid"], row["owner_started_at"])):
                     return None
-                if _goal_input_closed(conn, row):
+                goal_state = _goal_input_state(conn, project_input_goal_id(row))
+                if goal_state == "paused":
+                    continue
+                if goal_state == "closed" or mail_wake_satisfied(conn, row):
                     conn.execute("UPDATE delegated_project_messages SET state='cancelled',completed_at=?,published=1,"
                                  "owner_pid=NULL,claim_token=NULL WHERE message_id=?", (time.time(), row["message_id"]))
                     continue
@@ -205,6 +265,8 @@ class ProjectStore:
         # A process death in that gap must deliver the answer, never execute the task again.
         sid = self.resolve(project["session_id"])
         with _transaction() as conn:
+            if mail_wake_satisfied(conn, message):
+                return None
             start = conn.execute("SELECT MAX(id) FROM messages WHERE session_id=? AND platform_message_id=? AND role='user'", (sid, message["message_id"])).fetchone()[0]
             if start is None:
                 return None

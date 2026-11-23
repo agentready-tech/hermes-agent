@@ -6,7 +6,7 @@ import logging
 import time
 import uuid
 
-from tools.delegate_project_store import ProjectStore, _transaction
+from tools.delegate_project_store import ProjectStore, _transaction, project_input_goal_id
 
 logger = logging.getLogger(__name__)
 
@@ -41,14 +41,15 @@ def _dispatch_origin(parent, background):
         origin = {**origin, "wake": False}
     if not origin.get("wake"):
         origin["mail_results"] = True
-    from hermes_runtime.adapters.goal_turn import current_segment
+    from hermes_runtime.adapters.goal_turn import current_segment, dispatch_goal_id
 
     segment = current_segment(parent)
     if segment is not None and segment.project_ids and not segment.selected_id:
         raise ValueError("Select the exact Project Goal before dispatching a persistent worker")
-    if segment is not None and segment.selected_id:
-        origin["goal_project_id"] = segment.selected_id
-        segment.touch(segment.selected_id)
+    if goal_id := dispatch_goal_id(parent):
+        origin["goal_project_id"] = goal_id
+        if segment is not None:
+            segment.touch(goal_id)
     return origin
 
 
@@ -95,6 +96,8 @@ def _build_child(parent, store, project, message):
         override_acp_command=creds.get("command"), override_acp_args=creds.get("args"), routing_cfg=cfg)
     child.ephemeral_system_prompt = store.instruction(project["subagent_id"], child.ephemeral_system_prompt)
     child._persistent_project_id = project["subagent_id"]
+    options = json.loads(message["options_json"])
+    child._project_input_goal_id = project_input_goal_id(message)
     child._delegation_id = message["message_id"]
     child._progress_identity_ref["delegation_id"] = message["message_id"]
     child._delegate_owner_kwargs = {"owner_session_id": owner_ui or None,
@@ -112,12 +115,19 @@ def _build_child(parent, store, project, message):
     # A crash may have already admitted this exact user row; continue from that request,
     # without inserting a second copy or discarding completed tool results.
     pending = next((m for m in reversed(history) if m.get("role") == "user" and m.get("message_id") == message["message_id"]), None)
+    if pending and options.get('agent_mail_id') and pending.get('display_kind') == 'agent_message':
+        metadata = pending.get('display_metadata') or {}
+        if not metadata.get('agent_mail_delivery_id'):
+            pending = None  # An ordinary mail delivery can reuse a reserved ID.
     text = message["content"]
-    options = json.loads(message["options_json"])
     mail_metadata = None
     if options.get("agent_mail_wake") and not pending:
-        from tools.delegate_mail_work import stage_mail_input
-        text, mail_metadata = stage_mail_input(child, message, history)
+        from tools.delegate_mail_work import MailboxDeferred, stage_mail_input
+        try:
+            text, mail_metadata = stage_mail_input(child, message, history)
+        except MailboxDeferred:
+            child.close()
+            raise
     child._delegate_output_schema = options.get("output_schema")
     if options.get("output_schema"):
         from tools.delegation_output_schema import append_output_contract
@@ -209,7 +219,7 @@ def _recover_project_scoped(parent, project):
 def _recover_project(parent, store, project):
     from tools.async_delegation import dispatch_async_delegation
     from tools.delegate_tool import _get_max_concurrent_children
-    from tools.delegate_mail_work import recover_result_mail
+    from tools.delegate_mail_work import MailboxDeferred, recover_result_mail
     recover_result_mail(parent, store, project)
     outcomes = []
     for receipt in store.receipts(project["subagent_id"]):
@@ -227,6 +237,9 @@ def _recover_project(parent, store, project):
             continue
         try:
             child, text = _build_child(parent, store, project, message)
+        except MailboxDeferred:
+            store.release(message)
+            continue
         except Exception:
             store.release(message)
             raise
