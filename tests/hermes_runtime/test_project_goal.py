@@ -46,12 +46,12 @@ def _snapshot(actor, project_id):
         return read_goal(store, project_id)
 
 
-def _agent(db):
+def _agent(db, *, toolsets=("delegation", "cronjob")):
     from run_agent import AIAgent
 
     return AIAgent(model="gpt-4.1", provider="custom", base_url="http://127.0.0.1:9/v1",
                    api_key="inert", api_mode="chat_completions", session_id=HOME_SESSION_ID, session_db=db,
-                   enabled_toolsets=["delegation", "cronjob"], skip_context_files=True, load_soul_identity=False,
+                   enabled_toolsets=list(toolsets), skip_context_files=True, load_soul_identity=False,
                    skip_memory=True, quiet_mode=True)
 
 
@@ -338,6 +338,85 @@ async def test_worker_report_resumes_only_its_goal_then_retires_its_timer(main_h
     assert get_job(job_id) is None and get_job(waits[unrelated]) is not None
     assert len(calls) == 2 and message_id in calls[0]
     guard.assert_not_called()
+
+
+def test_browser_exec_requires_saved_goal_before_sending(main_home, monkeypatch):
+    from cron.jobs import get_job
+    from tools import browser_use_cli
+
+    home, db = main_home
+    config = home / "config.yaml"
+    config.write_text(config.read_text() + "browser:\n  backend: browser-use\n")
+    actor = _actor(db)
+    planned, sent = {}, []
+    rounds = iter(["browser", "open", "retry", "checkpoint", "wait", "timer", "answer"])
+
+    def browser_call(call_id):
+        response = _response(args={"code": "print('approval request sent')"})
+        call = response.choices[0].message.tool_calls[0]
+        call.id = call_id
+        call.function.name = "browser_exec"
+        return response
+
+    def execute(**_kwargs):
+        project_id = planned.get("project_id")
+        sent.append(project_id)
+        if project_id:
+            assert _snapshot(actor, project_id)["status"] == "ready"
+        return json.dumps({"success": True, "message_id": "approval-request"})
+
+    def model(_agent, payload, *_ignored, **_kwargs):
+        step = next(rounds)
+        if step == "browser":
+            return browser_call("before-goal")
+        content = next(row["content"] for row in reversed(payload["messages"]) if row["role"] == "tool")
+        if step == "open":
+            planned["first_browser_result"] = content
+            return _response(args={"action": "project_goal", "op": "open", "goal": "Get approval in chat",
+                                   "verification": "Approval received in the chat after the request"})
+        if step == "checkpoint":
+            assert "approval-request" in content
+            return _response(args={"action": "project_goal", "op": "checkpoint", "project_id": planned["project_id"],
+                                   "evidence_tool_name": "browser_exec", "stage": "Approval requested",
+                                   "next_step": "Check the chat for approval"})
+        if step == "wait":
+            return _response(args={"action": "external_wait", **_args(planned["project_id"]),
+                                   "reply_criterion": "Approval received"})
+        result = json.loads(content)
+        assert result["success"], result
+        if step == "retry":
+            planned["project_id"] = result["project_id"]
+            return browser_call("with-goal")
+        project_id = planned["project_id"]
+        if step == "timer":
+            response = _response(args={"action": "create", "project_id": project_id, "wait_id": result["wait_id"],
+                                       "schedule": "every 15m", "prompt": "Check the chat for approval"})
+            response.choices[0].message.tool_calls[0].function.name = "cronjob_manage"
+            return response
+        planned["timer"] = result["job_id"]
+        return _response("Approval requested. I’ll follow up in the same chat.")
+
+    monkeypatch.setattr(browser_use_cli, "browser_exec", execute)
+    _models(monkeypatch, model, lambda _goals: {})
+    token = admitted_input.set({"admission_id": "approved-chat-request", "payload": {}})
+    agent = _agent(db, toolsets=("delegation", "cronjob", "browser", "terminal"))
+    try:
+        assert "browser_exec" in agent.valid_tool_names
+        result = agent.run_conversation("Send the approval request we drafted and get approval.")
+    finally:
+        agent.close()
+        admitted_input.reset(token)
+
+    assert all(sent), "browser_exec ran before a Goal was recorded"
+    assert result["completed"], result["final_response"]
+    project_id = planned["project_id"]
+    assert sent == [project_id], "browser_exec must run exactly once with a saved Goal"
+    assert "browser_exec did not run" in planned["first_browser_result"]
+    assert result["final_response"] == "Approval requested. I’ll follow up in the same chat."
+    goal = _snapshot(actor, project_id)
+    assert goal["status"] == "waiting"
+    assert "tool:with-goal" in goal["evidence"]
+    assert get_job(planned["timer"])["external_wait"]["project_id"] == project_id
 
 
 @pytest.mark.asyncio

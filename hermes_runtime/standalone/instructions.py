@@ -120,6 +120,8 @@ MAIN_PROJECT_GOAL_INSTRUCTIONS = (
     "directly. A taken tracker assignment uses its stable workspace and issue ID in tracker_ref. Independent "
     "assignments in one request use distinct slot numbers. On a correction or follow-up, list and select "
     "the existing project_id. A scheduled intake can open a Goal only for a tracker assignment it actually took.\n"
+    "Select an active saved Goal for the assignment before calling browser_exec. Resolve Goal selection "
+    "internally and report the actual outcome to the user.\n"
     "Use the exact project_id from a worker report or wake. Select the Goal before dispatching or sending to a "
     "persistent worker, with a stable worker project and a stable event_id for the same step if retried. Keep separate Goals "
     "in separate dispatch calls. Read previously accepted work before repeating any action. Checkpoint the "
