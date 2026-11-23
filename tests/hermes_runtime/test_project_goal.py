@@ -69,6 +69,61 @@ def _deny_decisions(monkeypatch):
     return spy
 
 
+def test_project_goal_uses_fenced_verdict_with_exact_evidence(main_home, monkeypatch):
+    from hermes_runtime.adapters.goal_turn import finish_segment
+
+    _, db = main_home
+    actor = _actor(db)
+    done = _open(actor, "Return the verified result")
+    other = _open(actor, "Finish the second assignment", slot=2)
+    _goal(actor, "checkpoint", project_id=done, deliverable="The verified result")
+    _goal(actor, "checkpoint", project_id=other, deliverable="The current draft")
+    monkeypatch.setattr("hermes_runtime.adapters.state.main_gateway_origin", dict)
+
+    def judge(**kwargs):
+        goals = json.loads(kwargs["messages"][-1]["content"])
+        assert set(goals) == {done, other}
+        [receipt] = goals[done]["evidence"]
+        verdict = json.dumps({done: [receipt], other: [receipt]})
+        return _response(f"```json\n{verdict}\n```")
+
+    reviewer = Mock(side_effect=judge)
+    monkeypatch.setattr("agent.auxiliary_client.call_llm", reviewer)
+    finish_segment(actor, "The verified result")
+
+    reviewer.assert_called_once()
+    assert _snapshot(actor, done)["status"] == "done"
+    assert _snapshot(actor, other)["status"] == "ready"
+
+
+def test_exhausted_goal_budget_stays_blocked_and_quiet(main_home, monkeypatch):
+    from hermes_runtime.adapters import goal_turn
+    from hermes_runtime.adapters.inbox import HomeInbox
+
+    _, db = main_home
+    actor = _actor(db)
+    project_id = _open(actor, "Complete the saved work")
+    monkeypatch.setattr("hermes_cli.goals.DEFAULT_MAX_TURNS", 1)
+    monkeypatch.setattr("hermes_runtime.adapters.state.main_gateway_origin", dict)
+    goal_turn.finish_segment(actor, "Queued.")
+    inbox = HomeInbox()
+    [wake] = inbox.pending()
+    turn = SimpleNamespace(inbox=inbox)
+    actor._agentready_active_turn = turn
+
+    def model(_prompt, **_kwargs):
+        return {"completed": True, "final_response": goal_turn.finish_segment(actor, ".")}
+
+    result = goal_turn.run_segment(actor, turn, model, wake[1], goal_records=[wake], conversation_history=[])
+
+    state = _snapshot(actor, project_id)
+    assert state["status"] == "blocked"
+    assert state["attempts_without_progress"] == 1
+    assert state["blocker"] and state["wake_id"] is None
+    assert result["final_response"] == ""
+    assert result["_notification_reply_muted"]
+
+
 @pytest.mark.asyncio
 async def test_admitted_question_and_multiple_accepted_assignments(main_home, monkeypatch):
     from gateway.session_contract import SessionRef

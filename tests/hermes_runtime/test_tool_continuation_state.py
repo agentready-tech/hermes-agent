@@ -46,8 +46,8 @@ def test_busy_resource_is_not_a_subscription_and_cannot_witness_a_return(operati
     assert blocked["reason"] == "resource_busy"
     agent = owner(blocked)
     assert not continuation_evidence(agent)[0]["return_guaranteed"]
-    nudge, notice = review_tool_continuation(agent)
-    assert nudge and not notice
+    nudge, exhausted = review_tool_continuation(agent)
+    assert nudge and not exhausted
     assert store.get(identity)["state"] == "running"
     assert store.get(identity)["deferred"] == 0  # checking never fabricates a subscription
 
@@ -62,7 +62,7 @@ def test_only_a_live_deferred_owner_in_the_same_session_witnesses_a_return(opera
     agent = owner({"status": "not_started", "waiting_for": identity})
     state = continuation_evidence(agent)[0]
     assert state["return_path"] == "deferred_operation"
-    assert review_tool_continuation(agent) == (None, None)
+    assert review_tool_continuation(agent) == (None, False)
     agent.session_id = "another-conversation"
     assert not continuation_evidence(agent)[0]["return_guaranteed"]
     assert review_tool_continuation(agent)[0]
@@ -167,7 +167,7 @@ def test_native_recheck_respects_stop_and_internal_turns(operation_home, attribu
 
     agent = owner({"status": "not_started", "reason": "incoming_event"})
     setattr(agent, attribute, value)
-    assert review_tool_continuation(agent) == (None, None)
+    assert review_tool_continuation(agent) == (None, False)
 
 
 def test_paused_goal_does_not_restart_skipped_work(operation_home):
@@ -178,7 +178,7 @@ def test_paused_goal_does_not_restart_skipped_work(operation_home):
     goal = GoalManager(agent.session_id)
     goal.set("Wait for the user")
     goal.pause()
-    assert review_tool_continuation(agent) == (None, None)
+    assert review_tool_continuation(agent) == (None, False)
 
 
 def test_unconfirmed_database_state_cannot_witness_a_wakeup(operation_home, monkeypatch):
@@ -192,18 +192,16 @@ def test_unconfirmed_database_state_cannot_witness_a_wakeup(operation_home, monk
     assert review_tool_continuation(agent)[0]
 
 
-def test_zero_continuation_limit_reports_incomplete_work_without_restarting(operation_home):
+def test_zero_continuation_limit_exhausts_recheck_without_restarting(operation_home):
     from agent.tool_continuation import review_tool_continuation
     from hermes_cli.config import atomic_config_write
 
     atomic_config_write(operation_home / "config.yaml", {
         "agent": {"continuation_guard": {"max_continuations": 0}}})
-    nudge, notice = review_tool_continuation(owner({"status": "not_started"}))
-    assert nudge is None
-    assert "incomplete" in notice
+    assert review_tool_continuation(owner({"status": "not_started"})) == (None, True)
 
 
-def test_terminal_notice_preserves_the_promoted_api_carrier(operation_home, monkeypatch):
+def test_terminal_recheck_preserves_the_promoted_api_carrier(operation_home, monkeypatch):
     from agent.turn_stop_gates import apply_stop_gates
 
     agent = owner({"status": "not_started"})
@@ -216,7 +214,7 @@ def test_terminal_notice_preserves_the_promoted_api_carrier(operation_home, monk
         messages=[], conversation_history=[], pending_verification_response=None,
         pending_verification_response_previewed=False)
     assert not verdict.continue_turn
-    assert "incomplete" in verdict.final_response
+    assert verdict.final_response == "I will report later."
     assert candidate["content"] == ""
     assert candidate["api_content"] == verdict.final_response
 
