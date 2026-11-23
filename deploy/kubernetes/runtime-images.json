@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.23.2",
+  "defaultRuntimeVersion": "2026.11.23.3",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -5062,6 +5062,43 @@
         "releaseRegressionTestsPassed": 100
       },
       "description": "Restore subagent conversation history in Panel through the native Hermes chat connection.",
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml"
+    },
+    "2026.11.23.3": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:26a8b0478bfe377a6e34b1175f095e627a2b7f9e9108bedfba6637f6fbe9941b",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.23.3",
+      "configDigest": "sha256:4b990dee3854c1e7b31a907f19d37985c644ab2956feb4466815da12dc1b6806",
+      "platform": "linux/amd64",
+      "sourceRevision": "fc9349239037460d0deabf857759d7a901f7c1e8",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:26a8b0478bfe377a6e34b1175f095e627a2b7f9e9108bedfba6637f6fbe9941b",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.23.3",
+        "digest": "sha256:26a8b0478bfe377a6e34b1175f095e627a2b7f9e9108bedfba6637f6fbe9941b",
+        "configDigest": "sha256:4b990dee3854c1e7b31a907f19d37985c644ab2956feb4466815da12dc1b6806",
+        "sourceRevision": "fc9349239037460d0deabf857759d7a901f7c1e8",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 45243266817,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:c87c2a740b5578ed8565ef5121b49f42b26656c6f0ff655061626b603f02798d",
+        "deployRunId": 45246139394
+      },
+      "validation": {
+        "runtimeReady": true,
+        "futureDefaultConfigured": true,
+        "releaseRegressionTestsPassed": 100
+      },
+      "description": "Parse structured Goal verdicts, keep execution diagnostics internal, and allow one-off browser calls without a Goal.",
       "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
       "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml"
     }
