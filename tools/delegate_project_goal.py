@@ -9,10 +9,6 @@ from tools.registry import tool_error
 
 KEY = "goal_state"
 TERMINAL = frozenset({"done", "cancelled", "closing", "inactive"})
-_BROWSER_GOAL_REQUIRED = (
-    "browser_exec did not run. Use delegate_task(action='project_goal') to open a new assignment "
-    "or select the active Goal for the existing assignment before retrying."
-)
 FIELDS = {
     "open": {"goal", "verification", "constraints", "tracker_ref", "slot"},
     "list": set(),
@@ -76,31 +72,6 @@ def mutate_goal(store, project_id, change, *, retire_pending=False, when_paused=
 
 def active_goal(goal):
     return goal["status"] not in TERMINAL
-
-
-def browser_goal_error(agent) -> str | None:
-    """Validate the saved Goal before the managed main can run a browser script."""
-    from hermes_runtime.adapters.goal_turn import current_segment, goal_in_scope
-    from tools.delegate_external_wait import _owns_main
-
-    segment = current_segment(agent)
-    if segment is None:
-        if getattr(agent, "_agentready_active_turn", None) is not None and _owns_main(agent):
-            return _BROWSER_GOAL_REQUIRED
-        return None
-    project_id = segment.selected_id
-    if not project_id or not goal_in_scope(agent, project_id):
-        return _BROWSER_GOAL_REQUIRED
-    try:
-        with ProjectStore(agent) as store:
-            goal = read_goal(store, project_id)
-    except ValueError:
-        return _BROWSER_GOAL_REQUIRED
-    except (RuntimeError, OSError, sqlite3.Error):
-        return "browser_exec did not run because the saved Project Goal could not be read."
-    if not active_goal(goal) or goal["status"] == "blocked":
-        return _BROWSER_GOAL_REQUIRED
-    return None
 
 
 def owned_operation(store, identity):

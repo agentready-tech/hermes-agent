@@ -340,40 +340,83 @@ async def test_worker_report_resumes_only_its_goal_then_retires_its_timer(main_h
     guard.assert_not_called()
 
 
-def test_browser_exec_requires_saved_goal_before_sending(main_home, monkeypatch):
-    from cron.jobs import get_job
-    from tools import browser_use_cli
-
+@pytest.fixture
+def browser_main(main_home):
     home, db = main_home
     config = home / "config.yaml"
     config.write_text(config.read_text() + "browser:\n  backend: browser-use\n")
-    actor = _actor(db)
-    planned, sent = {}, []
-    rounds = iter(["browser", "open", "retry", "checkpoint", "wait", "timer", "answer"])
+    agent = _agent(db, toolsets=("delegation", "cronjob", "browser", "terminal"))
+    try:
+        assert "browser_exec" in agent.valid_tool_names
+        yield agent, _actor(db)
+    finally:
+        agent.close()
 
-    def browser_call(call_id):
-        response = _response(args={"code": "print('approval request sent')"})
-        call = response.choices[0].message.tool_calls[0]
-        call.id = call_id
-        call.function.name = "browser_exec"
-        return response
+
+def _admitted_turn(agent, input_id, prompt):
+    token = admitted_input.set({"admission_id": input_id, "payload": {}})
+    try:
+        return agent.run_conversation(prompt)
+    finally:
+        admitted_input.reset(token)
+
+
+def test_one_shot_browser_read_runs_without_goal(browser_main, monkeypatch):
+    from tools import browser_use_cli
+
+    agent, actor = browser_main
+    call = _response(args={"code": "print('No new replies')"})
+    call.choices[0].message.tool_calls[0].function.name = "browser_exec"
+    read = Mock(return_value=json.dumps({"success": True, "text": "No new replies"}))
+    verify_goal = Mock()
+
+    def model(_agent, payload, *_ignored, **_kwargs):
+        if payload["messages"][-1]["role"] == "user":
+            return call
+        if read.called:
+            return _response("There are no new replies.")
+        return _response("The browser did not run.")
+
+    monkeypatch.setattr(browser_use_cli, "browser_exec", read)
+    monkeypatch.setattr("agent.continuation_guard.build_continuation_nudge", lambda *_a, **_kw: None)
+    _models(monkeypatch, model, verify_goal)
+    result = _admitted_turn(agent, "one-shot-chat-read", "Look in the chat for new replies now.")
+
+    read.assert_called_once()
+    assert result["completed"]
+    assert result["final_response"] == "There are no new replies."
+    verify_goal.assert_not_called()
+    with ProjectStore(actor) as store:
+        assert store.projects() == []
+
+
+def test_browser_send_resumes_goal_accepted_before_confirmation(browser_main, monkeypatch):
+    from cron.jobs import get_job
+    from tools import browser_use_cli
+
+    agent, actor = browser_main
+    planned, sent = {}, []
+    rounds = iter(["open", "block", "confirm", "resume", "send", "checkpoint", "wait", "timer", "answer"])
 
     def execute(**_kwargs):
-        project_id = planned.get("project_id")
+        project_id = planned["project_id"]
         sent.append(project_id)
-        if project_id:
-            assert _snapshot(actor, project_id)["status"] == "ready"
+        saved = _snapshot(actor, project_id)
+        assert saved["status"] == "ready"
+        assert saved["source"]["id"] == "original-assignment"
         return json.dumps({"success": True, "message_id": "approval-request"})
 
     def model(_agent, payload, *_ignored, **_kwargs):
         step = next(rounds)
-        if step == "browser":
-            return browser_call("before-goal")
-        content = next(row["content"] for row in reversed(payload["messages"]) if row["role"] == "tool")
         if step == "open":
-            planned["first_browser_result"] = content
             return _response(args={"action": "project_goal", "op": "open", "goal": "Get approval in chat",
                                    "verification": "Approval received in the chat after the request"})
+        if step == "confirm":
+            return _response("The approval request is drafted. Send it?")
+        if step == "resume":
+            assert payload["messages"][-1]["content"] == "Send it."
+            return _response(args={"action": "project_goal", "op": "resume", "project_id": planned["project_id"]})
+        content = next(row["content"] for row in reversed(payload["messages"]) if row["role"] == "tool")
         if step == "checkpoint":
             assert "approval-request" in content
             return _response(args={"action": "project_goal", "op": "checkpoint", "project_id": planned["project_id"],
@@ -384,9 +427,18 @@ def test_browser_exec_requires_saved_goal_before_sending(main_home, monkeypatch)
                                    "reply_criterion": "Approval received"})
         result = json.loads(content)
         assert result["success"], result
-        if step == "retry":
+        if step == "block":
             planned["project_id"] = result["project_id"]
-            return browser_call("with-goal")
+            return _response(args={"action": "project_goal", "op": "block", "project_id": result["project_id"],
+                                   "blocker": "The draft is awaiting permission to send",
+                                   "unblock": "The user confirms the message may be sent"})
+        if step == "send":
+            assert result["project_id"] == planned["project_id"] and result["status"] == "ready"
+            response = _response(args={"code": "print('approval request sent')"})
+            call = response.choices[0].message.tool_calls[0]
+            call.id = "send-approval-request"
+            call.function.name = "browser_exec"
+            return response
         project_id = planned["project_id"]
         if step == "timer":
             response = _response(args={"action": "create", "project_id": project_id, "wait_id": result["wait_id"],
@@ -398,25 +450,22 @@ def test_browser_exec_requires_saved_goal_before_sending(main_home, monkeypatch)
 
     monkeypatch.setattr(browser_use_cli, "browser_exec", execute)
     _models(monkeypatch, model, lambda _goals: {})
-    token = admitted_input.set({"admission_id": "approved-chat-request", "payload": {}})
-    agent = _agent(db, toolsets=("delegation", "cronjob", "browser", "terminal"))
-    try:
-        assert "browser_exec" in agent.valid_tool_names
-        result = agent.run_conversation("Send the approval request we drafted and get approval.")
-    finally:
-        agent.close()
-        admitted_input.reset(token)
-
-    assert all(sent), "browser_exec ran before a Goal was recorded"
-    assert result["completed"], result["final_response"]
+    first = _admitted_turn(agent, "original-assignment", "Get approval in chat. Ask me before sending.")
     project_id = planned["project_id"]
+    assert first["final_response"] == "The approval request is drafted. Send it?"
+    assert _snapshot(actor, project_id)["status"] == "blocked"
+    assert not sent
+
+    result = _admitted_turn(agent, "send-confirmation", "Send it.")
+    assert result["completed"], result["final_response"]
     assert sent == [project_id], "browser_exec must run exactly once with a saved Goal"
-    assert "browser_exec did not run" in planned["first_browser_result"]
     assert result["final_response"] == "Approval requested. I’ll follow up in the same chat."
     goal = _snapshot(actor, project_id)
     assert goal["status"] == "waiting"
-    assert "tool:with-goal" in goal["evidence"]
+    assert "tool:send-approval-request" in goal["evidence"]
     assert get_job(planned["timer"])["external_wait"]["project_id"] == project_id
+    with ProjectStore(actor) as store:
+        assert [project["subagent_id"] for project in store.projects()] == [project_id]
 
 
 @pytest.mark.asyncio

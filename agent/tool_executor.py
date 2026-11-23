@@ -735,13 +735,6 @@ def _dispatch_authorized_once(
             block_error_type = _PRUNED_TOOL_ARGUMENTS_ERROR
 
     guardrail_decision = None
-    if block_body is None and ref.name == "browser_exec":
-        from tools.delegate_project_goal import browser_goal_error
-
-        if goal_error := browser_goal_error(agent):
-            block_body = {"error": goal_error}
-            block_error_type = "project_goal_required"
-
     if block_body is None:
         guardrail_decision = agent._tool_guardrails.before_call(ref.name, ref.args)
         if guardrail_decision.allows_execution:
