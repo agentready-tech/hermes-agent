@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.23.3",
+  "defaultRuntimeVersion": "2026.11.24.1",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -5099,6 +5099,43 @@
         "releaseRegressionTestsPassed": 100
       },
       "description": "Parse structured Goal verdicts, keep execution diagnostics internal, and allow one-off browser calls without a Goal.",
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml"
+    },
+    "2026.11.24.1": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:1c7f58eafce54b7a374903a579cea59092a8dd230995b4465a6c9057092c1a02",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.24.1",
+      "configDigest": "sha256:5683aaa3346bbc024afa88ebae93031b8a615d3821e4d11321a9b52172e54155",
+      "platform": "linux/amd64",
+      "sourceRevision": "0b68be4fc2bd1ce33f5db57ed6ec0ab8f6c2ff85",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:1c7f58eafce54b7a374903a579cea59092a8dd230995b4465a6c9057092c1a02",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.24.1",
+        "digest": "sha256:1c7f58eafce54b7a374903a579cea59092a8dd230995b4465a6c9057092c1a02",
+        "configDigest": "sha256:5683aaa3346bbc024afa88ebae93031b8a615d3821e4d11321a9b52172e54155",
+        "sourceRevision": "0b68be4fc2bd1ce33f5db57ed6ec0ab8f6c2ff85",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 45406749534,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:26a8b0478bfe377a6e34b1175f095e627a2b7f9e9108bedfba6637f6fbe9941b",
+        "deployRunId": 45409508239
+      },
+      "validation": {
+        "runtimeReady": true,
+        "futureDefaultConfigured": true,
+        "releaseRegressionTestsPassed": 100
+      },
+      "description": "Persist child Goals across turns, resume the saved executor, and return verified results to main.",
       "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
       "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml"
     }
