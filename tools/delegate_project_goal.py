@@ -29,7 +29,7 @@ def schema_fields():
         "tracker_ref": {"type": "string", "description": "Stable workspace and issue ID for an accepted tracker assignment"},
         "slot": {"type": "integer", "minimum": 1, "description": "Ordinal for different goals in one admitted request"},
         "stage": {"type": "string"},
-        "next_step": {"type": "string"},
+        "next_step": {"type": "string", "description": "One concrete action the executor can take now. Leave empty when there is no action to take."},
         "evidence_tool_call_id": {"type": "string", "description": "ID of an actual result from a tool in this turn"},
         "evidence_tool_name": {"type": "string", "description": "Use the newest result from this tool in the current turn"},
         "await_operation_id": {"type": "string", "description": "Wait for a confirmed durable operation receipt"},
@@ -98,13 +98,15 @@ def operation_returns(store, identity):
     return bool(row and operations.continuation_state(identity, row["session_id"])["return_path"])
 
 
-def add_evidence(goal, reference, kind, value):
-    """An exact receipt replay cannot create a second change to the Goal."""
+def add_evidence(goal, reference, kind, value, tool=None):
+    """Keep the exact receipt for verification, even when outputs are identical."""
     if reference in goal["evidence"]:
         return False
-    goal["evidence"][reference] = {"kind": kind, "value": value}
+    evidence = {"kind": kind, "value": value}
+    if tool:
+        evidence["tool"] = tool
+    goal["evidence"][reference] = evidence
     goal["revision"] += 1
-    goal["attempts_without_progress"] = 0
     return True
 
 
@@ -178,7 +180,7 @@ def _checkpoint_evidence(agent, segment, args):
             continue
         call_id, content = row.get("tool_call_id"), row.get("content")
         if call_id and call_id not in segment.history_tool_results and isinstance(content, str) and content.strip():
-            return f"tool:{call_id}", "tool result", content[:6000]
+            return f"tool:{call_id}", "tool result", content[:6000], row.get("name")
     raise ValueError("No matching tool evidence was produced in this turn")
 
 
@@ -203,6 +205,8 @@ def _checkpoint(agent, store, segment, project_id, args):
         goal.update(fields)
         if evidence is not None:
             add_evidence(goal, *evidence)
+        if "next_step" in fields:
+            goal["step_revision"] = goal["revision"]
         return goal
 
     saved = mutate_goal(store, project_id, update)
@@ -233,14 +237,19 @@ def close_wait(store, project_id, reason):
     close(store, project_id, wait["wait_id"], {"reason": reason})
 
 
-def close_goal(store, project_id, outcome, evidence=()):
+def close_goal(store, project_id, outcome, evidence=(), *, verified_revision=None):
     from tools.delegate_child_goals import close_children
 
     def begin(goal):
+        if verified_revision is not None and (goal["revision"] != verified_revision or goal["status"] == "blocked"):
+            return goal
         if goal["status"] == "closing" and goal["outcome"] != outcome:
             raise ValueError("Goal already has a different terminal result")
         if goal["status"] not in {"done", "cancelled"}:
             goal.update(status="closing", outcome=outcome, final_evidence=list(evidence))
+            if verified_revision is not None:
+                goal["checked_revision"] = verified_revision
+                goal.pop("missing_evidence", None)
         return goal
 
     current = mutate_goal(store, project_id, begin, retire_pending=True,
@@ -253,6 +262,8 @@ def close_goal(store, project_id, outcome, evidence=()):
 
     def finish(goal):
         goal.update(status=goal["outcome"], wake_id=None)
+        goal.pop("wake_step", None)
+        goal.pop("wake_revision", None)
         return goal
 
     return mutate_goal(store, project_id, finish)
@@ -271,6 +282,8 @@ def set_goal_paused(store, project_id, paused):
             set_project_paused(conn, project_id, paused, False)
             # A wake already admitted before the pause cannot start this Goal later.
             goal["wake_id"] = None
+            goal.pop("wake_step", None)
+            goal.pop("wake_revision", None)
             if not paused and goal["status"] != "blocked":
                 # A ready Goal is recoverable even if the gateway exits now. Its
                 # continuation checks the saved wait, operation and worker state.
@@ -280,6 +293,8 @@ def set_goal_paused(store, project_id, paused):
                     # pause. Mint a fresh wake for deferred or abandoned work.
                     goal["wake_sequence"] += 1
                     goal["wake_id"] = f'{project_id}:{goal["wake_sequence"]}'
+                    goal["wake_step"] = "Read the queued results and recover accepted work for this saved Project Goal."
+                    goal["wake_revision"] = goal["revision"]
         return goal
 
     return store.mutate_workspace(project_id, change, active_only=False)
@@ -306,10 +321,14 @@ def _change_status(store, segment, project_id, op, args):
         if op == "block":
             goal.update(status="blocked", blocker=_text(args, "blocker", required=True),
                         unblock=_text(args, "unblock", required=True), wake_id=None)
+            goal.pop("wake_step", None)
+            goal.pop("wake_revision", None)
             if segment.parent_goal_id:
                 goal["escalation_input_id"] = segment.input_id if args.get("notify") is True else None
-        elif goal["status"] == "blocked":
+        elif goal["status"] in {"blocked", "pending"}:
             goal.update(status="ready", blocker=None, unblock=None, attempts_without_progress=0)
+            goal.pop("attempted_steps", None)
+            goal.pop("step_revision", None)
             goal.pop("escalation_input_id", None)
         return goal
 

@@ -123,6 +123,15 @@ def job_has_monitor(job: dict) -> bool:
     return bool(_field(job, "monitor_script") or _field(job, "monitor_url"))
 
 
+def no_change_result(job_id: str, job_name: str) -> tuple[bool, str, str, None]:
+    from cron import scheduler
+
+    stamp = scheduler._hermes_now().strftime("%Y-%m-%d %H:%M:%S")
+    header = scheduler._job_doc_header(job_name, job_id, stamp, "monitor")
+    logger.info("Job '%s': monitor has no new data — suppressing agent run", job_id)
+    return True, f"{header}**Status:** no_change (agent run suppressed)\n", scheduler.SILENT_MARKER, None
+
+
 def check_monitor(job: dict) -> MonitorOutcome:
     """Run the monitor source and decide whether the agent should run.
 

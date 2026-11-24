@@ -178,7 +178,7 @@ def child_event_state(conn, origin_json):
         parent_state = _goal_input_state(conn, event["parent_goal_id"], child_parent=True)
         return "paused" if parent_state == "open" and record["paused"] else parent_state
     if event["source"] == "goal":
-        current = goal.get("wake_id") == event["event_id"] and goal["status"] == "ready"
+        current = goal.get("wake_id") == event["event_id"] and goal["status"] == "ready" and goal.get("wake_step")
     elif event["source"] == "cron":
         wait = workspace.get("external_wait") or {}
         current = (wait.get("state") == "BOUND" and wait.get("wait_id") == event["wait_id"]

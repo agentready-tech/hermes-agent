@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from hermes_runtime.adapters.goal_turn import GoalSegment, admitted_input
+from hermes_runtime.adapters.goal_turn import GoalSegment, _GoalJudgment, admitted_input
 from hermes_runtime.sessions import HOME_SESSION_ID
 from tests.hermes_runtime.test_external_wait_timer import _isolated_tick, _timer
 from tests.hermes_runtime.test_main_cron_wake import owner as gateway_owner
@@ -84,7 +84,7 @@ def test_project_goal_uses_fenced_verdict_with_exact_evidence(main_home, monkeyp
         goals = json.loads(kwargs["messages"][-1]["content"])
         assert set(goals) == {done, other}
         [receipt] = goals[done]["evidence"]
-        verdict = json.dumps({done: [receipt], other: [receipt]})
+        verdict = json.dumps({done: {"evidence": [receipt]}, other: {"evidence": [receipt]}})
         return _response(f"```json\n{verdict}\n```")
 
     reviewer = Mock(side_effect=judge)
@@ -93,16 +93,100 @@ def test_project_goal_uses_fenced_verdict_with_exact_evidence(main_home, monkeyp
 
     reviewer.assert_called_once()
     assert _snapshot(actor, done)["status"] == "done"
-    assert _snapshot(actor, other)["status"] == "ready"
+    assert _snapshot(actor, other)["status"] == "pending"
 
 
-def test_exhausted_goal_budget_stays_blocked_and_quiet(main_home, monkeypatch):
+@pytest.mark.parametrize("verdict", [
+    {"missing_evidence": "The build receipt for the pushed revision", "next_step": None},
+    [],
+    {"missing_evidence": "The build receipt for the pushed revision", "next_step": "   "},
+    json.JSONDecodeError("Unreadable provider response", "", 0),
+])
+def test_verification_without_an_action_leaves_the_goal_open_and_quiet(main_home, monkeypatch, verdict):
+    from hermes_runtime.adapters import goal_turn
+    from hermes_runtime.adapters.inbox import HomeInbox
+
+    _, db = main_home
+    actor = _actor(db)
+    project_id = _open(actor, "Verify the accepted delivery")
+    _goal(actor, "checkpoint", project_id=project_id, deliverable="The requested report",
+          next_step="Repeat the earlier checks")
+    monkeypatch.setattr("hermes_runtime.adapters.state.main_gateway_origin", dict)
+    judge = Mock(side_effect=verdict) if isinstance(verdict, Exception) else Mock(
+        return_value=_response(json.dumps({project_id: verdict})),
+    )
+    monkeypatch.setattr("agent.auxiliary_client.call_llm", judge)
+
+    assert goal_turn.finish_segment(actor, "Report delivered.") == "Report delivered."
+    goal_turn.recover()
+
+    saved = _snapshot(actor, project_id)
+    assert HomeInbox().pending() == []
+    assert saved["status"] == "pending" and saved.get("wake_id") is None
+    assert saved["revision"] == 1
+    if isinstance(verdict, dict) and verdict["next_step"] is None:
+        assert saved["missing_evidence"] == verdict["missing_evidence"]
+        assert saved["checked_revision"] == 1
+
+
+def test_verification_requests_one_evidence_step_and_stays_quiet_without_new_progress(main_home, monkeypatch):
+    from hermes_runtime.adapters import goal_turn
+    from hermes_runtime.adapters.inbox import HomeInbox
+
+    _, db = main_home
+    actor = _actor(db)
+    project_id = _open(actor, "Verify the accepted delivery")
+    _goal(actor, "checkpoint", project_id=project_id, deliverable="The requested report")
+    verdict = {"missing_evidence": "The build receipt for the pushed revision",
+               "next_step": "Read the completed build for the pushed revision in CI"}
+    judge = Mock(return_value=_response(json.dumps({project_id: verdict})))
+    monkeypatch.setattr("agent.auxiliary_client.call_llm", judge)
+    monkeypatch.setattr("hermes_runtime.adapters.state.main_gateway_origin", dict)
+
+    assert goal_turn.finish_segment(actor, "Report delivered.") == "Report delivered."
+    inbox = HomeInbox()
+    [wake] = inbox.pending()
+    assert verdict["missing_evidence"] in wake[1] and verdict["next_step"] in wake[1]
+    wake_id = _snapshot(actor, project_id)["wake_id"]
+    turn = SimpleNamespace(inbox=inbox)
+    actor._agentready_active_turn = turn
+
+    def model(_prompt, **_kwargs):
+        _goal(actor, "checkpoint", project_id=project_id, next_step=verdict["next_step"])
+        return {"completed": True, "final_response": goal_turn.finish_segment(actor, "No confirmed build receipt.")}
+
+    result = goal_turn.run_segment(actor, turn, model, wake[1], goal_records=[wake], conversation_history=[])
+    db.append_message(HOME_SESSION_ID, "user", wake[1], platform_message_id=wake[0])
+    inbox.acknowledge_recorded()
+    goal_turn.recover()
+
+    assert inbox.pending() == []
+    assert result["final_response"] == "" and result["_notification_reply_muted"]
+    saved = _snapshot(actor, project_id)
+    assert saved["status"] == "pending" and saved.get("wake_id") is None
+    assert saved["checked_revision"] == saved["revision"] == 1
+    assert inbox.event_receipt("goal", wake_id, delivered=True) == wake[0]
+    judge.assert_called_once()
+
+    actor._agentready_active_turn = SimpleNamespace(goal_segment=GoalSegment("build-receipt", False))
+    actor._session_messages = [{"role": "tool", "name": "terminal", "tool_call_id": "build-1",
+                                "content": "The build for the pushed revision succeeded."}]
+    _goal(actor, "checkpoint", project_id=project_id, evidence_tool_call_id="build-1")
+    judge.return_value = _response(json.dumps({project_id: {"evidence": ["tool:build-1"]}}))
+    goal_turn.finish_segment(actor, "The build passed.")
+    saved = _snapshot(actor, project_id)
+    assert saved["status"] == "done" and saved["final_evidence"] == ["tool:build-1"]
+    assert saved["checked_revision"] == saved["revision"] == 2
+
+
+def test_exhausted_goal_budget_stays_pending_and_quiet(main_home, monkeypatch):
     from hermes_runtime.adapters import goal_turn
     from hermes_runtime.adapters.inbox import HomeInbox
 
     _, db = main_home
     actor = _actor(db)
     project_id = _open(actor, "Complete the saved work")
+    _goal(actor, "checkpoint", project_id=project_id, next_step="Read the result from the build service")
     monkeypatch.setattr("hermes_cli.goals.DEFAULT_MAX_TURNS", 1)
     monkeypatch.setattr("hermes_runtime.adapters.state.main_gateway_origin", dict)
     goal_turn.finish_segment(actor, "Queued.")
@@ -112,16 +196,46 @@ def test_exhausted_goal_budget_stays_blocked_and_quiet(main_home, monkeypatch):
     actor._agentready_active_turn = turn
 
     def model(_prompt, **_kwargs):
+        _goal(actor, "checkpoint", project_id=project_id, next_step="Compare the built artifact with the contract")
         return {"completed": True, "final_response": goal_turn.finish_segment(actor, ".")}
 
     result = goal_turn.run_segment(actor, turn, model, wake[1], goal_records=[wake], conversation_history=[])
 
     state = _snapshot(actor, project_id)
-    assert state["status"] == "blocked"
+    assert state["status"] == "pending"
     assert state["attempts_without_progress"] == 1
-    assert state["blocker"] and state["wake_id"] is None
+    assert not state.get("blocker") and state["wake_id"] is None
     assert result["final_response"] == ""
     assert result["_notification_reply_muted"]
+
+
+def test_recovery_retires_legacy_wake_without_a_saved_action(main_home, monkeypatch):
+    from hermes_runtime.adapters import goal_turn
+    from hermes_runtime.adapters.inbox import HomeInbox
+    from hermes_runtime.standalone.events import _admit_scheduled_prompt
+    from tools.delegate_project_goal import mutate_goal
+
+    _, db = main_home
+    actor = _actor(db)
+    project_id = _open(actor, "Verify the delivered report")
+    wake_id = f"{project_id}:1"
+    with ProjectStore(actor) as store:
+        mutate_goal(store, project_id, lambda goal: {**goal, "wake_id": wake_id, "wake_sequence": 1,
+                                                     "next_step": "The report is already delivered"})
+    monkeypatch.setattr("hermes_runtime.adapters.state.main_gateway_origin", dict)
+    _admit_scheduled_prompt("Continue the saved Project Goal", wake_id, {"project_id": project_id}, source="goal")
+    inbox = HomeInbox()
+    [legacy] = inbox.pending()
+
+    goal_turn.recover()
+    model = Mock(side_effect=AssertionError("A wake without a saved action must be retired"))
+    result = goal_turn.run_segment(actor, SimpleNamespace(inbox=inbox), model, legacy[1], goal_records=[legacy])
+
+    model.assert_not_called()
+    assert result["_notification_reply_muted"] and inbox.pending() == []
+    saved = _snapshot(actor, project_id)
+    assert saved["status"] == "pending" and saved["wake_id"] is None
+    assert saved["attempts_without_progress"] == 0
 
 
 @pytest.mark.asyncio
@@ -143,7 +257,7 @@ async def test_admitted_question_and_multiple_accepted_assignments(main_home, mo
                "goal": "Write the review", "verification": "Provide the review text"}
     outcomes = []
     rounds = iter(["open", "repeat", "second", "checkpoint-first", "checkpoint-second", "answer"])
-    verification = Mock(side_effect=lambda goals: {pid: tuple(g["evidence"]) for pid, g in goals.items()})
+    verification = Mock(side_effect=lambda goals: {pid: _GoalJudgment(evidence=tuple(g["evidence"])) for pid, g in goals.items()})
 
     def model(agent, payload, *_args, **_kwargs):
         if payload["messages"][-1].get("content") == "How does review work?":
@@ -286,7 +400,11 @@ async def test_worker_report_resumes_only_its_goal_then_retires_its_timer(main_h
         assert list(goals) == [project_id]
         evidence = goals[project_id]["evidence"]
         calls.append(evidence)
-        return {project_id: tuple(k for k, v in evidence.items() if v["kind"] == "deliverable")}
+        refs = tuple(k for k, v in evidence.items() if v["kind"] == "deliverable")
+        return {project_id: _GoalJudgment(evidence=refs) if refs else _GoalJudgment(
+            missing_evidence="Final verification of the preliminary finding",
+            next_step="Verify the final result",
+        )}
 
     def model(agent, payload, *_args, **_kwargs):
         step = next(rounds)
@@ -629,7 +747,7 @@ def test_confirmed_native_operation_returns_to_its_goal_without_cron(main_home, 
     operations.complete(identity, {"value": "verified"})
     inbox = HomeInbox()
     [wake] = inbox.pending()
-    verifier = Mock(return_value={project_id: (identity,)})
+    verifier = Mock(return_value={project_id: _GoalJudgment(evidence=(identity,))})
     monkeypatch.setattr(goal_turn, "_goal_judgments", verifier)
     turn = SimpleNamespace(inbox=inbox)
     actor._agentready_active_turn = turn
@@ -690,6 +808,7 @@ def test_recovery_rotates_a_consumed_wake_without_resaved_transition(main_home, 
     _, db = main_home
     actor = _actor(db)
     goal = _open(actor, "Continue from the last accepted step")
+    _goal(actor, "checkpoint", project_id=goal, next_step="Read the existing build output")
     monkeypatch.setattr("hermes_runtime.adapters.state.main_gateway_origin", dict)
     goal_turn.finish_segment(actor, "Queued.")
     original = _snapshot(actor, goal)["wake_id"]
@@ -769,6 +888,7 @@ def test_human_followup_keeps_its_reply_during_a_quiet_goal_wake(main_home, monk
     _, db = main_home
     actor = _actor(db)
     goal = _open(actor, "Wait for a significant update")
+    _goal(actor, "checkpoint", project_id=goal, next_step="Check the current ticket status")
     monkeypatch.setattr("hermes_runtime.adapters.state.main_gateway_origin", dict)
     goal_turn.finish_segment(actor, "Queued.")
     inbox = HomeInbox()
@@ -791,7 +911,7 @@ def test_human_followup_keeps_its_reply_during_a_quiet_goal_wake(main_home, monk
     result = goal_turn.run_segment(actor, turn, model, wake[1], goal_records=[wake], conversation_history=[])
     assert result["final_response"] == "The current step is saved."
     assert not result.get("_notification_reply_muted")
-    assert _snapshot(actor, goal)["status"] == "ready"
+    assert _snapshot(actor, goal)["status"] == "pending"
 
 
 def test_scoped_spawn_reuses_the_worker_after_interruption_before_first_input(main_home, monkeypatch):
@@ -824,6 +944,7 @@ def test_expired_input_is_removed_from_mixed_segment_and_retired(main_home, monk
     _, db = main_home
     actor = _actor(db)
     abandoned = _open(actor, "Cancelled task")
+    _goal(actor, "checkpoint", project_id=abandoned, next_step="Read the existing task")
     monkeypatch.setattr("hermes_runtime.adapters.state.main_gateway_origin", dict)
     goal_turn.finish_segment(actor, "Queued.")
     inbox = HomeInbox()

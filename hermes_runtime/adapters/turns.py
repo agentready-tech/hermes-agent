@@ -1,6 +1,7 @@
 """Hermes execution ownership, IPC mailbox and group-boundary delivery."""
 
 import fcntl
+from itertools import groupby
 import json
 import logging
 import os
@@ -352,7 +353,8 @@ def run_conversation(self, proceed, *args, **kwargs):
 
 
 def after_tool_group(agent, messages):
-    from hermes_runtime.adapters.goal_turn import ingest_records
+    from agent.context_compressor import MODEL_ONLY_DISPLAY_METADATA_KEY
+    from hermes_runtime.adapters.goal_turn import goal_inbox_event, ingest_records
 
     turn = getattr(agent, "_agentready_active_turn", None)
     records = ingest_records(agent, turn.take_records()) if turn is not None else []
@@ -361,13 +363,17 @@ def after_tool_group(agent, messages):
     contents = [content for _, content in records]
     if not _present_human_followups(agent, contents, messages=messages):
         return
-    # Consecutive inputs share one model message. Persist every receipt on that
-    # row so sequence repair cannot leave the later inputs pending for replay.
-    messages.append({
-        "role": "user", "content": combine_event_content(contents),
-        "platform_message_id": records[0][0],
-        "display_metadata": {"agentready_inbox_ids": [identity for identity, _ in records]},
-    })
+    # Keep internal instructions out of user-visible rows, even when a tool
+    # boundary receives both a Goal wake and a genuine user clarification.
+    for internal, batch in groupby(records, key=lambda record: goal_inbox_event(record[1])):
+        identities, inputs = zip(*batch)
+        metadata = {"agentready_inbox_ids": list(identities)}
+        if internal:
+            metadata[MODEL_ONLY_DISPLAY_METADATA_KEY] = True
+        messages.append({
+            "role": "user", "content": combine_event_content(inputs),
+            "platform_message_id": identities[0], "display_metadata": metadata,
+        })
 
 
 def steer(agent, content):

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from hermes_runtime.adapters.goal_turn import _GoalJudgment
 from hermes_runtime.sessions import HOME_SESSION_ID
 from tests.hermes_runtime.test_external_wait_timer import _isolated_tick
 from tests.hermes_runtime.test_main_cron_wake import owner as gateway_owner
@@ -105,8 +106,8 @@ async def test_role_goals_resume_the_same_worker_after_restart(main_home, monkey
     deadline = (datetime.now(UTC) + timedelta(days=3)).isoformat()
 
     def verify(goals):
-        return {pid: tuple(ref for ref, report in _report_values(candidate["evidence"]).items()
-                           if report == reports.get(candidate["contract"]["outcome"]))
+        return {pid: _GoalJudgment(evidence=tuple(ref for ref, report in _report_values(candidate["evidence"]).items()
+                                                if report == reports.get(candidate["contract"]["outcome"])))
                 for pid, candidate in goals.items()}
 
     def saved_report(agent, stage):

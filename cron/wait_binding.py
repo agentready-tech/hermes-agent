@@ -122,18 +122,35 @@ def matches_wait(wait, wait_id, job_id):
             and wait.get('mode') in {'resume_main', 'resume_child'})
 
 
-def _active_workspace(home, project_id, wait_id, job_id):
+def _active_workspace(conn, project_id, wait_id, job_id):
+    from tools.delegate_project_goal import active_goal
     from tools.delegate_project_store import _goal_input_state
 
-    with closing(sqlite3.connect((home / 'state.db').as_uri() + '?mode=ro', uri=True)) as conn:
-        workspace, archived, paused = _owned_project(conn, project_id)
-        wait = workspace.get('external_wait')
-        if archived or paused or not matches_wait(wait, wait_id, job_id) or wait.get('state') != 'BOUND':
-            return None
-        if wait['mode'] == 'resume_child' and _goal_input_state(conn, project_id) != 'open':
-            return None
-        deadline = datetime.fromisoformat(wait['deadline'])
-        return workspace if deadline.tzinfo is not None and datetime.now(UTC) < deadline else None
+    workspace, archived, paused = _owned_project(conn, project_id)
+    wait = workspace.get('external_wait')
+    if archived or paused or not matches_wait(wait, wait_id, job_id) or wait.get('state') != 'BOUND':
+        return None
+    goal = workspace.get('goal_state')
+    if goal and (not active_goal(goal) or goal['status'] == 'blocked'):
+        return None
+    if wait['mode'] == 'resume_child' and _goal_input_state(conn, project_id) != 'open':
+        return None
+    deadline = datetime.fromisoformat(wait['deadline'])
+    return workspace if deadline.tzinfo is not None and datetime.now(UTC) < deadline else None
+
+
+def update_admitted_wait(tag, job_id, expected_reply, change):
+    """Commit a poll checkpoint under the caller's existing fire fence."""
+    from hermes_cli.sqlite_util import transaction
+    from tools.delegate_project_store import write_workspace
+
+    project_id, wait_id = tag['project_id'], tag['wait_id']
+    uri = (store_home() / 'state.db').as_uri() + '?mode=rw'
+    with transaction(sqlite3.connect(uri, uri=True), immediate=True) as conn:
+        workspace = _active_workspace(conn, project_id, wait_id, job_id)
+        if workspace is None or workspace['external_wait'].get('pending_reply') != expected_reply:
+            raise ValueError('External wait changed during the reply check')
+        return write_workspace(conn, project_id, workspace, lambda saved, _conn: change(saved['external_wait']))
 
 
 def _job_identity(job):
@@ -212,27 +229,44 @@ def close_terminal_waits(due, snapshot, now):
     return [job for job in due if job['id'] not in excluded]
 
 
+def _runnable_bound_job(job, identity):
+    """Resolve the exact runnable record while the caller holds the jobs lock."""
+    from cron.jobs import is_job_runnable, is_terminal_job
+
+    project_id, wait_id, job_id = identity
+    current = exact_job(records(), job_id, project_id, wait_id)
+    if (current is None or current.get('external_wait') != job['external_wait']
+            or not is_job_runnable(current) or is_terminal_job(current)):
+        raise ValueError('External wait timer is not runnable')
+    claim = job.get('fire_claim')
+    if isinstance(claim, dict) and (owner := claim.get('by')):
+        active = current.get('fire_claim')
+        if not isinstance(active, dict) or active.get('by') != owner:
+            raise ValueError('External wait timer fire owner changed')
+    validate_timer(current)
+    return current
+
+
 @contextmanager
-def admitted_binding(job):
-    """Check the current bound pair under the same per-job fence as removal."""
-    from cron.jobs import _fire_job_lock, _jobs_lock, is_job_runnable, is_terminal_job
+def admitted_binding(job, *, publish=False):
+    """Fence the bound pair. Hold the jobs lock through local publication only."""
+    from contextlib import ExitStack
+    from cron.jobs import _fire_job_lock, _jobs_lock
 
     identity = _job_identity(job)
     if identity is None or job['external_wait']['state'] != 'bound':
         raise ValueError('External wait timer is not bound')
     project_id, wait_id, job_id = identity
-    tag = job['external_wait']
     home = store_home()
-    with _fire_job_lock(job_id) as acquired:
+    with _fire_job_lock(job_id) as acquired, ExitStack() as publication:
         if not acquired:
             raise ValueError('External wait fire fence unavailable')
-        with _jobs_lock(strict=True):
-            current = exact_job(records(), job_id, project_id, wait_id)
-            if (current is None or current.get('external_wait') != tag or not is_job_runnable(current)
-                    or is_terminal_job(current)):
-                raise ValueError('External wait timer is not runnable')
-            validate_timer(current)
-        workspace = _active_workspace(home, project_id, wait_id, job_id)
+        publication.enter_context(_jobs_lock(strict=True))
+        current = _runnable_bound_job(job, identity)
+        if not publish:
+            publication.close()
+        with closing(sqlite3.connect((home / 'state.db').as_uri() + '?mode=ro', uri=True)) as conn:
+            workspace = _active_workspace(conn, project_id, wait_id, job_id)
         if workspace is None:
             raise ValueError('External wait timer does not match an active project wait')
-        yield tag, current, workspace
+        yield current['external_wait'], current, workspace

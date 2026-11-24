@@ -1582,16 +1582,16 @@ def _apply_monitor_gate(
     monitor_context)``. Monitor context is runtime data and must remain distinct from a
     user-authored ``extra_prompt`` so the prompt scanner keeps its strict user-input boundary.
     """
-    from cron.monitor import check_monitor, job_has_monitor
+    from cron.monitor import check_monitor, job_has_monitor, no_change_result
 
     if not job_has_monitor(job):
         return None, extra_prompt, None
     _mon = check_monitor(job)
-    _mon_now = _hermes_now().strftime("%Y-%m-%d %H:%M:%S")
-    header = _job_doc_header(job_name, job_id, _mon_now, "monitor")
     if not _mon.ok:
         # Source failure is an ERROR, never a change: alert so a broken monitor can't silently
         # stop watching. Stored hash untouched.
+        _mon_now = _hermes_now().strftime("%Y-%m-%d %H:%M:%S")
+        header = _job_doc_header(job_name, job_id, _mon_now, "monitor")
         logger.error("Job '%s': monitor source failed: %s", job_id, _mon.error)
         _mon_alert = (
             f"⚠ Cron monitor '{job_name}' source failed\n\n"
@@ -1602,11 +1602,7 @@ def _apply_monitor_gate(
             False, f"{header}**Status:** monitor source failed\n\n{_mon.error}\n", _mon_alert, _mon.error,
         ), extra_prompt, None
     if not _mon.changed:
-        # Unchanged: silent no_change tick (ledger doc kept; SILENT_MARKER blocks delivery).
-        logger.info("Job '%s': monitor output unchanged — suppressing agent run", job_id)
-        return (
-            True, f"{header}**Status:** no_change (agent run suppressed)\n", SILENT_MARKER, None,
-        ), extra_prompt, None
+        return no_change_result(job_id, job_name), extra_prompt, None
     # Changed (or first run): pass monitor output through the runtime-data seam. Keep any manual
     # per-run prompt separate: it remains user input and is therefore still strict-scanned.
     return None, extra_prompt, _mon.context_block

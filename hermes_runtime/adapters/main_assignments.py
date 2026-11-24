@@ -62,7 +62,8 @@ def _goal_card(row, *, detail=False):
     project_id = row['subagent_id']
     workspace = json.loads(row['workspace_json'])
     goal = workspace['goal_state']
-    status = goal['status']
+    # A pending verification uses the existing Panel status for awaiting a check.
+    status = 'waiting' if goal['status'] == 'pending' else goal['status']
     if status not in _CLOSED and status != 'closing':
         status = 'inactive' if row['archived'] else 'paused' if row['paused'] else status
     card = {'project_id': project_id, 'title': display_text(row['goal'], 300),

@@ -9,7 +9,7 @@ from tools.registry import tool_error
 
 _KEY = "external_wait"
 _FIELDS = {
-    "open": {"mode", "reply_criterion", "deadline", "return_path"},
+    "open": {"mode", "reply_criterion", "deadline", "return_path", "reply_probe"},
     "select": {"wait_id"},
     "close": {"wait_id", "reason", "reply_ref"},
 }
@@ -40,6 +40,7 @@ def native_schema(agent, tool_defs=None, *, enabled_toolsets=None, disabled_tool
     child_goals = bool(segment and segment.parent_goal_id)
     if "delegate_task" not in names or not (child_goals or _owns_main(agent)):
         return tool_defs
+    from cron.wait_reply_probe import probe_schema
     from tools.delegate_project_goal import FIELDS as goal_operations, schema_fields
 
     if not child_goals and "cronjob_manage" not in names:
@@ -61,11 +62,12 @@ def native_schema(agent, tool_defs=None, *, enabled_toolsets=None, disabled_tool
         "reply_criterion": {"type": "string"},
         "deadline": {"type": "string", "description": "Finite timezone-aware ISO timestamp"},
         "return_path": {"type": "string", "enum": ["timer"]},
-
+        "reply_probe": probe_schema(),
         "reason": {"type": "string", "enum": ["reply", "cancelled", "closed", "expired"]},
         "reply_ref": {"type": "object", "properties": {
-            "kind": {"type": "string", "enum": ["session_admission"]}, "admission_id": {"type": "string"},
-        }, "required": ["kind", "admission_id"], "additionalProperties": False},
+            "kind": {"type": "string", "enum": ["session_admission", "polled_reply"]},
+            "admission_id": {"type": "string"}, "message_id": {"type": "string"},
+        }, "required": ["kind"], "additionalProperties": False},
         **schema_fields(),
     }
     if child_goals:
@@ -112,7 +114,12 @@ def _open_fields(args, expected_mode):
         raise ValueError("Expected a future timezone-aware deadline")
     if args.get("return_path") != "timer":
         raise ValueError("A timer must be explicitly selected; an event return path requires confirmed native evidence")
-    return {"mode": mode, "reply_criterion": criterion, "deadline": end.astimezone(UTC).isoformat(), "return_path": "timer"}
+    fields = {"mode": mode, "reply_criterion": criterion, "deadline": end.astimezone(UTC).isoformat(), "return_path": "timer"}
+    if "reply_probe" in args:
+        from cron.wait_reply_probe import build_probe
+
+        fields["reply_probe"] = build_probe(args["reply_probe"], end)
+    return fields
 
 
 def _open(workspace, conn, fields):
@@ -158,11 +165,15 @@ def _existing(workspace, wait_id):
 
 
 def validate_close(current, conn, store, args):
+    from cron.wait_reply_probe import proves_polled_reply
     from hermes_runtime.adapters.external_wait_reply import proves_reply
 
     reason = args.get('reason')
     if reason == 'reply':
-        if not proves_reply(conn, store.db_path.resolve().parent, store.parent_id, current, args.get('reply_ref')):
+        ref = args.get('reply_ref')
+        observed = (proves_polled_reply(current, ref) if isinstance(ref, dict) and ref.get('kind') == 'polled_reply'
+                    else proves_reply(conn, store.db_path.resolve().parent, store.parent_id, current, ref))
+        if not observed:
             raise ValueError("Closing on a reply requires trusted evidence of the original input")
     elif reason == "access_lost":
         raise ValueError("No trusted loss-of-access receipt is available for this wait")
