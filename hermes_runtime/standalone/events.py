@@ -189,6 +189,8 @@ def _reply_queue_status(event_id, *, child):
                               (native_id,)).fetchone()
     if native is None:
         return None
+    if native[0] == "dropped":
+        return "failed"
     if native[0] == "delivered":
         from gateway.session_automation import find_automation_admission
         from hermes_runtime.sessions import HOME_SESSION_ID
@@ -197,8 +199,8 @@ def _reply_queue_status(event_id, *, child):
         identity = json.dumps(["async_delegation", native_id, ""], separators=(",", ":"))
         with SessionDB() as db:
             admission = find_automation_admission(db, HOME_SESSION_ID, identity)
-        if admission and admission["status"] == "terminal" and admission["outcome"] == "cancelled":
-            return "cancelled"
+        if admission and admission["status"] == "terminal" and admission["outcome"] in ("cancelled", "failed"):
+            return admission["outcome"]
     return "queued"
 
 
@@ -230,7 +232,7 @@ def _admit_polled_reply(job, current, wait, cancel_event):
         return False, "External wait reply check failed", "", "external_wait_reply_check_failed"
 
 
-def _publish_staged_reply(job, reply, cancel_event=None):
+def _publish_staged_reply(job, reply, cancel_event=None, *, recovering=False):
     """Publish once, or return None after retiring an explicitly cancelled admission."""
     from cron.wait_binding import admitted_binding, update_admitted_wait
     from cron.wait_reply_probe import bound_read, record_delivery, reply_reference, reply_request_id
@@ -253,6 +255,16 @@ def _publish_staged_reply(job, reply, cancel_event=None):
             # can still observe a later reply on the ordinary poll.
             update_admitted_wait(tag, job_id, lambda latest: record_delivery(latest, reply, None))
             return None
+        if queue_status == "failed":
+            if recovering and reply.get("retried_after_failure"):
+                return _quiet_poll(job, current)
+            # The owning turn never accepted the saved reply. Retry once in
+            # recovery, then use ordinary timer slots if the failure persists.
+            reply = {**reply, "attempt": reply.get("attempt", 0) + 1, "retried_after_failure": True}
+            update_admitted_wait(tag, job_id, lambda latest: latest.update(pending_reply=reply))
+            request_id = reply_request_id(reply)
+            event_id = f"{job_id}:{request_id}"
+            queue_status = None
         if queue_status == "queued":
             result = _quiet_poll(job, current)
         else:
@@ -283,7 +295,7 @@ def recover_wait_reply(project_id, wait):
     try:
         job = get_job(wait["job_id"])
         if job and job.get("external_wait") == binding(project_id, wait["wait_id"]):
-            _publish_staged_reply(job, reply)
+            _publish_staged_reply(job, reply, recovering=True)
     except (ValueError, RuntimeError, OSError, sqlite3.Error, KeyError, TypeError):
         logger.debug("Verified reply remains deferred for Goal %s", project_id)
 

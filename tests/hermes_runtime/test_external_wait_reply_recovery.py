@@ -10,9 +10,15 @@ import pytest
 from tests.hermes_runtime.test_external_wait_reply_probe import bind, body, deliver_main, row
 from tests.hermes_runtime.test_external_wait_timer import _isolated_tick
 from tests.hermes_runtime.test_main_cron_wake import owner as gateway_owner
-from tests.hermes_runtime.test_project_goal import _goal, _snapshot
+from tests.hermes_runtime.test_project_goal import _consume, _goal, _snapshot
 
 pytest_plugins = ['tests.hermes_runtime.test_external_wait_reply_probe']
+
+
+def _queued_events(db):
+    return [json.loads(row[0]) for row in db._read_all(
+        "SELECT event_json FROM async_delegations WHERE delegation_id LIKE 'main-cron-%' ORDER BY rowid",
+    )]
 
 
 def _final_slot(source, monkeypatch):
@@ -104,13 +110,8 @@ async def test_cancelling_one_native_queued_turn_keeps_future_reply_polls_runnin
     read = Mock(side_effect=[body(first), body(first, second)])
     monkeypatch.setattr('tools.connectors.http_api.response_data', read)
 
-    def queued_events():
-        return [json.loads(r[0]) for r in db._read_all(
-            "SELECT event_json FROM async_delegations WHERE delegation_id LIKE 'main-cron-%' ORDER BY rowid",
-        )]
-
     assert admit_cron(get_job(job_id), execution_id='initial')[0]
-    [event] = queued_events()
+    [event] = _queued_events(db)
     assert await runner._deliver_completion_notification(_format_gateway_process_notification(event), event) is True
     [admission] = list_session_admissions(db, session_id=HOME_SESSION_ID, pending_only=False)
     assert admission['status'] == 'queued'
@@ -126,7 +127,58 @@ async def test_cancelling_one_native_queued_turn_keeps_future_reply_polls_runnin
     }})
     assert cancelled['result']['outcome'] == 'cancelled'
     assert admit_cron(get_job(job_id), execution_id='next-slot')[0]
-    first_event, later = queued_events()
+    first_event, later = _queued_events(db)
     assert first_event['delegation_id'] == event['delegation_id']
     assert later['main_project_event']['metadata']['reply_ref']['message_id'] == 'subsequent-reply'
     assert read.call_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['before_turn', 'outbox_drop'])
+async def test_reply_retries_failed_handoffs_once_before_the_next_timer(source, monkeypatch, failure):
+    from cron.jobs import get_job
+    from gateway.session_results import record_unexecuted_failure
+    from hermes_runtime.adapters import goal_turn
+    from hermes_runtime.sessions import HOME_SESSION_ID
+    from hermes_runtime.standalone.events import admit_cron
+    from hermes_state_runtime import list_session_admissions
+    from tools.async_delegation import claim_completion_delivery, drop_completion_delivery
+
+    actor, _, _, after, config = source
+    _, job_id = bind(source)
+    home, db = config.parent, actor._session_db
+    runner, authority = await gateway_owner(home, db, monkeypatch, 'reply-failure')
+    reply = row('verified-reply', 'supplier-1', after + timedelta(minutes=1))
+    read = Mock(return_value=body(reply))
+    monkeypatch.setattr('tools.connectors.http_api.response_data', read)
+
+    async def fail_before_turn(*_args, **_kwargs):
+        record_unexecuted_failure('The model agent could not be initialized')
+
+    monkeypatch.setattr(runner, '_handle_message_with_agent', fail_before_turn)
+
+    async def fail(event):
+        if failure == 'before_turn':
+            await _consume(runner, authority, home, event)
+            admission = list_session_admissions(db, session_id=HOME_SESSION_ID, pending_only=False)[-1]
+            assert (admission['status'], admission['outcome']) == ('terminal', 'failed')
+        else:
+            identity = event['delegation_id']
+            assert claim_completion_delivery(identity, 'fixture-claim')
+            assert drop_completion_delivery(identity, 'fixture-claim')
+
+    assert admit_cron(get_job(job_id), execution_id='first-slot')[0]
+    [first] = _queued_events(db)
+    await fail(first)
+    goal_turn.recover()
+    _, retry = _queued_events(db)
+    assert retry['main_project_event']['metadata']['reply_ref']['message_id'] == 'verified-reply'
+    await fail(retry)
+    goal_turn.recover()
+    goal_turn.recover()
+    assert _queued_events(db) == [first, retry]
+
+    assert admit_cron(get_job(job_id), execution_id='next-slot')[0]
+    _, _, next_slot = _queued_events(db)
+    assert next_slot['main_project_event']['metadata']['reply_ref']['message_id'] == 'verified-reply'
+    read.assert_called_once()
