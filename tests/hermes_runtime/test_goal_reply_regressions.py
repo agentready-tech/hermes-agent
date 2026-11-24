@@ -91,9 +91,9 @@ def test_a_step_repeats_when_a_turn_has_produced_new_evidence(main_home, monkeyp
     actor._agentready_active_turn = turn
     actor._session_messages = [{'role': 'tool', 'name': 'terminal', 'tool_call_id': 'first-page',
                                 'content': 'Page 1 read, next page token is 2.'}]
-    monkeypatch.setattr(goal_turn, '_goal_judgments', lambda goals: {
-        goal: goal_turn._GoalJudgment(missing_evidence='Page 2 is absent', next_step=step),
-    })
+    monkeypatch.setattr('agent.auxiliary_client.call_llm', Mock(return_value=_response(json.dumps({
+        goal: {'missing_evidence': 'Page 2 is absent', 'next_step': step, 'progress': ['tool:first-page']},
+    }))))
 
     def model(_prompt, **_kwargs):
         _goal(actor, 'checkpoint', project_id=goal, evidence_tool_call_id='first-page', next_step=step)
@@ -105,7 +105,8 @@ def test_a_step_repeats_when_a_turn_has_produced_new_evidence(main_home, monkeyp
     assert saved['status'] == 'ready' and saved['wake_id'] != old, saved
 
 
-def test_identical_tool_output_under_new_call_ids_cannot_restart_the_wake_budget(main_home, monkeypatch):
+@pytest.mark.parametrize('with_request_id', [False, True])
+def test_unchanged_tool_result_cannot_restart_the_wake_budget(main_home, monkeypatch, with_request_id):
     from hermes_runtime.adapters import goal_turn
     from hermes_runtime.adapters.inbox import HomeInbox
 
@@ -119,15 +120,18 @@ def test_identical_tool_output_under_new_call_ids_cannot_restart_the_wake_budget
     inbox = HomeInbox()
     goal_turn.finish_segment(actor, 'Queued.')
 
-    for index in range(3):
+    for index in range(2):
         [pending] = inbox.pending()
         call_id = f'check-{index}'
         next_step = steps[(index + 1) % len(steps)]
-        monkeypatch.setattr(goal_turn, '_goal_judgments', Mock(return_value={
-            project: goal_turn._GoalJudgment(missing_evidence='Build outcome', next_step=next_step),
-        }))
+        monkeypatch.setattr('agent.auxiliary_client.call_llm', Mock(return_value=_response(json.dumps({
+            project: {'missing_evidence': 'Build outcome', 'next_step': next_step, 'progress': []},
+        }))))
+        body = {'result': 'No confirmed build result is available.'}
+        if with_request_id:
+            body['request_id'] = call_id
         actor._session_messages = [{'role': 'tool', 'name': 'terminal', 'tool_call_id': call_id,
-                                    'content': 'No confirmed build result is available.'}]
+                                    'content': json.dumps(body)}]
 
         def model(_prompt, **_kwargs):
             _goal(actor, 'checkpoint', project_id=project, evidence_tool_call_id=call_id, next_step=next_step)
@@ -136,8 +140,24 @@ def test_identical_tool_output_under_new_call_ids_cannot_restart_the_wake_budget
         assert deliver_main(actor, inbox, pending, Mock(side_effect=model))['_notification_reply_muted']
 
     saved = _snapshot(actor, project)
-    assert saved['status'] == 'pending' and saved['revision'] == saved['checked_revision'] == 1
+    assert saved['status'] == 'pending' and saved['revision'] == saved['checked_revision'] == 2
+    assert saved['attempts_without_progress'] == 2
     assert inbox.pending() == []
+
+
+def test_distinct_checks_keep_their_own_receipts_even_with_the_same_output(main_home):
+    _, db = main_home
+    actor = _actor(db)
+    project = _open(actor, 'Verify both the artifact signature and deployment health')
+    tools = {'artifact': 'check_artifact_signature', 'deployment': 'check_deployment_health'}
+    actor._session_messages = [{'role': 'tool', 'name': name, 'tool_call_id': call_id, 'content': 'OK'}
+                               for call_id, name in tools.items()]
+    for call_id in tools:
+        _goal(actor, 'checkpoint', project_id=project, evidence_tool_call_id=call_id)
+    evidence = _snapshot(actor, project)['evidence']
+    assert {ref: receipt['tool'] for ref, receipt in evidence.items()} == {
+        'tool:' + call_id: name for call_id, name in tools.items()
+    }
 
 
 @pytest.mark.parametrize('restart_on_resume', [False, True])

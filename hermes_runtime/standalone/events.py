@@ -172,21 +172,34 @@ def _admit_wait_timer(job, request_id, cancel_event):
         return False, "External wait timer not admitted", "", "external_wait_not_active"
 
 
-def _reply_already_queued(event_id, *, child):
+def _reply_queue_status(event_id, *, child):
     from hermes_runtime.adapters.inbox import HomeInbox
 
+    native_id = scheduled_prompt_id("cron", event_id)
     with HomeInbox().transaction() as conn:
         if child:
-            return conn.execute(
+            receipt = conn.execute(
                 "SELECT 1 FROM delegation_mail WHERE event_key=?", ("child-goal:" + event_id,),
-            ).fetchone() is not None
-        # A retry can see a different main route. Both queues live in the same
-        # profile database, and the timer's fire fence serializes publications.
-        return conn.execute(
-            "SELECT 1 FROM agentready_inbox WHERE event_key=? "
-            "UNION ALL SELECT 1 FROM async_delegations WHERE delegation_id=? LIMIT 1",
-            (json.dumps(["cron", event_id]), scheduled_prompt_id("cron", event_id)),
-        ).fetchone() is not None
+            ).fetchone()
+            return "queued" if receipt else None
+        if conn.execute("SELECT 1 FROM agentready_inbox WHERE event_key=?",
+                        (json.dumps(["cron", event_id]),)).fetchone():
+            return "queued"
+        native = conn.execute("SELECT delivery_state FROM async_delegations WHERE delegation_id=?",
+                              (native_id,)).fetchone()
+    if native is None:
+        return None
+    if native[0] == "delivered":
+        from gateway.session_automation import find_automation_admission
+        from hermes_runtime.sessions import HOME_SESSION_ID
+        from hermes_state import SessionDB
+
+        identity = json.dumps(["async_delegation", native_id, ""], separators=(",", ":"))
+        with SessionDB() as db:
+            admission = find_automation_admission(db, HOME_SESSION_ID, identity)
+        if admission and admission["status"] == "terminal" and admission["outcome"] == "cancelled":
+            return "cancelled"
+    return "queued"
 
 
 def _quiet_poll(job, current):
@@ -199,16 +212,26 @@ def _quiet_poll(job, current):
 def _admit_polled_reply(job, current, wait, cancel_event):
     import sqlite3
     from http.client import HTTPException
+    from cron.wait_binding import admitted_binding
     from cron.wait_reply_probe import stage_reply
 
     try:
+        if pending := wait.get("pending_reply"):
+            result = _publish_staged_reply(job, pending, cancel_event)
+            if result is not None:
+                return result
+            with admitted_binding(job) as (_, current, workspace):
+                wait = workspace["external_wait"]
         reply = stage_reply(current["external_wait"], current["id"], wait, current["prompt"])
-        return _quiet_poll(job, current) if reply is None else _publish_staged_reply(job, reply, cancel_event)
+        if reply is None:
+            return _quiet_poll(job, current)
+        return _publish_staged_reply(job, reply, cancel_event) or _quiet_poll(job, current)
     except (ValueError, RuntimeError, OSError, sqlite3.Error, KeyError, TypeError, HTTPException):
         return False, "External wait reply check failed", "", "external_wait_reply_check_failed"
 
 
 def _publish_staged_reply(job, reply, cancel_event=None):
+    """Publish once, or return None after retiring an explicitly cancelled admission."""
     from cron.wait_binding import admitted_binding, update_admitted_wait
     from cron.wait_reply_probe import bound_read, record_delivery, reply_reference, reply_request_id
 
@@ -224,7 +247,13 @@ def _publish_staged_reply(job, reply, cancel_event=None):
         child = bool(goal and goal.get("parent_goal_id"))
         request_id = reply_request_id(reply)
         event_id = f"{job_id}:{request_id}"
-        if _reply_already_queued(event_id, child=child):
+        queue_status = _reply_queue_status(event_id, child=child)
+        if queue_status == "cancelled":
+            # Cancelling this scheduled turn skips its message. The same wait
+            # can still observe a later reply on the ordinary poll.
+            update_admitted_wait(tag, job_id, lambda latest: record_delivery(latest, reply, None))
+            return None
+        if queue_status == "queued":
             result = _quiet_poll(job, current)
         else:
             # An unpublished observation cannot outlive its connector binding.
@@ -242,14 +271,14 @@ def _publish_staged_reply(job, reply, cancel_event=None):
         return result
 
 
-def recover_deferred_reply(project_id, wait):
-    """Resume a parked reply immediately, including after the last timer slot."""
+def recover_wait_reply(project_id, wait):
+    """Recover a saved observation without querying the connector again."""
     import sqlite3
     from cron.jobs import get_job
     from cron.wait_binding import binding
 
     reply = wait.get("pending_reply")
-    if wait.get("state") != "BOUND" or not reply or not reply.get("attempt"):
+    if wait.get("state") != "BOUND" or not reply:
         return
     try:
         job = get_job(wait["job_id"])

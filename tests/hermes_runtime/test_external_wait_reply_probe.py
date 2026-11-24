@@ -37,9 +37,12 @@ def source(main_home):
     return actor, project, probe, after, config
 
 
-def bind(source):
+def bind(source, *, deadline=None):
     actor, project, probe, *_ = source
-    wait = _call(actor, **_args(project), reply_probe=probe)
+    arguments = _args(project)
+    if deadline:
+        arguments['deadline'] = deadline.isoformat()
+    wait = _call(actor, **arguments, reply_probe=probe)
     assert wait.get('success'), wait
     timer = _timer(actor, {'action': 'create', 'project_id': project, 'wait_id': wait['wait_id'],
                            'schedule': 'every 15m', 'prompt': 'Read the matching message in the approved thread.'})

@@ -98,15 +98,15 @@ def operation_returns(store, identity):
     return bool(row and operations.continuation_state(identity, row["session_id"])["return_path"])
 
 
-def add_evidence(goal, reference, kind, value):
-    """Repeated tool output does not advance the Goal, even under a new call ID."""
-    evidence = {"kind": kind, "value": value}
-    if reference in goal["evidence"] or kind == "tool result" and evidence in goal["evidence"].values():
+def add_evidence(goal, reference, kind, value, tool=None):
+    """Keep the exact receipt for verification, even when outputs are identical."""
+    if reference in goal["evidence"]:
         return False
+    evidence = {"kind": kind, "value": value}
+    if tool:
+        evidence["tool"] = tool
     goal["evidence"][reference] = evidence
     goal["revision"] += 1
-    goal["attempts_without_progress"] = 0
-    goal.pop("attempted_steps", None)
     return True
 
 
@@ -180,7 +180,7 @@ def _checkpoint_evidence(agent, segment, args):
             continue
         call_id, content = row.get("tool_call_id"), row.get("content")
         if call_id and call_id not in segment.history_tool_results and isinstance(content, str) and content.strip():
-            return f"tool:{call_id}", "tool result", content[:6000]
+            return f"tool:{call_id}", "tool result", content[:6000], row.get("name")
     raise ValueError("No matching tool evidence was produced in this turn")
 
 

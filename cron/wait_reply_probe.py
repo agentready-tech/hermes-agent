@@ -149,7 +149,7 @@ def reply_request_id(reply: dict) -> str:
     return f"reply:{digest}:{reply.get('attempt', 0)}"
 
 
-def record_delivery(wait: dict, reply: dict, event_id: str) -> None:
+def record_delivery(wait: dict, reply: dict, event_id: str | None) -> None:
     wait["reply_cursor"] = {key: reply[key] for key in ("message_id", "received_at")}
     wait.pop("pending_reply")
     receipts = wait.setdefault("reply_receipts", {})
