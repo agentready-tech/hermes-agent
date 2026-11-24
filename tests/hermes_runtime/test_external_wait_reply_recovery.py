@@ -1,5 +1,6 @@
 """Scheduled replies survive queue and owner transitions without a new GET."""
 
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -10,7 +11,8 @@ import pytest
 from tests.hermes_runtime.test_external_wait_reply_probe import bind, body, deliver_main, row
 from tests.hermes_runtime.test_external_wait_timer import _isolated_tick
 from tests.hermes_runtime.test_main_cron_wake import owner as gateway_owner
-from tests.hermes_runtime.test_project_goal import _consume, _goal, _snapshot
+from tests.hermes_runtime.test_project_goal import _agent, _consume, _goal, _models, _snapshot
+from tests.tools.test_delegate_mail_live import _response
 
 pytest_plugins = ['tests.hermes_runtime.test_external_wait_reply_probe']
 
@@ -182,3 +184,69 @@ async def test_reply_retries_failed_handoffs_once_before_the_next_timer(source, 
     _, _, next_slot = _queued_events(db)
     assert next_slot['main_project_event']['metadata']['reply_ref']['message_id'] == 'verified-reply'
     read.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('native_state', ['queued', 'unknown'])
+async def test_lost_ack_preserves_the_existing_native_admission(source, monkeypatch, native_state):
+    from cron.jobs import get_job
+    from gateway.run import _format_gateway_process_notification
+    from gateway.session_contract import SessionRef
+    from gateway.session_settlement_recovery import _mark_unknown
+    from hermes_runtime.adapters import goal_turn
+    from hermes_runtime.sessions import HOME_SESSION_ID
+    from hermes_runtime.standalone.events import admit_cron
+    from hermes_state_runtime import list_session_admissions
+
+    actor, _, _, after, config = source
+    _, job_id = bind(source)
+    home, db = config.parent, actor._session_db
+    runner, authority = await gateway_owner(home, db, monkeypatch, 'reply-ack-loss')
+    read = Mock(return_value=body(row('verified-reply', 'supplier-1', after + timedelta(minutes=1))))
+    monkeypatch.setattr('tools.connectors.http_api.response_data', read)
+    assert admit_cron(get_job(job_id), execution_id='first-slot')[0]
+    [event] = _queued_events(db)
+    inject = runner._inject_watch_notification
+
+    async def lose_ack(*args, **kwargs):
+        assert await inject(*args, **kwargs) is True
+        raise OSError('Lost acknowledgement after native admission')
+
+    with monkeypatch.context() as failing:
+        failing.setattr('tools.async_delegation._MAX_DELIVERY_ATTEMPTS', 1)
+        failing.setattr(runner, '_inject_watch_notification', lose_ack)
+        with pytest.raises(OSError, match='Lost acknowledgement'):
+            await runner._deliver_completion_notification(_format_gateway_process_notification(event), event)
+    assert db._read_one("SELECT delivery_state FROM async_delegations WHERE delegation_id=?",
+                        (event['delegation_id'],))[0] == 'dropped'
+
+    ref = SessionRef(str(home), HOME_SESSION_ID)
+    if native_state == 'unknown':
+        started, _ = await authority._claim_next(ref, authority.sessions[HOME_SESSION_ID])
+        assert _mark_unknown(authority, started) == 'unknown'
+
+    goal_turn.recover()
+    assert 'no_change' in admit_cron(get_job(job_id), execution_id='next-slot')[1]
+    assert _queued_events(db) == [event]
+    [saved] = list_session_admissions(db, session_id=HOME_SESSION_ID, pending_only=False)
+    assert saved['status'] == native_state
+    read.assert_called_once()
+
+    if native_state == 'queued':
+        monkeypatch.setattr('agent.prompt_builder._probe_remote_backend', lambda *_: 'Linux Docker fixture')
+        monkeypatch.setenv('HERMES_GATEWAY_SESSION', '1')
+        model = Mock(return_value=_response('No significant change.'))
+        _models(monkeypatch, model, Mock(return_value={}))
+
+        async def execute(event, *_args):
+            agent = _agent(db)
+            try:
+                result = await asyncio.to_thread(agent.run_conversation, event.text)
+                assert result['_notification_reply_muted']
+                return result['final_response']
+            finally:
+                agent.close()
+
+        monkeypatch.setattr(runner, '_handle_message_with_agent', execute)
+        await authority._drain(ref)
+        model.assert_called_once()

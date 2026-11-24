@@ -189,9 +189,7 @@ def _reply_queue_status(event_id, *, child):
                               (native_id,)).fetchone()
     if native is None:
         return None
-    if native[0] == "dropped":
-        return "failed"
-    if native[0] == "delivered":
+    if native[0] in ("delivered", "dropped"):
         from gateway.session_automation import find_automation_admission
         from hermes_runtime.sessions import HOME_SESSION_ID
         from hermes_state import SessionDB
@@ -199,8 +197,14 @@ def _reply_queue_status(event_id, *, child):
         identity = json.dumps(["async_delegation", native_id, ""], separators=(",", ":"))
         with SessionDB() as db:
             admission = find_automation_admission(db, HOME_SESSION_ID, identity)
-        if admission and admission["status"] == "terminal" and admission["outcome"] in ("cancelled", "failed"):
-            return admission["outcome"]
+        if admission:
+            if admission["status"] == "terminal" and admission["outcome"] in ("cancelled", "failed"):
+                return admission["outcome"]
+            # The FIFO may already have committed the input before the outbox
+            # lost its acknowledgement. Preserve that admission and its outcome.
+            return "queued"
+        if native[0] == "dropped":
+            return "failed"
     return "queued"
 
 
@@ -253,15 +257,16 @@ def _publish_staged_reply(job, reply, cancel_event=None, *, recovering=False):
         if queue_status == "cancelled":
             # Cancelling this scheduled turn skips its message. The same wait
             # can still observe a later reply on the ordinary poll.
-            update_admitted_wait(tag, job_id, lambda latest: record_delivery(latest, reply, None))
+            update_admitted_wait(tag, job_id, reply, lambda latest: record_delivery(latest, reply, None))
             return None
         if queue_status == "failed":
             if recovering and reply.get("retried_after_failure"):
                 return _quiet_poll(job, current)
             # The owning turn never accepted the saved reply. Retry once in
             # recovery, then use ordinary timer slots if the failure persists.
-            reply = {**reply, "attempt": reply.get("attempt", 0) + 1, "retried_after_failure": True}
-            update_admitted_wait(tag, job_id, lambda latest: latest.update(pending_reply=reply))
+            retry = {**reply, "attempt": reply.get("attempt", 0) + 1, "retried_after_failure": True}
+            update_admitted_wait(tag, job_id, reply, lambda latest: latest.update(pending_reply=retry))
+            reply = retry
             request_id = reply_request_id(reply)
             event_id = f"{job_id}:{request_id}"
             queue_status = None
@@ -279,7 +284,7 @@ def _publish_staged_reply(job, reply, cancel_event=None, *, recovering=False):
         if child or not goal:
             # Worker mail holds paused admissions durably. Main Goals commit
             # the cursor when their owning turn actually admits the reply.
-            update_admitted_wait(tag, job_id, lambda latest: record_delivery(latest, reply, event_id))
+            update_admitted_wait(tag, job_id, reply, lambda latest: record_delivery(latest, reply, event_id))
         return result
 
 

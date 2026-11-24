@@ -140,7 +140,7 @@ def stage_reply(tag: dict, job_id: str, wait: dict, prompt: str) -> dict | None:
         return None
     reply = {**observed, "prompt": prompt}
     # The exact receipt is recoverable even if the process exits before publication.
-    update_admitted_wait(tag, job_id, lambda current: current.update(pending_reply=reply))
+    update_admitted_wait(tag, job_id, None, lambda current: current.update(pending_reply=reply))
     return reply
 
 

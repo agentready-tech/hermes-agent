@@ -139,7 +139,7 @@ def _active_workspace(conn, project_id, wait_id, job_id):
     return workspace if deadline.tzinfo is not None and datetime.now(UTC) < deadline else None
 
 
-def update_admitted_wait(tag, job_id, change):
+def update_admitted_wait(tag, job_id, expected_reply, change):
     """Commit a poll checkpoint under the caller's existing fire fence."""
     from hermes_cli.sqlite_util import transaction
     from tools.delegate_project_store import write_workspace
@@ -148,7 +148,7 @@ def update_admitted_wait(tag, job_id, change):
     uri = (store_home() / 'state.db').as_uri() + '?mode=rw'
     with transaction(sqlite3.connect(uri, uri=True), immediate=True) as conn:
         workspace = _active_workspace(conn, project_id, wait_id, job_id)
-        if workspace is None:
+        if workspace is None or workspace['external_wait'].get('pending_reply') != expected_reply:
             raise ValueError('External wait changed during the reply check')
         return write_workspace(conn, project_id, workspace, lambda saved, _conn: change(saved['external_wait']))
 
