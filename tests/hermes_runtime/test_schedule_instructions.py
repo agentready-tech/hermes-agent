@@ -64,7 +64,8 @@ def test_scheduling_policy_is_mandatory_only_for_the_main_owner(runtime, monkeyp
             "stable project_id and wait_id",
             "Retry the same arguments for an unresolved receipt",
             "future next_run_at",
-            "cron does not check the source",
+            "returns a thread ID per message",
+            "For sources without a reply_probe",
             "The wake is not evidence of a reply",
         ):
             assert (rule in text) == (kind == "main")

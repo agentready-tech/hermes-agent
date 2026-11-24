@@ -153,10 +153,7 @@ def admit_cron(job, *, extra_prompt=None, cancel_event=None, execution_id=None):
 
 def _admit_wait_timer(job, request_id, cancel_event):
     import sqlite3
-    from http.client import HTTPException
-    from cron.monitor import no_change_result
     from cron.wait_binding import admitted_binding
-    from cron.wait_reply_probe import commit_reply, reply_reference, stage_reply
 
     try:
         with admitted_binding(job) as (tag, current, workspace):
@@ -168,31 +165,77 @@ def _admit_wait_timer(job, request_id, cancel_event):
                 "job_id": job_id, "execution_id": request_id,
                 "project_id": tag["project_id"], "wait_id": tag["wait_id"],
             }
-            reply = None
             if "reply_probe" in wait:
-                try:
-                    reply = stage_reply(tag, job_id, wait, prompt)
-                except (ValueError, RuntimeError, OSError, sqlite3.Error, KeyError, TypeError, HTTPException):
-                    return False, "External wait reply check failed", "", "external_wait_reply_check_failed"
-                if reply is None:
-                    job["_managed_monitor_no_change"] = True
-                    return no_change_result(job_id, current.get("name") or job_id)
-                if cancel_event is not None and cancel_event.is_set():
-                    return False, "Schedule cancelled before admission", "", "cancelled"
+                return _admit_polled_reply(job, current, wait, metadata, cancel_event)
+            return _handoff_wait(metadata, request_id, prompt, workspace.get("goal_state"))
+    except (ValueError, RuntimeError, OSError, sqlite3.Error, KeyError, TypeError):
+        return False, "External wait timer not admitted", "", "external_wait_not_active"
+
+
+def _reply_already_queued(event_id, *, child):
+    from hermes_runtime.adapters.inbox import HomeInbox
+
+    with HomeInbox().transaction() as conn:
+        if child:
+            return conn.execute(
+                "SELECT 1 FROM delegation_mail WHERE event_key=?", ("child-goal:" + event_id,),
+            ).fetchone() is not None
+        # A retry can see a different main route. Both queues live in the same
+        # profile database, and the timer's fire fence serializes publications.
+        return conn.execute(
+            "SELECT 1 FROM agentready_inbox WHERE event_key=? "
+            "UNION ALL SELECT 1 FROM async_delegations WHERE delegation_id=? LIMIT 1",
+            (json.dumps(["cron", event_id]), scheduled_prompt_id("cron", event_id)),
+        ).fetchone() is not None
+
+
+def _quiet_poll(job, current):
+    from cron.monitor import no_change_result
+
+    job["_managed_monitor_no_change"] = True
+    return no_change_result(current["id"], current.get("name") or current["id"])
+
+
+def _admit_polled_reply(job, current, wait, metadata, cancel_event):
+    import sqlite3
+    from http.client import HTTPException
+    from cron.wait_binding import admitted_binding, update_admitted_wait
+    from cron.wait_reply_probe import bound_read, record_delivery, reply_reference, reply_request_id, stage_reply
+
+    job_id = current["id"]
+    try:
+        reply = stage_reply(current["external_wait"], job_id, wait, current["prompt"])
+        if reply is None:
+            return _quiet_poll(job, current)
+        # Fetching the connector releases the jobs lock. Recheck cancellation,
+        # pause, the exact wait and the fire owner before the local queue write.
+        with admitted_binding(job, publish=True) as (tag, current, workspace):
+            saved_wait = workspace["external_wait"]
+            if saved_wait.get("pending_reply") != reply:
+                return _quiet_poll(job, current)
+            if cancel_event is not None and cancel_event.is_set():
+                return False, "Schedule cancelled before admission", "", "cancelled"
+            goal = workspace.get("goal_state")
+            child = bool(goal and goal.get("parent_goal_id"))
+            request_id = reply_request_id(reply)
+            event_id = f"{job_id}:{request_id}"
+            if _reply_already_queued(event_id, child=child):
+                result = _quiet_poll(job, current)
+            else:
+                # An unpublished observation cannot outlive its connector binding.
+                bound_read(saved_wait)
                 metadata["reply_ref"] = reply_reference(reply)
-                request_id = "reply:" + hashlib.sha256(reply["message_id"].encode()).hexdigest()
                 prompt = (reply["prompt"] + "\n\nThe bound connector observed a new message from the expected sender. "
                           "Read the message in the saved source and evaluate the reply criterion. "
                           f"Original reply reference: {json.dumps(metadata['reply_ref'])}")
-            result = _handoff_wait(metadata, request_id, prompt, workspace.get("goal_state"))
-            if reply is not None:
-                try:
-                    commit_reply(tag, job_id, reply)
-                except (ValueError, RuntimeError, OSError, sqlite3.Error):
-                    logger.warning("External wait reply checkpoint deferred for job %s", job_id)
+                result = _handoff_wait(metadata, request_id, prompt, goal)
+            if child or not goal:
+                # Worker mail holds paused admissions durably. Main Goals commit
+                # the cursor when their owning turn actually admits the reply.
+                update_admitted_wait(tag, job_id, lambda latest: record_delivery(latest, reply, event_id))
             return result
-    except (ValueError, RuntimeError, OSError, sqlite3.Error, KeyError, TypeError):
-        return False, "External wait timer not admitted", "", "external_wait_not_active"
+    except (ValueError, RuntimeError, OSError, sqlite3.Error, KeyError, TypeError, HTTPException):
+        return False, "External wait reply check failed", "", "external_wait_reply_check_failed"
 
 
 def _handoff_wait(metadata, request_id, prompt, goal):

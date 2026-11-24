@@ -15,8 +15,10 @@ def probe_schema() -> dict:
         "items_path": {**selector, "description": "Keys from the JSON response body to its message array"},
         "id_path": {**selector, "description": "Keys from a message to its stable ID"},
         "sender_path": {**selector, "description": "Keys from a message to its stable sender ID"},
+        "thread_path": {**selector, "description": "Keys from a message to its conversation or thread ID"},
         "time_path": {**selector, "description": "Keys from a message to its timezone-aware ISO timestamp"},
         "sender": {"type": "string", "description": "Exact ID of the person whose reply is expected"},
+        "thread": {"type": "string", "description": "Exact ID of the conversation where the original request was sent"},
         "after": {"type": "string", "description": "Timezone-aware ISO time of the original request"},
     }
     return {"type": "object", "description": "Check the authorized read operation before waking the Goal",
@@ -41,20 +43,23 @@ def _configured_get(probe: dict) -> tuple[dict, dict, str]:
     if method is None or method["method"] != "GET":
         raise ValueError("Reply polling requires an existing declared GET operation")
     url, _body = request_parts(spec, method, probe["arguments"])
-    return spec, headers, hashlib.sha256(url.encode()).hexdigest()
+    # A custom API has no independent principal resolver. Rotated credentials
+    # and account replacements both require an explicit new wait binding.
+    identity = json.dumps([url, {key.lower(): value for key, value in headers.items()}], sort_keys=True)
+    return spec, headers, hashlib.blake2b(identity.encode(), digest_size=32).hexdigest()
 
 
 def build_probe(value: object, deadline: datetime) -> dict:
     if not isinstance(value, dict) or set(value) != set(probe_schema()["properties"]):
         raise ValueError("Supply the connector, exact conversation read and reply selectors")
-    for name in ("connector", "operation", "sender"):
+    for name in ("connector", "operation", "sender", "thread"):
         text = value[name]
         if not isinstance(text, str) or not 0 < len(text) <= 256 or text.strip() != text:
-            raise ValueError("Expected a configured connector, operation and exact sender")
+            raise ValueError("Expected a configured connector, operation, exact sender and thread")
     args = value["arguments"]
     if not isinstance(args, dict) or set(args) - {"path", "query"} or len(json.dumps(args)) > 8000:
         raise ValueError("Reply polling accepts only bounded path and query arguments")
-    for name in ("items_path", "id_path", "sender_path", "time_path"):
+    for name in ("items_path", "id_path", "sender_path", "thread_path", "time_path"):
         path = value[name]
         if (not isinstance(path, list) or not (0 if name == "items_path" else 1) <= len(path) <= 6
                 or not all(isinstance(key, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,80}", key) for key in path)):
@@ -79,13 +84,19 @@ def _position(reply: dict) -> tuple[datetime, str]:
     return _instant(reply["received_at"]), reply["message_id"]
 
 
+def bound_read(wait: dict) -> tuple[dict, dict]:
+    probe = wait["reply_probe"]
+    spec, headers, target = _configured_get(probe)
+    if target != probe["target"] or not probe.get("thread_path") or not probe.get("thread"):
+        raise ValueError("The bound conversation or its credentials have changed")
+    return spec, headers
+
+
 def find_reply(wait: dict) -> dict | None:
     from tools.connectors.http_api import execute
 
     probe = wait["reply_probe"]
-    spec, headers, target = _configured_get(probe)
-    if target != probe["target"]:
-        raise ValueError("The bound conversation read has changed")
+    spec, headers = bound_read(wait)
     result = execute(spec, probe["operation"], probe["arguments"], headers)
     if not 200 <= result["status"] < 300:
         raise ValueError("The configured conversation read failed")
@@ -97,7 +108,7 @@ def find_reply(wait: dict) -> dict | None:
     matches = []
     for row in rows:
         sender = _value(row, probe["sender_path"])
-        if sender != probe["sender"]:
+        if sender != probe["sender"] or _value(row, probe["thread_path"]) != probe["thread"]:
             continue
         identity = _value(row, probe["id_path"])
         if not isinstance(identity, str) or not re.fullmatch(r"[A-Za-z0-9_.:@/-]{1,200}", identity):
@@ -122,23 +133,65 @@ def proves_polled_reply(wait: dict, ref: dict) -> bool:
 def stage_reply(tag: dict, job_id: str, wait: dict, prompt: str) -> dict | None:
     from cron.wait_binding import update_admitted_wait
 
-    reply = wait.get("pending_reply")
-    if reply is None and (observed := find_reply(wait)) is not None:
-        reply = {**observed, "prompt": prompt}
-    if reply is not None:
-        # The exact receipt is recoverable even if the process exits before publication.
-        update_admitted_wait(tag, job_id, lambda current: current.update(pending_reply=reply))
+    if reply := wait.get("pending_reply"):
+        return reply
+    observed = find_reply(wait)
+    if observed is None:
+        return None
+    reply = {**observed, "prompt": prompt}
+    # The exact receipt is recoverable even if the process exits before publication.
+    update_admitted_wait(tag, job_id, lambda current: current.update(pending_reply=reply))
     return reply
 
 
-def commit_reply(tag: dict, job_id: str, reply: dict) -> None:
-    from cron.wait_binding import update_admitted_wait
+def reply_request_id(reply: dict) -> str:
+    digest = hashlib.sha256(reply["message_id"].encode()).hexdigest()
+    return f"reply:{digest}:{reply.get('attempt', 0)}"
 
-    def commit(wait):
-        if wait.get("pending_reply") != reply:
-            raise ValueError("The staged reply no longer matches the admitted reply")
-        wait["reply_cursor"] = {key: reply[key] for key in ("message_id", "received_at")}
-        wait.pop("pending_reply")
-        wait.setdefault("reply_receipts", []).append(reply["message_id"])
 
-    update_admitted_wait(tag, job_id, commit)
+def record_delivery(wait: dict, reply: dict, event_id: str) -> None:
+    wait["reply_cursor"] = {key: reply[key] for key in ("message_id", "received_at")}
+    wait.pop("pending_reply")
+    receipts = wait.setdefault("reply_receipts", {})
+    if isinstance(receipts, list):
+        receipts = wait["reply_receipts"] = dict.fromkeys(receipts)
+    receipts[reply["message_id"]] = event_id
+
+
+def accept_main_reply(store, project_id, header):
+    """Accept the exact staged observation at the owning main's turn boundary."""
+    from cron.wait_binding import matches_wait
+    from tools.delegate_project_goal import active_goal
+
+    metadata = header["metadata"]
+    job_id, event_id, ref = metadata.get("job_id"), header.get("event_id"), metadata["reply_ref"]
+    if not isinstance(event_id, str):
+        return False
+
+    def accept(workspace, conn):
+        wait = workspace.get("external_wait")
+        if (not matches_wait(wait, metadata.get("wait_id"), job_id)
+                or wait["mode"] != "resume_main" or wait["state"] != "BOUND"
+                or not isinstance(ref, dict) or not proves_polled_reply(wait, ref)
+                or _instant(wait["deadline"]) <= datetime.now(UTC)):
+            return False
+        goal = workspace["goal_state"]
+        archived, paused = conn.execute(
+            "SELECT archived,paused FROM delegated_projects WHERE subagent_id=?", (project_id,),
+        ).fetchone()
+        if archived or not active_goal(goal):
+            return False
+        active = not paused and goal["status"] != "blocked"
+        reply = wait.get("pending_reply")
+        if reply and ref == reply_reference(reply) and event_id == f"{job_id}:{reply_request_id(reply)}":
+            if active:
+                record_delivery(wait, reply, event_id)
+            else:
+                # The old admission is retired while paused. Keep the verified
+                # observation for the next runnable timer occurrence.
+                reply["attempt"] = reply.get("attempt", 0) + 1
+            return active
+        receipts = wait.get("reply_receipts")
+        return active and isinstance(receipts, dict) and receipts.get(ref["message_id"]) == event_id
+
+    return store.mutate_workspace(project_id, accept, active_only=False)

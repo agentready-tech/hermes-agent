@@ -99,10 +99,11 @@ def operation_returns(store, identity):
 
 
 def add_evidence(goal, reference, kind, value):
-    """An exact receipt replay cannot create a second change to the Goal."""
-    if reference in goal["evidence"]:
+    """Repeated tool output does not advance the Goal, even under a new call ID."""
+    evidence = {"kind": kind, "value": value}
+    if reference in goal["evidence"] or kind == "tool result" and evidence in goal["evidence"].values():
         return False
-    goal["evidence"][reference] = {"kind": kind, "value": value}
+    goal["evidence"][reference] = evidence
     goal["revision"] += 1
     goal["attempts_without_progress"] = 0
     goal.pop("attempted_steps", None)
@@ -262,6 +263,7 @@ def close_goal(store, project_id, outcome, evidence=(), *, verified_revision=Non
     def finish(goal):
         goal.update(status=goal["outcome"], wake_id=None)
         goal.pop("wake_step", None)
+        goal.pop("wake_revision", None)
         return goal
 
     return mutate_goal(store, project_id, finish)
@@ -281,6 +283,7 @@ def set_goal_paused(store, project_id, paused):
             # A wake already admitted before the pause cannot start this Goal later.
             goal["wake_id"] = None
             goal.pop("wake_step", None)
+            goal.pop("wake_revision", None)
             if not paused and goal["status"] != "blocked":
                 # A ready Goal is recoverable even if the gateway exits now. Its
                 # continuation checks the saved wait, operation and worker state.
@@ -291,6 +294,7 @@ def set_goal_paused(store, project_id, paused):
                     goal["wake_sequence"] += 1
                     goal["wake_id"] = f'{project_id}:{goal["wake_sequence"]}'
                     goal["wake_step"] = "Read the queued results and recover accepted work for this saved Project Goal."
+                    goal["wake_revision"] = goal["revision"]
         return goal
 
     return store.mutate_workspace(project_id, change, active_only=False)
@@ -318,6 +322,7 @@ def _change_status(store, segment, project_id, op, args):
             goal.update(status="blocked", blocker=_text(args, "blocker", required=True),
                         unblock=_text(args, "unblock", required=True), wake_id=None)
             goal.pop("wake_step", None)
+            goal.pop("wake_revision", None)
             if segment.parent_goal_id:
                 goal["escalation_input_id"] = segment.input_id if args.get("notify") is True else None
         elif goal["status"] in {"blocked", "pending"}:

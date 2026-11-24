@@ -32,6 +32,7 @@ def source(main_home):
     probe = {'connector': 'fixture-chat', 'operation': 'thread_history',
              'arguments': {'path': {'thread': 'approved-thread'}}, 'items_path': ['messages'],
              'id_path': ['id'], 'sender_path': ['author', 'id'], 'time_path': ['sentAt'],
+             'thread_path': ['thread'], 'thread': 'approved-thread',
              'sender': 'supplier-1', 'after': after.isoformat()}
     return actor, project, probe, after, config
 
@@ -47,11 +48,27 @@ def bind(source):
 
 
 def row(identity, sender, instant):
-    return {'id': identity, 'author': {'id': sender}, 'sentAt': instant.isoformat()}
+    return {'id': identity, 'author': {'id': sender}, 'sentAt': instant.isoformat(), 'thread': 'approved-thread'}
 
 
 def body(*rows):
     return 200, json.dumps({'messages': rows}).encode()
+
+
+def deliver_main(actor, inbox, record, proceed):
+    from hermes_runtime.adapters.goal_turn import run_segment
+    from hermes_runtime.sessions import HOME_SESSION_ID
+
+    previous = actor._agentready_active_turn
+    actor._agentready_active_turn = turn = SimpleNamespace(inbox=inbox)
+    try:
+        result = run_segment(actor, turn, proceed, record[1], goal_records=[record], conversation_history=[])
+        if proceed.called:
+            actor._session_db.append_message(HOME_SESSION_ID, "user", record[1], platform_message_id=record[0])
+        inbox.acknowledge_recorded()
+        return result
+    finally:
+        actor._agentready_active_turn = previous
 
 
 def test_due_timer_is_quiet_until_the_exact_sender_replies(source, monkeypatch):
@@ -77,7 +94,11 @@ def test_due_timer_is_quiet_until_the_exact_sender_replies(source, monkeypatch):
         assert latest_execution(job_id)['delivery_outcome'] == ('admitted' if expected == 'admitted' else 'suppressed')
         if read.call_count == 1:
             assert inbox.pending() == []
-    [(_identity, prompt)] = inbox.pending()
+        elif expected == 'admitted':
+            [record] = inbox.pending()
+            _, prompt = record
+            deliver_main(actor, inbox, record, Mock(return_value={'completed': True}))
+    assert inbox.pending() == []
     metadata = json.loads(prompt.splitlines()[1])['metadata']
     ref = {'kind': 'polled_reply', 'message_id': 'reply-1'}
     assert metadata['reply_ref'] == ref

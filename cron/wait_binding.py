@@ -229,28 +229,44 @@ def close_terminal_waits(due, snapshot, now):
     return [job for job in due if job['id'] not in excluded]
 
 
+def _runnable_bound_job(job, identity):
+    """Resolve the exact runnable record while the caller holds the jobs lock."""
+    from cron.jobs import is_job_runnable, is_terminal_job
+
+    project_id, wait_id, job_id = identity
+    current = exact_job(records(), job_id, project_id, wait_id)
+    if (current is None or current.get('external_wait') != job['external_wait']
+            or not is_job_runnable(current) or is_terminal_job(current)):
+        raise ValueError('External wait timer is not runnable')
+    claim = job.get('fire_claim')
+    if isinstance(claim, dict) and (owner := claim.get('by')):
+        active = current.get('fire_claim')
+        if not isinstance(active, dict) or active.get('by') != owner:
+            raise ValueError('External wait timer fire owner changed')
+    validate_timer(current)
+    return current
+
+
 @contextmanager
-def admitted_binding(job):
-    """Check the current bound pair under the same per-job fence as removal."""
-    from cron.jobs import _fire_job_lock, _jobs_lock, is_job_runnable, is_terminal_job
+def admitted_binding(job, *, publish=False):
+    """Fence the bound pair. Hold the jobs lock through local publication only."""
+    from contextlib import ExitStack
+    from cron.jobs import _fire_job_lock, _jobs_lock
 
     identity = _job_identity(job)
     if identity is None or job['external_wait']['state'] != 'bound':
         raise ValueError('External wait timer is not bound')
     project_id, wait_id, job_id = identity
-    tag = job['external_wait']
     home = store_home()
-    with _fire_job_lock(job_id) as acquired:
+    with _fire_job_lock(job_id) as acquired, ExitStack() as publication:
         if not acquired:
             raise ValueError('External wait fire fence unavailable')
-        with _jobs_lock(strict=True):
-            current = exact_job(records(), job_id, project_id, wait_id)
-            if (current is None or current.get('external_wait') != tag or not is_job_runnable(current)
-                    or is_terminal_job(current)):
-                raise ValueError('External wait timer is not runnable')
-            validate_timer(current)
+        publication.enter_context(_jobs_lock(strict=True))
+        current = _runnable_bound_job(job, identity)
+        if not publish:
+            publication.close()
         with closing(sqlite3.connect((home / 'state.db').as_uri() + '?mode=ro', uri=True)) as conn:
             workspace = _active_workspace(conn, project_id, wait_id, job_id)
         if workspace is None:
             raise ValueError('External wait timer does not match an active project wait')
-        yield tag, current, workspace
+        yield current['external_wait'], current, workspace

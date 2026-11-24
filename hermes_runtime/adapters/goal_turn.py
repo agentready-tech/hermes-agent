@@ -146,6 +146,14 @@ def _bound_event(store, segment, header):
         goal = read_goal(store, project_id)
     except ValueError:
         return False  # A native AGE-6 timer can belong to a legacy project.
+    if source == "cron" and "reply_ref" in metadata:
+        from cron.wait_reply_probe import accept_main_reply
+
+        if accept_main_reply(store, project_id, header):
+            segment.bind(project_id)
+        else:
+            segment.stale_inputs += 1
+        return True
     if not active_goal(goal) or goal["status"] == "blocked":
         segment.stale_inputs += 1
         return True
@@ -374,13 +382,27 @@ def _home_recovery_records(turn):
 
 
 def _queued_prompt(records, steer, kwargs):
+    from agent.context_compressor import MODEL_ONLY_DISPLAY_METADATA_KEY
     from hermes_runtime.events import combine_event_content
 
     kwargs.pop("user_message", None)
     kwargs.pop("persist_user_message", None)
     kwargs["persist_user_platform_id"] = records[0][0] if records else None
-    kwargs["persist_user_display_metadata"] = {"agentready_inbox_ids": [i for i, _ in records]}
-    return combine_event_content([*([steer] if steer else []), *(content for _, content in records)])
+    metadata = {"agentready_inbox_ids": [i for i, _ in records]}
+    kwargs["persist_user_display_metadata"] = metadata
+    prefix = [steer] if steer else []
+    inputs = [content for _, content in records]
+    visible = [content for content in inputs if not goal_inbox_event(content)]
+    prompt = combine_event_content([*prefix, *inputs])
+    if len(visible) != len(inputs):
+        if prefix or visible:
+            clean = combine_event_content([*prefix, *visible])
+            if isinstance(prompt, list) and isinstance(clean, str):
+                clean = [{"type": "text", "text": clean}]
+            kwargs["persist_user_message"] = clean
+        else:
+            metadata[MODEL_ONLY_DISPLAY_METADATA_KEY] = True
+    return prompt
 
 
 def run_segment(agent, turn, proceed, *args, goal_records=(), goal_steer=None, **kwargs):
@@ -522,20 +544,23 @@ def _advance_wake(project_id, goal, step: str, consumed, interrupted: bool):
     if consumed:
         previous = goal.pop("wake_step", None)
         goal["wake_id"] = None
-        goal["attempts_without_progress"] += 1
-        if previous and not interrupted:
-            goal.setdefault("attempted_steps", []).append(_step_key(previous))
+        if goal.pop("wake_revision", goal["revision"]) == goal["revision"]:
+            goal["attempts_without_progress"] += 1
+            if previous and not interrupted:
+                goal.setdefault("attempted_steps", []).append(_step_key(previous))
 
     if (not any(char.isalnum() for char in step) or _step_key(step) in goal.get("attempted_steps", ())
             or goal["attempts_without_progress"] >= DEFAULT_MAX_TURNS):
         goal.update(status="pending", wake_id=None)
         goal.pop("wake_step", None)
+        goal.pop("wake_revision", None)
     else:
         goal["status"] = "ready"
         if not goal.get("wake_id") or goal.get("wake_step") != step:
             goal["wake_sequence"] += 1
             goal["wake_id"] = f'{project_id}:{goal["wake_sequence"]}'
             goal["wake_step"] = step
+            goal["wake_revision"] = goal["revision"]
     return goal
 
 
@@ -559,6 +584,7 @@ def _write_transition(store, project_id, snapshot, *, reviewed=False, verdict=No
         if branch:
             goal.update(branch)
             goal.pop("wake_step", None)
+            goal.pop("wake_revision", None)
             if goal["status"] != "waiting":
                 goal.pop("wait_id", None)
             return goal
