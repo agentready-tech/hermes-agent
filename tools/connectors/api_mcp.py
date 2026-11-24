@@ -6,13 +6,18 @@ import sys
 from http.client import HTTPException
 
 
-def connection(name):
+def connection(name, *, allowed_operation=None):
     from hermes_cli.config import read_raw_config_readonly
     from hermes_constants import get_hermes_home
     from dotenv import dotenv_values
     from pathlib import Path
     from tools.connectors.http_api import validate_api
     cfg = (read_raw_config_readonly().get("mcp_servers") or {}).get(name) or {}
+    if allowed_operation is not None:
+        from tools.mcp_tool_registration import _make_tool_filter
+
+        if not cfg.get("enabled", True) or not _make_tool_filter(name, cfg)(allowed_operation):
+            raise ValueError("The configured API operation is disabled")
     spec = validate_api(cfg.get("hermes_api"))
     headers = {}
     for header, template in cfg.get("hermes_api_headers", {}).items():

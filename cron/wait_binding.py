@@ -122,18 +122,35 @@ def matches_wait(wait, wait_id, job_id):
             and wait.get('mode') in {'resume_main', 'resume_child'})
 
 
-def _active_workspace(home, project_id, wait_id, job_id):
+def _active_workspace(conn, project_id, wait_id, job_id):
+    from tools.delegate_project_goal import active_goal
     from tools.delegate_project_store import _goal_input_state
 
-    with closing(sqlite3.connect((home / 'state.db').as_uri() + '?mode=ro', uri=True)) as conn:
-        workspace, archived, paused = _owned_project(conn, project_id)
-        wait = workspace.get('external_wait')
-        if archived or paused or not matches_wait(wait, wait_id, job_id) or wait.get('state') != 'BOUND':
-            return None
-        if wait['mode'] == 'resume_child' and _goal_input_state(conn, project_id) != 'open':
-            return None
-        deadline = datetime.fromisoformat(wait['deadline'])
-        return workspace if deadline.tzinfo is not None and datetime.now(UTC) < deadline else None
+    workspace, archived, paused = _owned_project(conn, project_id)
+    wait = workspace.get('external_wait')
+    if archived or paused or not matches_wait(wait, wait_id, job_id) or wait.get('state') != 'BOUND':
+        return None
+    goal = workspace.get('goal_state')
+    if goal and (not active_goal(goal) or goal['status'] == 'blocked'):
+        return None
+    if wait['mode'] == 'resume_child' and _goal_input_state(conn, project_id) != 'open':
+        return None
+    deadline = datetime.fromisoformat(wait['deadline'])
+    return workspace if deadline.tzinfo is not None and datetime.now(UTC) < deadline else None
+
+
+def update_admitted_wait(tag, job_id, change):
+    """Commit a poll checkpoint under the caller's existing fire fence."""
+    from hermes_cli.sqlite_util import transaction
+    from tools.delegate_project_store import write_workspace
+
+    project_id, wait_id = tag['project_id'], tag['wait_id']
+    uri = (store_home() / 'state.db').as_uri() + '?mode=rw'
+    with transaction(sqlite3.connect(uri, uri=True), immediate=True) as conn:
+        workspace = _active_workspace(conn, project_id, wait_id, job_id)
+        if workspace is None:
+            raise ValueError('External wait changed during the reply check')
+        return write_workspace(conn, project_id, workspace, lambda saved, _conn: change(saved['external_wait']))
 
 
 def _job_identity(job):
@@ -232,7 +249,8 @@ def admitted_binding(job):
                     or is_terminal_job(current)):
                 raise ValueError('External wait timer is not runnable')
             validate_timer(current)
-        workspace = _active_workspace(home, project_id, wait_id, job_id)
+        with closing(sqlite3.connect((home / 'state.db').as_uri() + '?mode=ro', uri=True)) as conn:
+            workspace = _active_workspace(conn, project_id, wait_id, job_id)
         if workspace is None:
             raise ValueError('External wait timer does not match an active project wait')
         yield tag, current, workspace

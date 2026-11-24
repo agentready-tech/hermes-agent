@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 import logging
 import uuid
 
@@ -131,11 +132,11 @@ def admit_cron(job, *, extra_prompt=None, cancel_event=None, execution_id=None):
         activate_home(get_hermes_home())
     request_id = execution_id or job.get("execution_id") or uuid.uuid4().hex
     job["execution_id"] = request_id
+    job.pop("_managed_monitor_no_change", None)
     if wait_timer:
         return _admit_wait_timer(job, request_id, cancel_event)
     # The managed validator above still rejects both external monitor inputs.
     from cron.scheduler import _apply_monitor_gate
-    job.pop("_managed_monitor_no_change", None)
     job_id = job["id"]
     early, extra_prompt, monitor_context = _apply_monitor_gate(
         job, job_id, job.get("name") or job_id, extra_prompt,
@@ -152,30 +153,60 @@ def admit_cron(job, *, extra_prompt=None, cancel_event=None, execution_id=None):
 
 def _admit_wait_timer(job, request_id, cancel_event):
     import sqlite3
+    from http.client import HTTPException
+    from cron.monitor import no_change_result
     from cron.wait_binding import admitted_binding
-    from tools.delegate_project_goal import KEY
+    from cron.wait_reply_probe import commit_reply, reply_reference, stage_reply
 
     try:
         with admitted_binding(job) as (tag, current, workspace):
             if cancel_event is not None and cancel_event.is_set():
                 return False, "Schedule cancelled before admission", "", "cancelled"
             job_id = current["id"]
+            wait, prompt = workspace["external_wait"], current["prompt"]
             metadata = {
                 "job_id": job_id, "execution_id": request_id,
                 "project_id": tag["project_id"], "wait_id": tag["wait_id"],
             }
-            if isinstance(workspace.get(KEY), dict):
-                metadata["project_goal"] = True
-                if workspace[KEY].get("parent_goal_id"):
-                    from tools.delegate_child_goals import publish_child_event
-
-                    receipt = publish_child_event(tag["project_id"], f"{job_id}:{request_id}", current["prompt"],
-                                                  "cron", job_id=job_id, wait_id=tag["wait_id"])
-                    response = f"Queued for assigned worker: {receipt['message_id']}."
-                    return True, response + "\n", response, None
-            return _admit_job_prompt(job_id, request_id, current["prompt"], metadata)
+            reply = None
+            if "reply_probe" in wait:
+                try:
+                    reply = stage_reply(tag, job_id, wait, prompt)
+                except (ValueError, RuntimeError, OSError, sqlite3.Error, KeyError, TypeError, HTTPException):
+                    return False, "External wait reply check failed", "", "external_wait_reply_check_failed"
+                if reply is None:
+                    job["_managed_monitor_no_change"] = True
+                    return no_change_result(job_id, current.get("name") or job_id)
+                if cancel_event is not None and cancel_event.is_set():
+                    return False, "Schedule cancelled before admission", "", "cancelled"
+                metadata["reply_ref"] = reply_reference(reply)
+                request_id = "reply:" + hashlib.sha256(reply["message_id"].encode()).hexdigest()
+                prompt = (reply["prompt"] + "\n\nThe bound connector observed a new message from the expected sender. "
+                          "Read the message in the saved source and evaluate the reply criterion. "
+                          f"Original reply reference: {json.dumps(metadata['reply_ref'])}")
+            result = _handoff_wait(metadata, request_id, prompt, workspace.get("goal_state"))
+            if reply is not None:
+                try:
+                    commit_reply(tag, job_id, reply)
+                except (ValueError, RuntimeError, OSError, sqlite3.Error):
+                    logger.warning("External wait reply checkpoint deferred for job %s", job_id)
+            return result
     except (ValueError, RuntimeError, OSError, sqlite3.Error, KeyError, TypeError):
         return False, "External wait timer not admitted", "", "external_wait_not_active"
+
+
+def _handoff_wait(metadata, request_id, prompt, goal):
+    job_id = metadata["job_id"]
+    if isinstance(goal, dict):
+        metadata["project_goal"] = True
+        if goal.get("parent_goal_id"):
+            from tools.delegate_child_goals import publish_child_event
+
+            details = {key: metadata[key] for key in ("job_id", "wait_id", "reply_ref") if key in metadata}
+            receipt = publish_child_event(metadata["project_id"], f"{job_id}:{request_id}", prompt, "cron", **details)
+            response = f"Queued for assigned worker: {receipt['message_id']}."
+            return True, response + "\n", response, None
+    return _admit_job_prompt(job_id, request_id, prompt, metadata)
 
 
 def _admit_job_prompt(job_id, request_id, prompt, metadata):
