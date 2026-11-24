@@ -44,7 +44,7 @@ def _dispatch_origin(parent, background):
     from hermes_runtime.adapters.goal_turn import current_segment, dispatch_goal_id
 
     segment = current_segment(parent)
-    if segment is not None and segment.project_ids and not segment.selected_id:
+    if segment is not None and (segment.parent_goal_id or segment.project_ids) and not segment.selected_id:
         raise ValueError("Select the exact Project Goal before dispatching a persistent worker")
     if goal_id := dispatch_goal_id(parent):
         origin["goal_project_id"] = goal_id
@@ -98,6 +98,16 @@ def _build_child(parent, store, project, message):
     child._persistent_project_id = project["subagent_id"]
     options = json.loads(message["options_json"])
     child._project_input_goal_id = project_input_goal_id(message)
+    from tools.delegate_child_goals import orchestrator_turn
+
+    scope = orchestrator_turn(parent, store, project, message, child)
+    if scope is not None:
+        from hermes_runtime.standalone.instructions import ORCHESTRATOR_GOAL_INSTRUCTIONS
+        from tools.delegate_external_wait import native_schema
+
+        child._project_goal_segment = scope
+        child.ephemeral_system_prompt = (child.ephemeral_system_prompt or "") + "\n\n" + ORCHESTRATOR_GOAL_INSTRUCTIONS
+        child.tools = native_schema(child)
     child._delegation_id = message["message_id"]
     child._progress_identity_ref["delegation_id"] = message["message_id"]
     child._delegate_owner_kwargs = {"owner_session_id": owner_ui or None,
@@ -112,6 +122,10 @@ def _build_child(parent, store, project, message):
             raise ValueError("The project's saved worktree is missing; restore it before resuming this project")
     child._delegate_save_workspace = lambda info: _save_workspace(parent, project["subagent_id"], info)
     history = store.history(sid) if store.session_exists(sid) else []
+    if scope is not None:
+        from hermes_runtime.adapters.goal_turn import history_tool_result_ids
+
+        scope.history_tool_results = history_tool_result_ids(history)
     # A crash may have already admitted this exact user row; continue from that request,
     # without inserting a second copy or discarding completed tool results.
     pending = next((m for m in reversed(history) if m.get("role") == "user" and m.get("message_id") == message["message_id"]), None)
@@ -175,13 +189,14 @@ def _run(parent, store, project, message, child, text):
         return result
 
 
-def recover_projects(parent):
+def recover_projects(parent, project_ids=None):
     """Drain saved project inputs; a dead worker never owns the durable project identity."""
     with ProjectStore(parent) as store:
-        return _recover_projects(parent, store)
+        return _recover_projects(parent, store, project_ids)
 
 
-def _recover_projects(parent, store):
+def _recover_projects(parent, store, project_ids=None):
+    from hermes_runtime.adapters.goal_turn import current_segment
     from tools.delegate_tool import _get_max_concurrent_children, is_spawn_paused
     if is_spawn_paused():
         return []
@@ -189,6 +204,12 @@ def _recover_projects(parent, store):
     from tools.daemon_pool import DaemonThreadPoolExecutor
     from tools.thread_context import propagate_context_to_thread
     projects = store.projects()
+    if project_ids is not None:
+        projects = [project for project in projects if project["subagent_id"] in project_ids]
+    segment = current_segment(parent)
+    if segment is not None and segment.parent_goal_id:
+        scope = _wake_project_scope(parent, store)
+        projects = [project for project in projects if project["subagent_id"] in scope]
     if not projects:
         return []
     executor = DaemonThreadPoolExecutor(max_workers=_get_max_concurrent_children())
@@ -237,8 +258,10 @@ def _recover_project(parent, store, project):
             continue
         try:
             child, text = _build_child(parent, store, project, message)
-        except MailboxDeferred:
+        except MailboxDeferred as deferred:
             store.release(message)
+            if deferred.pending_delivery:
+                break
             continue
         except Exception:
             store.release(message)
@@ -251,7 +274,8 @@ def _recover_project(parent, store, project):
                     with ProjectStore(parent) as worker_store:
                         return _run(parent, worker_store, p, m, c, t)
                 finally:
-                    recover_projects(parent)
+                    scope = {p["subagent_id"]} if getattr(c, "_project_goal_segment", None) else None
+                    recover_projects(parent, scope)
             handle = dispatch_async_delegation(goal=f"Project {project['project_key']}: {project['goal']}",
                 context=project["context"], toolsets=None, role="leaf", model=child.model,
                 session_key=origin.get("session_key") or store.parent_id, parent_session_id=store.parent_id,
@@ -289,9 +313,19 @@ def _wake_project_scope(parent, store):
     from hermes_runtime.adapters.goal_turn import current_segment
 
     segment = current_segment(parent)
-    if segment is None or not segment.internal or not segment.bound_project_ids:
+    if segment is None:
         return None
-    assigned = segment.bound_project_ids
+    if segment.parent_goal_id:
+        assigned = {row[0] for row in store.db._read_all(
+            "SELECT subagent_id FROM delegated_projects "
+            "WHERE json_extract(workspace_json, '$.goal_state.parent_goal_id')=? "
+            "AND json_extract(workspace_json, '$.goal_state.orchestrator_id')=?",
+            (segment.parent_goal_id, segment.orchestrator_id),
+        )}
+    elif segment.internal and segment.bound_project_ids:
+        assigned = segment.bound_project_ids
+    else:
+        return None
     links = store.db._read_all(
         """SELECT p.subagent_id, json_extract(m.origin_json, '$.goal_project_id'), m.state,
                   json_extract(p.workspace_json, '$.goal_owner_id')
@@ -369,6 +403,11 @@ def _project_action(parent, store, action, tasks, subagent_id, message, query, e
     entries = []
     if action == "spawn":
         # Validate the whole batch before accepting any project input.
+        from hermes_runtime.adapters.goal_turn import current_segment
+
+        segment = current_segment(parent)
+        if segment is not None and segment.parent_goal_id and len(tasks or ()) != 1:
+            raise ValueError("Dispatch exactly one persistent executor for the selected Child Goal")
         keys = _spawn_keys(store, tasks, goal_id, scope)
         workspace = {"goal_owner_id": goal_id} if goal_id else None
         for index, (task, key) in enumerate(zip(tasks, keys, strict=True), 1):
@@ -413,7 +452,7 @@ def _save_workspace(parent, subagent_id, info):
         store.save_workspace(subagent_id, info)
 
 
-def recover_project_work(parent):
+def recover_project_work(parent, project_ids=None):
     """Root turn entry: replay accepted inputs even when the model does not call delegation."""
     if getattr(parent, "_session_db", None) is None:
         return
@@ -421,6 +460,6 @@ def recover_project_work(parent):
     if not isinstance(names, (set, list, tuple, frozenset)) or "delegate_task" not in names:
         return
     try:
-        recover_projects(parent)
+        recover_projects(parent, project_ids)
     except Exception:
         logger.exception("Could not resume pending project delegates; inputs remain saved")

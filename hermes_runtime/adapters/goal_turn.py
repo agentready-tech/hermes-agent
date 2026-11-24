@@ -38,6 +38,10 @@ class GoalSegment:
     obsolete_records: set[str] = field(default_factory=set)
     quiet_source: bool = False
     quiet: bool = False
+    parent_goal_id: str | None = None
+    orchestrator_id: str | None = None
+    external_wait: tuple[str, str] | None = None
+    recovering_orchestrators: set[str] = field(default_factory=set)
 
     def touch(self, project_id):
         self.project_ids.add(project_id)
@@ -51,18 +55,28 @@ class GoalSegment:
 
 def current_segment(agent):
     segment = getattr(getattr(agent, "_agentready_active_turn", None), "goal_segment", None)
+    if segment is None:
+        segment = getattr(agent, "_project_goal_segment", None)
     return segment if isinstance(segment, GoalSegment) else None
 
 
 def dispatch_goal_id(agent):
     """The main's selection or the child run's exact accepted dispatch."""
     segment = current_segment(agent)
-    identity = segment.selected_id if segment is not None else getattr(agent, '_project_input_goal_id', None)
+    identity = (segment.selected_id or segment.parent_goal_id
+                if segment is not None else getattr(agent, '_project_input_goal_id', None))
     return identity if isinstance(identity, str) else None
 
 
 def goal_in_scope(agent, project_id):
     segment = current_segment(agent)
+    if segment is not None and segment.parent_goal_id:
+        return bool(agent._session_db._read_one(
+            "SELECT 1 FROM delegated_projects WHERE subagent_id=? "
+            "AND json_extract(workspace_json, '$.goal_state.parent_goal_id')=? "
+            "AND json_extract(workspace_json, '$.goal_state.orchestrator_id')=?",
+            (project_id, segment.parent_goal_id, segment.orchestrator_id),
+        ))
     return (segment is None or not segment.internal or not segment.bound_project_ids
             or project_id in segment.bound_project_ids)
 
@@ -186,12 +200,23 @@ def _tool_completion(store, segment, identity):
 
 def _native_mail(store, segment, identity):
     row = store.db._read_one(
-        """SELECT root_session_id, delivered_at, json_extract(origin_json, '$.message_goal_project_id') AS project_id
-           FROM delegation_mail WHERE message_id=? AND kind='message'""",
+        """SELECT m.root_session_id, m.delivered_at, m.kind, m.target_session_id,
+                  json_extract(m.origin_json, '$.message_goal_project_id') AS project_id,
+                  COALESCE(json_extract(m.origin_json, '$.child_goal_event.orchestrator_id'),
+                           json_extract(p.workspace_json, '$.goal_state.orchestrator_id')) AS orchestrator_id
+           FROM delegation_mail m LEFT JOIN delegated_projects p
+             ON p.subagent_id=json_extract(m.origin_json, '$.message_goal_project_id')
+           WHERE m.message_id=? AND m.kind IN ('message','child_goal')""",
         (identity,),
     )
     if row is None or not row['project_id'] or store.resolve(row['root_session_id']) != store.resolve(store.parent_id):
         return False
+    child_mail = row["orchestrator_id"] and store.resolve(row["target_session_id"]) != store.resolve(store.parent_id)
+    if row["kind"] == "child_goal" or child_mail:
+        if row["orchestrator_id"] and row["delivered_at"] is None:
+            segment.recovering_orchestrators.add(row["orchestrator_id"])
+        segment.stale_inputs += 1
+        return True
     try:
         goal = read_goal(store, row['project_id'])
     except ValueError:
@@ -214,6 +239,10 @@ def _native_recovery(store, segment, event):
                 if mail_wake_satisfied(conn, message):
                     segment.stale_inputs += 1
                     return True
+            if json.loads(message["origin_json"]).get("child_goal_mail"):
+                segment.recovering_orchestrators.add(message["subagent_id"])
+                segment.stale_inputs += 1
+                return True
     project_id = event.get('goal_project_id')
     if not isinstance(project_id, str):
         return False
@@ -236,6 +265,9 @@ def _native_completion(store, segment, identity):
             return False
         worker_id = message["subagent_id"]
         store.get(worker_id)
+        if json.loads(message["result_json"]).get("goal_continuing"):
+            segment.stale_inputs += 1
+            return True
         origin = json.loads(message["origin_json"])
         project_id = origin.get("goal_project_id") or worker_id
         try:
@@ -277,6 +309,11 @@ def _ingest(agent, segment, records, receipts=()):
             elif not header or _human_followup(content):
                 segment.input_id = identity
                 segment.internal = False
+    if segment.recovering_orchestrators:
+        from tools.delegate_projects import recover_project_work
+
+        recover_project_work(agent, segment.recovering_orchestrators)
+        segment.recovering_orchestrators.clear()
     return recognized
 
 
@@ -298,6 +335,10 @@ def _without_obsolete(turn, segment, records):
     return [(identity, content) for identity, content in records if identity not in segment.obsolete_records]
 
 
+def history_tool_result_ids(history):
+    return {row["tool_call_id"] for row in history if row.get("role") == "tool" and row.get("tool_call_id")}
+
+
 def _input_segment(agent, kwargs, records):
     row = admitted_input.get() or {}
     descriptor = _automation(row) if not records else None
@@ -305,8 +346,7 @@ def _input_segment(agent, kwargs, records):
     segment = GoalSegment(
         row.get("admission_id") if not records else None,
         bool(descriptor or records),
-        {item["tool_call_id"] for item in (kwargs.get("conversation_history") or ())
-         if item.get("role") == "tool" and item.get("tool_call_id")},
+        history_tool_result_ids(kwargs.get("conversation_history") or ()),
     )
     recognized = _ingest(agent, segment, records, receipts) if records or receipts else 0
     segment.quiet_source = bool(recognized and recognized == len(receipts) + len(records) and segment.internal)
@@ -389,6 +429,12 @@ def _goal_judgments(goals):
 
 
 def _working(store, project_id):
+    if store.db._read_one(
+        """SELECT 1 FROM delegated_projects WHERE json_extract(workspace_json,'$.goal_state.parent_goal_id')=?
+           AND archived=0 AND json_extract(workspace_json,'$.goal_state.status') NOT IN ('done','cancelled','inactive')
+           LIMIT 1""", (project_id,),
+    ):
+        return True
     return bool(store.db._read_one(
         """SELECT 1 FROM delegated_project_messages m JOIN delegated_projects p USING(subagent_id)
            WHERE p.paused=0 AND p.archived=0 AND m.state IN ('pending', 'running')
@@ -458,6 +504,15 @@ def _write_transition(store, project_id, branch, checked_revision, consumed):
 def _publish(project_id, goal):
     from hermes_runtime.standalone.events import _admit_scheduled_prompt
 
+    if goal.get("parent_goal_id"):
+        from tools.delegate_child_goals import publish_child_event, publish_child_result
+
+        if goal["status"] in {"done", "blocked"}:
+            publish_child_result(project_id, goal)
+        elif goal["status"] == "ready" and goal.get("wake_id"):
+            publish_child_event(project_id, goal["wake_id"],
+                                "Continue this assigned stage and reconcile the saved outcomes before taking another step.", "goal")
+        return
     if goal["status"] == "ready" and goal.get("wake_id"):
         _admit_scheduled_prompt(
             "Continue the saved Project Goal. Read its last confirmed stage and reconcile any accepted tool work "
@@ -485,7 +540,13 @@ def _consumed_wake(store, wake_id):
 
 def _recover_ready(store, project_id, goal):
     wake_id = goal.get("wake_id")
-    if not wake_id or _consumed_wake(store, wake_id):
+    if goal.get("parent_goal_id"):
+        from tools.delegate_child_goals import consumed_child_wake
+
+        consumed = wake_id and consumed_child_wake(store, wake_id)
+    else:
+        consumed = wake_id and _consumed_wake(store, wake_id)
+    if not wake_id or consumed:
         goal = _write_transition(store, project_id, _branch(store, project_id, goal), None, wake_id)
     _publish(project_id, goal)
 
@@ -502,6 +563,15 @@ def resume_paused_goal(store, project_id):
 def finish_segment(agent, response, *, verify=True):
     """Finalize selected goals before the model's final response is presented."""
     segment = current_segment(agent)
+    if segment is not None and segment.parent_goal_id:
+        segment.project_ids.update(row[0] for row in agent._session_db._read_all(
+            """SELECT subagent_id FROM delegated_projects
+               WHERE json_extract(workspace_json,'$.goal_state.parent_goal_id')=?
+                 AND json_extract(workspace_json,'$.goal_state.orchestrator_id')=?
+                 AND json_extract(workspace_json,'$.goal_state.revision') >
+                     json_extract(workspace_json,'$.goal_state.checked_revision')""",
+            (segment.parent_goal_id, segment.orchestrator_id),
+        ))
     if segment is None or not segment.project_ids:
         return response
     with ProjectStore(agent) as store:
@@ -521,19 +591,19 @@ def finish_segment(agent, response, *, verify=True):
             if evidence:
                 try:
                     closed = close_goal(store, project_id, "done", evidence)
+                    if closed["status"] == "done":
+                        segment.notify = True
+                        if closed.get("parent_goal_id"):
+                            _publish(project_id, closed)
                 except (ValueError, OSError, RuntimeError, sqlite3.Error):
-                    logger.warning("Project Goal cleanup deferred", exc_info=True)
-                else:
-                    if closed["status"] != "done":
-                        continue
-                    segment.notify = True
+                    logger.warning("Project Goal completion reconciliation deferred", exc_info=True)
                 continue
             current = _write_transition(store, project_id, _branch(store, project_id, goal),
                                         goal["revision"] if evidence is not None else None,
                                         segment.wake_ids.get(project_id))
             try:
                 _publish(project_id, current)
-            except (OSError, RuntimeError, sqlite3.Error):
+            except (ValueError, OSError, RuntimeError, sqlite3.Error):
                 logger.warning("Project Goal wake deferred; next step remains saved", exc_info=True)
     if segment.quiet_source:
         segment.quiet = not segment.notify
@@ -541,30 +611,53 @@ def finish_segment(agent, response, *, verify=True):
     return response
 
 
+def _recover_saved_goal(store, project_id, goal):
+    if goal["status"] == "closing":
+        current = close_goal(store, project_id, goal["outcome"], goal["final_evidence"])
+        if current.get("parent_goal_id") and current["status"] == "done":
+            _publish(project_id, current)
+    elif goal["status"] == "ready":
+        _recover_ready(store, project_id, goal)
+    elif (goal["status"] == "waiting" and not _waiting(store, project_id, until_deadline=True)
+          or goal["status"] == "awaiting_operation" and not _awaiting_operation(store, goal)):
+        current = _write_transition(store, project_id, _branch(store, project_id, goal), None, None)
+        _publish(project_id, current)
+    elif goal.get("parent_goal_id") and goal["status"] in {"done", "blocked"}:
+        _publish(project_id, goal)
+
+
 def recover():
     """Use the existing main inbox recovery pass for interrupted Goal transitions."""
     from types import SimpleNamespace
     from hermes_runtime.adapters.state import current_home_session_id
     from hermes_state import SessionDB
+    from tools.delegate_child_goals import recovery_owner
 
-    with SessionDB() as db, ProjectStore(SimpleNamespace(
-        _session_db=db, session_id=current_home_session_id()
-    )) as store:
+    home = current_home_session_id()
+    with SessionDB() as db:
         rows = db._read_all(
-            """SELECT subagent_id FROM delegated_projects WHERE paused=0 AND archived=0
-               AND json_extract(workspace_json, '$.goal_state.status') IN ('ready','closing','waiting','awaiting_operation')"""
+            """WITH goals AS (
+                   SELECT subagent_id, json_extract(workspace_json, '$.goal_state') AS state
+                   FROM delegated_projects WHERE paused=0 AND archived=0
+               )
+               SELECT subagent_id, state FROM goals
+               WHERE json_extract(state, '$.status') IN ('ready','closing','waiting','awaiting_operation')
+                  OR (json_extract(state, '$.parent_goal_id') IS NOT NULL
+                      AND json_extract(state, '$.status') IN ('done','blocked')
+                      AND NOT EXISTS (SELECT 1 FROM delegation_mail WHERE event_key='child-goal:' || subagent_id ||
+                          CASE WHEN json_extract(state, '$.status')='done' THEN ':done'
+                               ELSE ':blocked:' || json_extract(state, '$.wake_sequence') || ':' ||
+                                    json_extract(state, '$.revision') END))"""
         )
-        for (project_id,) in rows:
+        for project_id, state in rows:
             try:
-                goal = read_goal(store, project_id)
-                if goal["status"] == "closing":
-                    close_goal(store, project_id, goal["outcome"], goal["final_evidence"])
-                elif goal["status"] == "ready":
-                    _recover_ready(store, project_id, goal)
-                elif (goal["status"] == "waiting" and not _waiting(store, project_id, until_deadline=True)
-                      or goal["status"] == "awaiting_operation" and not _awaiting_operation(store, goal)):
-                    branch = _branch(store, project_id, goal)
-                    current = _write_transition(store, project_id, branch, None, None)
-                    _publish(project_id, current)
+                goal = json.loads(state)
+                owner = home
+                if goal.get("parent_goal_id"):
+                    with db._read_ctx() as conn:
+                        owner = recovery_owner(conn, project_id, goal)
+                if owner:
+                    with ProjectStore(SimpleNamespace(_session_db=db, session_id=owner)) as store:
+                        _recover_saved_goal(store, project_id, read_goal(store, project_id))
             except (ValueError, OSError, RuntimeError, sqlite3.Error):
                 logger.debug("Could not reconcile a saved Project Goal", exc_info=True)

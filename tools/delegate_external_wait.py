@@ -34,11 +34,15 @@ def native_schema(agent, tool_defs=None, *, enabled_toolsets=None, disabled_tool
     """Copy only the native main's schema, not the registry/MCP definition."""
     tool_defs = agent.tools if tool_defs is None else tool_defs
     names = {tool["function"]["name"] for tool in tool_defs}
-    if "delegate_task" not in names or not _owns_main(agent):
+    from hermes_runtime.adapters.goal_turn import current_segment
+
+    segment = current_segment(agent)
+    child_goals = bool(segment and segment.parent_goal_id)
+    if "delegate_task" not in names or not (child_goals or _owns_main(agent)):
         return tool_defs
     from tools.delegate_project_goal import FIELDS as goal_operations, schema_fields
 
-    if "cronjob_manage" not in names:
+    if not child_goals and "cronjob_manage" not in names:
         from model_tools import get_tool_definitions
 
         # The bound operation needs live main state. Keep its native entry available
@@ -53,7 +57,7 @@ def native_schema(agent, tool_defs=None, *, enabled_toolsets=None, disabled_tool
         "op": {"type": "string", "enum": sorted(_FIELDS.keys() | goal_operations.keys())},
         "project_id": {"type": "string", "description": "Exact ID of an existing parent-owned project"},
         "wait_id": {"type": "string", "description": "Required for select and close"},
-        "mode": {"type": "string", "enum": ["resume_main"]},
+        "mode": {"type": "string", "enum": ["resume_child" if child_goals else "resume_main"]},
         "reply_criterion": {"type": "string"},
         "deadline": {"type": "string", "description": "Finite timezone-aware ISO timestamp"},
         "return_path": {"type": "string", "enum": ["timer"]},
@@ -64,6 +68,9 @@ def native_schema(agent, tool_defs=None, *, enabled_toolsets=None, disabled_tool
         }, "required": ["kind", "admission_id"], "additionalProperties": False},
         **schema_fields(),
     }
+    if child_goals:
+        fields.update(schedule={"type": "string", "description": "Recurring schedule for a child wait"},
+                      prompt={"type": "string", "description": "Check to perform in the assigned worker"})
     result = []
     for tool in tool_defs:
         fn = tool["function"]
@@ -71,9 +78,13 @@ def native_schema(agent, tool_defs=None, *, enabled_toolsets=None, disabled_tool
             params = fn["parameters"]
             props = {**params["properties"], **fields}
             action = props["action"]
-            props["action"] = {**action, "description": action["description"] +
-                " Native main only: project_goal opens and continues accepted assignments. "
-                "external_wait accepts op=open/select/close for an existing project."}
+            props["action"] = {
+                **action,
+                "enum": list(dict.fromkeys([*action["enum"], "project_goal", "external_wait"])),
+                "description": action["description"] +
+                " project_goal manages assignments in this conversation. "
+                "external_wait accepts op=open/select/close for an existing project.",
+            }
             tool = {**tool, "function": {**fn, "parameters": {**params, "properties": props}}}
         elif fn["name"] == "cronjob_manage":
             params = fn["parameters"]
@@ -92,9 +103,9 @@ def timer_tool(function_name, arguments):
     return None
 
 
-def _open_fields(args):
+def _open_fields(args, expected_mode):
     mode, criterion, deadline = (args.get(key) for key in ("mode", "reply_criterion", "deadline"))
-    if mode != "resume_main" or not _text(criterion, 2000) or not _text(deadline, 64):
+    if mode != expected_mode or not _text(criterion, 2000) or not _text(deadline, 64):
         raise ValueError("Expected a mode, reply criterion and timezone-aware deadline")
     end = datetime.fromisoformat(deadline)
     if end.tzinfo is None or end <= datetime.now(UTC):
@@ -105,6 +116,13 @@ def _open_fields(args):
 
 
 def _open(workspace, conn, fields):
+    if fields["mode"] == "resume_child":
+        from tools.delegate_child_goals import open_parent
+        from tools.delegate_project_goal import active_goal
+
+        goal = workspace["goal_state"]
+        if not active_goal(goal) or goal["status"] == "blocked" or not open_parent(conn, goal):
+            raise ValueError("The Child Goal or its parent cannot accept a wait")
     current = workspace.get(_KEY)
     if current is not None and current.get("state") != "CLOSED":
         if current["state"] == "CLOSING" or any(current.get(k) != v for k, v in fields.items()):
@@ -160,32 +178,62 @@ def dispatch(agent, args):
     from hermes_runtime.adapters.goal_turn import goal_in_scope
     from tools.delegate_project_store import ProjectStore
 
-    if getattr(agent, "_agentready_active_turn", None) is None or not _owns_main(agent):
-        return tool_error("External waits require a live owning managed-main turn")
+    turn = wait_turn(agent)
+    if turn is None:
+        return tool_error("External waits require a live managed Goal owner")
+    child = bool(getattr(turn, "parent_goal_id", None))
     op, project_id = args.get("op"), args.get("project_id")
     try:
         if not isinstance(op, str) or op not in _FIELDS or not _text(project_id, 128):
             raise ValueError("Expected open, select or close with an exact project_id")
-        if args.keys() - ({"action", "op", "project_id"} | _FIELDS[op]):
+        timer_fields = {"schedule", "prompt"} if child and op == "open" else set()
+        if args.keys() - ({"action", "op", "project_id"} | _FIELDS[op] | timer_fields):
             raise ValueError("Unexpected fields for this external wait operation")
         if not goal_in_scope(agent, project_id):
             raise ValueError("Project Goal is outside the scope of this wake")
         with ProjectStore(agent) as store:
-            current = _apply(store, project_id, op, args)
+            if child and op == "open":
+                from tools.delegate_project_goal import read_goal
+
+                if not read_goal(store, project_id).get("executor_id"):
+                    raise ValueError("Assign the exact Child Goal worker before scheduling a wait")
+                if not all(_text(args.get(field), 8000) for field in timer_fields):
+                    raise ValueError("A child wait requires its recurring schedule and worker prompt")
+            current = _apply(store, project_id, op, args, "resume_child" if child else "resume_main")
     except (ValueError, RuntimeError, OSError, sqlite3.Error) as error:
         return tool_error(str(error))
-    turn = agent._agentready_active_turn
     pair = (project_id, current["wait_id"])
     if op in ("open", "select"):
         turn.external_wait = pair
     elif getattr(turn, "external_wait", None) == pair:
         turn.external_wait = None
+    if child and op == "open":
+        from tools.delegate_wait_timer import create
+
+        timer = json.loads(create(agent, {
+            "action": "create", "project_id": project_id, "wait_id": current["wait_id"],
+            "schedule": args["schedule"], "prompt": args["prompt"],
+        }))
+        if not timer.get("success"):
+            return json.dumps(timer)
+        current = {**current, "state": "BOUND", "job_id": timer["job_id"], "next_run_at": timer["next_run_at"]}
+    if child:
+        turn.touch(project_id)
     return json.dumps({"success": True, "project_id": project_id, **current})
 
 
-def _apply(store, project_id, op, args):
+def wait_turn(agent):
+    from hermes_runtime.adapters.goal_turn import current_segment
+
+    segment = current_segment(agent)
+    if segment is not None and segment.parent_goal_id:
+        return segment
+    return getattr(agent, "_agentready_active_turn", None) if _owns_main(agent) else None
+
+
+def _apply(store, project_id, op, args, expected_mode="resume_main"):
     if op == "open":
-        fields = _open_fields(args)
+        fields = _open_fields(args, expected_mode)
         return store.mutate_workspace(project_id, lambda workspace, conn: _open(workspace, conn, fields))
     wait_id = args.get("wait_id")
     if not _text(wait_id, 128):

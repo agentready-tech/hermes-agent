@@ -47,7 +47,12 @@ def project_input_goal_id(message):
 
 def mail_wake_satisfied(conn, message):
     """A mailbox request is obsolete if its receipt was handled by another turn."""
-    mail_id = json.loads(message['options_json']).get('agent_mail_id')
+    options = json.loads(message['options_json'])
+    if options.get("child_goal_carrier"):
+        # A descendant can have committed its input while the coordinator still
+        # owes reconciliation of that turn's result after an owner restart.
+        return False
+    mail_id = options.get('agent_mail_id')
     return bool(mail_id and conn.execute(
         """SELECT 1 FROM delegation_mail mail WHERE mail.message_id=? AND mail.delivered_at IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.platform_message_id=? AND m.role='user'
@@ -60,17 +65,45 @@ def mail_wake_satisfied(conn, message):
     ).fetchone())
 
 
-def _goal_input_state(conn, goal_id):
-    if not goal_id:
-        return "open"
-    row = conn.execute(
-        "SELECT json_extract(workspace_json, '$.goal_state.status'), archived, paused "
-        "FROM delegated_projects WHERE subagent_id=?",
+def _goal_input_row(conn, goal_id):
+    return conn.execute(
+        "SELECT json_extract(workspace_json, '$.goal_state.status'), archived, paused, "
+        "json_extract(workspace_json, '$.goal_state.parent_goal_id') FROM delegated_projects WHERE subagent_id=?",
         (goal_id,),
     ).fetchone()
+
+
+def _goal_input_state(conn, goal_id, *, child_parent=False):
+    if not goal_id:
+        return "open"
+    row = _goal_input_row(conn, goal_id)
     if row is None or row[1] or row[0] in {None, "closing", "done", "cancelled", "inactive"}:
         return "closed"
-    return "paused" if row[2] else "open"
+    if row[3]:
+        if child_parent:
+            return "closed"
+        ancestor = _goal_input_state(conn, row[3], child_parent=True)
+        if ancestor != "open":
+            return ancestor
+    blocked = row[0] == "blocked" and (row[3] or child_parent)
+    return "paused" if row[2] or blocked else "open"
+
+
+def project_input_state(conn, message):
+    options = json.loads(message["options_json"])
+    state = _goal_input_state(conn, options.get("child_goal_carrier") or project_input_goal_id(message))
+    if state != "open" or not json.loads(message["origin_json"]).get("child_goal_event"):
+        return state
+    receipt = conn.execute("SELECT origin_json,delivered_at FROM delegation_mail WHERE message_id=? AND kind='child_goal'",
+                           (options.get("agent_mail_id"),)).fetchone()
+    if not receipt:
+        return "closed"
+    if receipt[1] is not None:
+        # The recipient already accepted this occurrence. The saved turn can still reconcile it.
+        return "open"
+    from tools.delegate_child_goals import child_event_state
+
+    return child_event_state(conn, receipt[0])
 
 
 def goal_has_recoverable_input(conn, project_id):
@@ -186,6 +219,12 @@ class ProjectStore:
         now = time.time()
         identity = "project-" + uuid.uuid4().hex
         with _transaction() as conn:
+            goal_state = (workspace or {}).get("goal_state", {})
+            if goal_state.get("parent_goal_id"):
+                from tools.delegate_child_goals import open_parent
+
+                if not open_parent(conn, goal_state):
+                    raise ValueError("The parent Goal cannot accept a child")
             conn.execute("INSERT OR IGNORE INTO delegated_projects(subagent_id,parent_session_id,project_key,session_id,goal,context,created_at,updated_at,workspace_json) VALUES (?,?,?,?,?,?,?,?,?)",
                          (identity, self.parent_id, key, identity, goal, context, now, now,
                           json.dumps({"cwd": cwd, **(workspace or {})})))
@@ -199,7 +238,8 @@ class ProjectStore:
             raise ValueError("A nonempty project message is required")
         message_id = "project-msg-" + uuid.uuid4().hex
         with _transaction() as conn:
-            if event_key is not None and (goal_id := origin.get("goal_project_id")):
+            goal_id = origin.get("goal_project_id")
+            if event_key is not None and goal_id:
                 old = conn.execute(
                     "SELECT message_id FROM delegated_project_messages WHERE subagent_id=? AND event_key=? "
                     "AND json_extract(origin_json,'$.goal_project_id')=?",
@@ -208,6 +248,14 @@ class ProjectStore:
                 if old is not None:
                     return old[0]
                 event_key = f"goal:{goal_id}:{event_key}"
+                old = conn.execute("SELECT message_id FROM delegated_project_messages WHERE subagent_id=? AND event_key=?",
+                                   (project["subagent_id"], event_key)).fetchone()
+                if old is not None:
+                    return old[0]
+            if goal_id:
+                from tools.delegate_child_goals import bind_executor
+
+                bind_executor(conn, goal_id, project)
             conn.execute("INSERT OR IGNORE INTO delegated_project_messages(message_id,subagent_id,event_key,content,origin_json,accepted_at,options_json) VALUES (?,?,?,?,?,?,?)",
                          (message_id, project["subagent_id"], event_key, content, json.dumps(origin), time.time(), json.dumps(options or {})))
             if event_key is not None:
@@ -228,7 +276,7 @@ class ProjectStore:
                 row = dict(entry)
                 if row["state"] == "running" and (alive is None or alive(row["owner_pid"], row["owner_started_at"])):
                     return None
-                goal_state = _goal_input_state(conn, project_input_goal_id(row))
+                goal_state = project_input_state(conn, row)
                 if goal_state == "paused":
                     continue
                 if goal_state == "closed" or mail_wake_satisfied(conn, row):
@@ -243,8 +291,16 @@ class ProjectStore:
             return None
 
     def settle(self, project, message, result):
+        from tools.delegate_child_goals import record_worker_evidence, unfinished_orchestration
+
         canonical = result.get("status") == "completed" and self.committed_result(project, message) is not None
         with _transaction() as conn:
+            goal_id = project_input_goal_id(message)
+            if goal_id and conn.execute("SELECT 1 FROM delegated_project_messages WHERE message_id=? AND claim_token=?",
+                                        (message["message_id"], message["claim_token"])).fetchone():
+                record_worker_evidence(conn, project, message, result, goal_id)
+                if unfinished_orchestration(conn, project, message, goal_id):
+                    result["goal_continuing"] = True
             changed = conn.execute("UPDATE delegated_project_messages SET state=?,result_json=?,completed_at=?,owner_pid=NULL,claim_token=NULL,published=?,content=CASE WHEN ? THEN '' ELSE content END,options_json=CASE WHEN ? THEN '{}' ELSE options_json END WHERE message_id=? AND claim_token=?",
                 (result.get("status", "failed"), json.dumps(result, ensure_ascii=False), time.time(),
                  int(not json.loads(message["origin_json"]).get("wake")), canonical, canonical, message["message_id"], message["claim_token"])).rowcount

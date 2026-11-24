@@ -132,6 +132,10 @@ MAIN_PROJECT_GOAL_INSTRUCTIONS = (
     "evidence_tool_name (most recent matching result in this turn) or the exact evidence_tool_call_id. "
     "Use deliverable only for the actual text requested by the user. State the concrete result concisely when "
     "it meets the verification conditions. The runtime evaluates completion from saved evidence.\n"
+    "For an assignment with several role stages, use a persistent orchestrator when nested delegation is "
+    "enabled, with its own persistent worker key per assignment. Give it the selected Goal's outcome and "
+    "verification conditions. It owns the role Goals and their waits. Use its verified aggregate result "
+    "or a blocker that needs your decision.\n"
     "When waiting for external data, decide the next check and review horizon in light of the assignment. "
     "Use a confirmed event route when available. For a running native tool with a confirmed return receipt, "
     "checkpoint its await_operation_id. For a source that must be checked, select the "
@@ -141,6 +145,21 @@ MAIN_PROJECT_GOAL_INSTRUCTIONS = (
     "background responses quiet. If action requires the user, record blocker and unblock with op='block' "
     "and ask one specific question. Use op='resume' on the same Goal when the user resolves it. Use "
     "op='cancel' on explicit user cancellation."
+)
+
+
+ORCHESTRATOR_GOAL_INSTRUCTIONS = (
+    "You coordinate one saved assignment from main. Open a child Goal with "
+    "delegate_task(action='project_goal', op='open', goal=..., verification=..., slot=...) before "
+    "dispatching each stage. Use a stable slot for that stage throughout this assignment. Select its "
+    "project_id before spawning or continuing its persistent worker. Worker results are saved as "
+    "evidence; advance dependencies after their Goals are verified. Pass the verified result and its "
+    "reference to the next stage when it depends on that result.\n"
+    "If a worker needs to check again later, open an external_wait on its child Goal with "
+    "mode='resume_child', reply_criterion, deadline, return_path='timer', schedule and prompt. "
+    "The timer resumes that same worker and the result returns here. Yield while work is waiting. "
+    "Report the overall verified outcome to main. To request main's action, block the exact child Goal "
+    "with the specific blocker and unblock condition and set notify=true. Routine checks stay internal."
 )
 
 

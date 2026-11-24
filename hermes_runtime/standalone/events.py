@@ -166,6 +166,13 @@ def _admit_wait_timer(job, request_id, cancel_event):
             }
             if isinstance(workspace.get(KEY), dict):
                 metadata["project_goal"] = True
+                if workspace[KEY].get("parent_goal_id"):
+                    from tools.delegate_child_goals import publish_child_event
+
+                    receipt = publish_child_event(tag["project_id"], f"{job_id}:{request_id}", current["prompt"],
+                                                  "cron", job_id=job_id, wait_id=tag["wait_id"])
+                    response = f"Queued for assigned worker: {receipt['message_id']}."
+                    return True, response + "\n", response, None
             return _admit_job_prompt(job_id, request_id, current["prompt"], metadata)
     except (ValueError, RuntimeError, OSError, sqlite3.Error, KeyError, TypeError):
         return False, "External wait timer not admitted", "", "external_wait_not_active"

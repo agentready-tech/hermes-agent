@@ -15,7 +15,8 @@ FIELDS = {
     "select": {"project_id"},
     "checkpoint": {"project_id", "stage", "next_step", "evidence_tool_call_id", "evidence_tool_name",
                    "deliverable", "notify", "await_operation_id"},
-    "block": {"project_id", "blocker", "unblock"},
+    "block": {"project_id", "blocker", "unblock", "notify"},
+    "pause": {"project_id"},
     "resume": {"project_id"},
     "cancel": {"project_id"},
 }
@@ -60,10 +61,18 @@ def mutate_goal(store, project_id, change, *, retire_pending=False, when_paused=
             ).fetchone()
             if archived or (paused and when_paused == "skip"):
                 return {**current, "status": "inactive"}
+        if when_paused == "skip" and current.get("parent_goal_id") and current["status"] != "closing":
+            from tools.delegate_child_goals import open_parent
+
+            if not open_parent(conn, current):
+                return {**current, "status": "inactive"}
         updated = change(current)
         if retire_pending and updated["status"] == "closing":
+            from tools.delegate_child_goals import open_children
             from tools.delegate_project_store import cancel_goal_inputs, set_project_paused
 
+            if updated["outcome"] == "done" and open_children(conn, project_id):
+                raise ValueError("Complete the child Goals before closing their parent")
             set_project_paused(conn, project_id, False, False)
             cancel_goal_inputs(conn, project_id)
         return updated
@@ -107,16 +116,24 @@ def _text(args, key, *, required=False, limit=4000):
 
 
 def _source(segment, args):
+    if segment.parent_goal_id:
+        if "tracker_ref" in args:
+            raise ValueError("A child Goal inherits its parent assignment")
+        return {"kind": "assignment", "id": segment.parent_goal_id, "slot": _slot(args)}
     if not segment.input_id or segment.internal and segment.project_ids:
         raise ValueError("A new Goal requires an accepted request or tracker intake")
     if "tracker_ref" in args:
         return {"kind": "tracker", "id": _text(args, "tracker_ref", required=True, limit=600)}
     if segment.internal:
         raise ValueError("An internal wake can open only an explicitly accepted tracker task")
+    return {"kind": "input", "id": segment.input_id, "slot": _slot(args)}
+
+
+def _slot(args):
     slot = args.get("slot", 1)
     if type(slot) is not int or slot < 1:
         raise ValueError("A distinct assignment in this input requires a positive slot")
-    return {"kind": "input", "id": segment.input_id, "slot": slot}
+    return slot
 
 
 def _open(store, segment, args):
@@ -134,6 +151,8 @@ def _open(store, segment, args):
         "stage": "", "next_step": "", "evidence": {}, "revision": 0,
         "checked_revision": 0, "wake_sequence": 0, "attempts_without_progress": 0,
     }
+    if segment.parent_goal_id:
+        initial.update(parent_goal_id=segment.parent_goal_id, orchestrator_id=segment.orchestrator_id)
     project = store.create(key, contract.outcome, "", workspace={KEY: initial})
     project_id = project["subagent_id"]
     saved = read_goal(store, project_id)
@@ -215,6 +234,8 @@ def close_wait(store, project_id, reason):
 
 
 def close_goal(store, project_id, outcome, evidence=()):
+    from tools.delegate_child_goals import close_children
+
     def begin(goal):
         if goal["status"] == "closing" and goal["outcome"] != outcome:
             raise ValueError("Goal already has a different terminal result")
@@ -226,6 +247,8 @@ def close_goal(store, project_id, outcome, evidence=()):
                           when_paused="apply" if outcome == "cancelled" else "skip")
     if current["status"] != "closing":
         return current
+    if outcome == "cancelled" and not current.get("parent_goal_id"):
+        close_children(store, project_id)
     close_wait(store, project_id, "cancelled" if outcome == "cancelled" else "closed")
 
     def finish(goal):
@@ -263,8 +286,14 @@ def set_goal_paused(store, project_id, paused):
 
 
 def _change_status(store, segment, project_id, op, args):
-    if op in {"resume", "cancel"} and (segment.internal or not segment.input_id):
+    if op in {"pause", "resume", "cancel"} and not segment.parent_goal_id and (segment.internal or not segment.input_id):
         raise ValueError("This action requires a fresh request from the user")
+    if op == "pause":
+        return set_goal_paused(store, project_id, True)
+    if op == "resume" and store.get(project_id)["paused"]:
+        from hermes_runtime.adapters.goal_turn import resume_paused_goal
+
+        resume_paused_goal(store, project_id)
     if op == "cancel":
         current = close_goal(store, project_id, "cancelled")
         segment.project_ids.add(project_id)
@@ -277,8 +306,11 @@ def _change_status(store, segment, project_id, op, args):
         if op == "block":
             goal.update(status="blocked", blocker=_text(args, "blocker", required=True),
                         unblock=_text(args, "unblock", required=True), wake_id=None)
+            if segment.parent_goal_id:
+                goal["escalation_input_id"] = segment.input_id if args.get("notify") is True else None
         elif goal["status"] == "blocked":
             goal.update(status="ready", blocker=None, unblock=None, attempts_without_progress=0)
+            goal.pop("escalation_input_id", None)
         return goal
 
     current = mutate_goal(store, project_id, change)
@@ -292,16 +324,22 @@ def _change_status(store, segment, project_id, op, args):
 
 
 def dispatch(agent, args):
-    from hermes_runtime.adapters.goal_turn import goal_in_scope
+    from hermes_runtime.adapters.goal_turn import current_segment, goal_in_scope
     from tools.delegate_external_wait import _owns_main
 
-    segment = getattr(getattr(agent, "_agentready_active_turn", None), "goal_segment", None)
-    if segment is None or not _owns_main(agent):
-        return tool_error("Project Goals require the live owning main")
+    segment = current_segment(agent)
+    if segment is None or not (segment.parent_goal_id or _owns_main(agent)):
+        return tool_error("Project Goals require their owning main or persistent orchestrator")
     op = args.get("op")
     if not isinstance(op, str) or op not in FIELDS or args.keys() - (FIELDS[op] | {"action", "op"}):
         return tool_error("Invalid native Project Goal operation or fields")
     try:
+        if segment.parent_goal_id:
+            from tools.delegate_project_store import _goal_input_state, _transaction
+
+            with _transaction() as conn:
+                if _goal_input_state(conn, segment.parent_goal_id, child_parent=True) != "open":
+                    raise ValueError("The parent Goal is paused or closed")
         with ProjectStore(agent) as store:
             if op == "list":
                 return json.dumps({"goals": [

@@ -122,9 +122,15 @@ def _page(items, more):
     return {'before': f"{last['time']:.17f}|{last['id']}" if last else None, 'has_more': more}
 
 
-_GOAL_LINK = """(? IS NULL OR json_extract(d.workspace_json, '$.goal_owner_id')=? OR EXISTS (
+_ASSIGNMENT_SCOPE = """assignment_root(goal_id) AS (VALUES (?)), assignment_goals(goal_id) AS (
+    SELECT goal_id FROM assignment_root
+    UNION ALL SELECT subagent_id FROM delegated_projects
+      WHERE json_extract(workspace_json, '$.goal_state.parent_goal_id')=(SELECT goal_id FROM assignment_root)
+)"""
+_GOAL_LINK = """((SELECT goal_id FROM assignment_root) IS NULL
+    OR json_extract(d.workspace_json, '$.goal_owner_id') IN assignment_goals OR EXISTS (
     SELECT 1 FROM delegated_project_messages m WHERE m.subagent_id=d.subagent_id
-      AND json_extract(m.origin_json, '$.goal_project_id')=?))"""
+      AND json_extract(m.origin_json, '$.goal_project_id') IN assignment_goals))"""
 
 
 def _nodes(store, parent_sid, project_scope, before, limit, *, identity=None):
@@ -137,14 +143,14 @@ def _nodes(store, parent_sid, project_scope, before, limit, *, identity=None):
     branch = _sql_json_extract('s.model_config', '$._branched_from')
     reset = _sql_json_extract('s.model_config', '$._reset_from')
     rows = store.db._read_all(
-        f"""WITH delegates AS (
+        f"""WITH {_ASSIGNMENT_SCOPE}, delegates AS (
           SELECT subagent_id AS id, session_id, project_key AS title, d.goal, created_at AS time,
             'project' AS kind, archived, paused, NULL AS ended_at
           FROM delegated_projects d WHERE parent_session_id IN ({marks})
             AND json_type(d.workspace_json, '$.goal_state') IS NULL AND {_GOAL_LINK}
           UNION ALL
           SELECT s.id,s.id,s.title,'',s.started_at,'session',0,0,s.ended_at
-          FROM sessions s WHERE ? IS NULL AND s.parent_session_id IN ({marks})
+          FROM sessions s WHERE (SELECT goal_id FROM assignment_root) IS NULL AND s.parent_session_id IN ({marks})
             AND {branch} IS NULL AND {reset} IS NULL
             AND ({delegator}=s.parent_session_id OR ({delegator} IS NULL AND s.source IN ('delegate','subagent') AND NOT EXISTS (
               SELECT 1 FROM sessions previous WHERE previous.id=s.parent_session_id AND previous.end_reason='compression'
@@ -152,8 +158,7 @@ def _nodes(store, parent_sid, project_scope, before, limit, *, identity=None):
             AND NOT EXISTS (SELECT 1 FROM delegated_projects d WHERE d.subagent_id=s.id OR d.session_id=s.id)
         ) SELECT * FROM delegates WHERE (? IS NULL OR id=?)
           AND (time,id)<(?,?) ORDER BY time DESC,id DESC LIMIT ?""",
-        (*parents, project_scope, project_scope, project_scope, project_scope, *parents,
-         identity, identity, *before, limit + 1),
+        (project_scope, *parents, *parents, identity, identity, *before, limit + 1),
     )
     return [dict(row) for row in rows[:limit]], len(rows) > limit
 
@@ -164,10 +169,11 @@ def _children(store, parent, project_id, before, limit, *, identity=None):
 
 def _persistent_status(store, node, project_id):
     row = store.db._read_one(
-        """SELECT state FROM delegated_project_messages WHERE subagent_id=?
-           AND (? IS NULL OR json_extract(origin_json, '$.goal_project_id')=?)
+        f"""WITH {_ASSIGNMENT_SCOPE}
+           SELECT state FROM delegated_project_messages WHERE subagent_id=?
+           AND ((SELECT goal_id FROM assignment_root) IS NULL OR json_extract(origin_json, '$.goal_project_id') IN assignment_goals)
            ORDER BY CASE state WHEN 'running' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, rowid DESC LIMIT 1""",
-        (node['id'], project_id, project_id),
+        (project_id, node['id']),
     )
     return row['state'] if row else 'idle'
 
