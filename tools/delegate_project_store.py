@@ -89,6 +89,23 @@ def _goal_input_state(conn, goal_id, *, child_parent=False):
     return "paused" if row[2] or blocked else "open"
 
 
+def project_input_state(conn, message):
+    options = json.loads(message["options_json"])
+    state = _goal_input_state(conn, options.get("child_goal_carrier") or project_input_goal_id(message))
+    if state != "open" or not json.loads(message["origin_json"]).get("child_goal_event"):
+        return state
+    receipt = conn.execute("SELECT origin_json,delivered_at FROM delegation_mail WHERE message_id=? AND kind='child_goal'",
+                           (options.get("agent_mail_id"),)).fetchone()
+    if not receipt:
+        return "closed"
+    if receipt[1] is not None:
+        # The recipient already accepted this occurrence. The saved turn can still reconcile it.
+        return "open"
+    from tools.delegate_child_goals import child_event_state
+
+    return child_event_state(conn, receipt[0])
+
+
 def goal_has_recoverable_input(conn, project_id):
     if conn.execute(
         """SELECT 1 FROM delegation_mail WHERE delivered_at IS NULL
@@ -259,8 +276,7 @@ class ProjectStore:
                 row = dict(entry)
                 if row["state"] == "running" and (alive is None or alive(row["owner_pid"], row["owner_started_at"])):
                     return None
-                carrier = json.loads(row["options_json"]).get("child_goal_carrier")
-                goal_state = _goal_input_state(conn, carrier or project_input_goal_id(row))
+                goal_state = project_input_state(conn, row)
                 if goal_state == "paused":
                     continue
                 if goal_state == "closed" or mail_wake_satisfied(conn, row):

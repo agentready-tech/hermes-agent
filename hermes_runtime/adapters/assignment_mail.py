@@ -2,7 +2,7 @@
 import hashlib
 import json
 
-from hermes_runtime.adapters.main_assignments import _cursor, _lineage, _nodes
+from hermes_runtime.adapters.main_assignments import _ASSIGNMENT_SCOPE, _cursor, _lineage, _nodes
 from hermes_runtime.adapters.main_subagents import display_text
 from hermes_state_common import _sql_json_extract
 from hermes_state_messages import DISPLAY_VISIBLE_SQL
@@ -106,19 +106,20 @@ def _mail_rows(store, visible, root, project_id, before, limit, focus, counterpa
     marks = ','.join('?' for _ in root)
     discover = focus is not None and counterpart is None
     return store.db._read_all(
-        f"""WITH roster(sid,node_id) AS (VALUES {slots})
+        f"""WITH {_ASSIGNMENT_SCOPE}, roster(sid,node_id) AS (VALUES {slots})
             SELECT m.message_id,m.kind,m.sender_session_id,m.target_session_id,m.delivery_id,
                    m.content_hash,m.content,m.accepted_at
             FROM delegation_mail m LEFT JOIN roster sender ON sender.sid=m.sender_session_id
               LEFT JOIN roster target ON target.sid=m.target_session_id
             WHERE m.root_session_id IN ({marks}) AND m.kind='message'
-              AND (? IS NULL OR json_extract(m.origin_json,'$.message_goal_project_id')=?)
+              AND ((SELECT goal_id FROM assignment_root) IS NULL
+                   OR json_extract(m.origin_json,'$.message_goal_project_id') IN assignment_goals)
               AND (? OR (sender.node_id IS NOT NULL AND target.node_id IS NOT NULL))
               AND (? IS NULL OR ? IN (sender.node_id,target.node_id))
               AND (? IS NULL OR ? IN (sender.node_id,target.node_id))
               AND (m.accepted_at,'mail:'||m.message_id)<(?,?)
             ORDER BY m.accepted_at DESC,m.message_id DESC LIMIT ?""",
-        (*(field for pair in visible.items() for field in pair), *root, project_id, project_id, discover,
+        (project_id, *(field for pair in visible.items() for field in pair), *root, discover,
          focus, focus, counterpart, counterpart, *before, limit + 1),
     )
 

@@ -3,7 +3,7 @@
 import json
 
 from hermes_runtime.adapters.main_assignments import (
-    _children, _cursor, _goal_row, _lineage, _node_id, _page, _root_node, one_shot_status,
+    _ASSIGNMENT_SCOPE, _children, _cursor, _goal_row, _lineage, _node_id, _page, _root_node, one_shot_status,
 )
 from hermes_runtime.adapters.main_subagents import _BUDGET, _VISIBLE_COLUMNS, _history_row, _limit, display_text
 from hermes_state_messages import DISPLAY_VISIBLE_SQL
@@ -31,11 +31,11 @@ def _plain(store, history, *, role, receipt=None):
 
 def _receipt_events(store, node, parent, project_id, history, before, limit):
     rows = store.db._read_all(
-        """WITH scoped AS (
+        f"""WITH {_ASSIGNMENT_SCOPE}, scoped AS (
             SELECT message_id,accepted_at,completed_at,content,state,
                    CASE WHEN length(result_json)<=64000 THEN result_json END AS result_json
             FROM delegated_project_messages WHERE subagent_id=?
-            AND (? IS NULL OR json_extract(origin_json, '$.goal_project_id')=?)
+            AND ((SELECT goal_id FROM assignment_root) IS NULL OR json_extract(origin_json, '$.goal_project_id') IN assignment_goals)
             AND COALESCE(json_extract(options_json, '$.agent_mail_wake'), 0)=0
             AND COALESCE(event_key,'') NOT GLOB 'mail-wake:*'
             AND COALESCE(event_key,'') NOT GLOB 'goal:project-*:mail-wake:*'
@@ -46,7 +46,7 @@ def _receipt_events(store, node, parent, project_id, history, before, limit):
             SELECT 'return:'||message_id,completed_at,message_id,'result',result_json,state
             FROM scoped WHERE completed_at IS NOT NULL
         ) SELECT * FROM receipts WHERE (time,id)<(?,?) ORDER BY time DESC,id DESC LIMIT ?""",
-        (node['id'], project_id, project_id, *before, limit + 1),
+        (project_id, node['id'], *before, limit + 1),
     )
     events = []
     for row in rows:
@@ -84,7 +84,7 @@ def _tools(store, node, project_id, history, before, limit):
     if project_id:
         # Canonical dispatch IDs were saved on the worker's user-input row. Tie
         # each action to that physical turn, even when a worker serves two Goals.
-        ranges = f"""turns AS (
+        ranges = f"""{_ASSIGNMENT_SCOPE}, turns AS (
             SELECT session_id,id,platform_message_id,
                    LEAD(id) OVER (PARTITION BY session_id ORDER BY id) AS next_id
             FROM messages WHERE session_id IN ({marks}) AND role='user' AND (active=1 OR compacted=1)
@@ -95,9 +95,9 @@ def _tools(store, node, project_id, history, before, limit):
             SELECT 1 FROM turns t JOIN delegated_project_messages p ON p.message_id=t.platform_message_id
             WHERE t.session_id=messages.session_id AND messages.id>t.id
               AND (t.next_id IS NULL OR messages.id<t.next_id)
-              AND p.subagent_id=? AND json_extract(p.origin_json, '$.goal_project_id')=?
+              AND p.subagent_id=? AND json_extract(p.origin_json, '$.goal_project_id') IN assignment_goals
         )"""
-        parameters += (*history, node['id'], project_id)
+        parameters = (project_id, *history, *history, node['id'])
     else:
         scope = ''
     rows = store.db._read_all(

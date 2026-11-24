@@ -33,11 +33,11 @@ def pending_mail_rows(conn, *, message_ids=None):
               AND json_extract(g.workspace_json, '$.goal_state.status') NOT IN ('closing','done','cancelled','inactive')
             )){exact} ORDER BY m.rowid""", message_ids or (),
     ).fetchall()
-    from tools.delegate_child_goals import pending_child_event
+    from tools.delegate_child_goals import child_event_state
     from tools.delegate_project_store import _goal_input_state
 
     return [row for row in rows if (
-        pending_child_event(conn, row) if row["kind"] == "child_goal"
+        child_event_state(conn, row["origin_json"]) == "open" if row["kind"] == "child_goal"
         else not row["parent_goal_id"] or _goal_input_state(conn, row["goal_project_id"]) == "open"
     )]
 

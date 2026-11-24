@@ -335,6 +335,10 @@ def _without_obsolete(turn, segment, records):
     return [(identity, content) for identity, content in records if identity not in segment.obsolete_records]
 
 
+def history_tool_result_ids(history):
+    return {row["tool_call_id"] for row in history if row.get("role") == "tool" and row.get("tool_call_id")}
+
+
 def _input_segment(agent, kwargs, records):
     row = admitted_input.get() or {}
     descriptor = _automation(row) if not records else None
@@ -342,8 +346,7 @@ def _input_segment(agent, kwargs, records):
     segment = GoalSegment(
         row.get("admission_id") if not records else None,
         bool(descriptor or records),
-        {item["tool_call_id"] for item in (kwargs.get("conversation_history") or ())
-         if item.get("role") == "tool" and item.get("tool_call_id")},
+        history_tool_result_ids(kwargs.get("conversation_history") or ()),
     )
     recognized = _ingest(agent, segment, records, receipts) if records or receipts else 0
     segment.quiet_source = bool(recognized and recognized == len(receipts) + len(records) and segment.internal)

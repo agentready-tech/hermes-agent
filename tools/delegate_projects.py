@@ -122,6 +122,10 @@ def _build_child(parent, store, project, message):
             raise ValueError("The project's saved worktree is missing; restore it before resuming this project")
     child._delegate_save_workspace = lambda info: _save_workspace(parent, project["subagent_id"], info)
     history = store.history(sid) if store.session_exists(sid) else []
+    if scope is not None:
+        from hermes_runtime.adapters.goal_turn import history_tool_result_ids
+
+        scope.history_tool_results = history_tool_result_ids(history)
     # A crash may have already admitted this exact user row; continue from that request,
     # without inserting a second copy or discarding completed tool results.
     pending = next((m for m in reversed(history) if m.get("role") == "user" and m.get("message_id") == message["message_id"]), None)
@@ -254,8 +258,10 @@ def _recover_project(parent, store, project):
             continue
         try:
             child, text = _build_child(parent, store, project, message)
-        except MailboxDeferred:
+        except MailboxDeferred as deferred:
             store.release(message)
+            if deferred.pending_delivery:
+                break
             continue
         except Exception:
             store.release(message)

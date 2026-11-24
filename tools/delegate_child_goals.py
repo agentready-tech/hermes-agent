@@ -159,28 +159,33 @@ def validate_child_mail_target(conn, goal_id, target):
         raise ValueError("Address the executor or orchestrator of the selected Child Goal")
 
 
-def pending_child_event(conn, row):
+def child_event_state(conn, origin_json):
     from tools.delegate_project_store import _goal_input_state
 
-    event = json.loads(row["origin_json"]).get("child_goal_event")
+    event = json.loads(origin_json).get("child_goal_event")
     if not isinstance(event, dict):
-        return False
+        return "closed"
     record = _project(conn, event["project_id"])
-    if not record or record["archived"] or record["paused"] or _goal_input_state(conn, event["scope_id"]) != "open":
-        return False
+    if not record or record["archived"]:
+        return "closed"
     workspace = json.loads(record["workspace"])
     goal = workspace.get("goal_state", {})
-    if goal.get("parent_goal_id") != event["parent_goal_id"] or not open_parent(conn, goal):
-        return False
+    if (goal.get("parent_goal_id"), goal.get("orchestrator_id")) != (event["parent_goal_id"], event["orchestrator_id"]):
+        return "closed"
     if event["source"] == "result":
-        return goal["status"] == event["status"]
-    if _goal_input_state(conn, event["project_id"]) != "open":
-        return False
+        if goal["status"] != event["status"] or _child_result_id(event["project_id"], goal) != event["event_id"]:
+            return "closed"
+        parent_state = _goal_input_state(conn, event["parent_goal_id"], child_parent=True)
+        return "paused" if parent_state == "open" and record["paused"] else parent_state
     if event["source"] == "goal":
-        return goal.get("wake_id") == event["event_id"] and goal["status"] == "ready"
-    wait = workspace.get("external_wait") or {}
-    return (wait.get("state") == "BOUND" and wait.get("wait_id") == event["wait_id"]
-            and wait.get("job_id") == event["job_id"] and datetime.fromisoformat(wait["deadline"]) > datetime.now(UTC))
+        current = goal.get("wake_id") == event["event_id"] and goal["status"] == "ready"
+    elif event["source"] == "cron":
+        wait = workspace.get("external_wait") or {}
+        current = (wait.get("state") == "BOUND" and wait.get("wait_id") == event["wait_id"]
+                   and wait.get("job_id") == event["job_id"] and datetime.fromisoformat(wait["deadline"]) > datetime.now(UTC))
+    else:
+        current = False
+    return _goal_input_state(conn, event["project_id"]) if current else "closed"
 
 
 def consumed_child_wake(store, wake_id):
@@ -221,12 +226,17 @@ def publish_child_event(project_id, event_id, prompt, source, **metadata):
     return receipt
 
 
-def publish_child_result(project_id, goal):
+def _child_result_id(project_id, goal):
     status = goal["status"]
     suffix = status if status == "done" else f"{status}:{goal['wake_sequence']}:{goal['revision']}"
+    return f"{project_id}:{suffix}"
+
+
+def publish_child_result(project_id, goal):
+    status = goal["status"]
     prompt = (f"Child Goal {project_id} is {status}. Use project_goal select with this ID to read its "
               "saved evidence or blocker and decide the next stage of the parent assignment.")
-    return publish_child_event(project_id, f"{project_id}:{suffix}", prompt, "result", status=status)
+    return publish_child_event(project_id, _child_result_id(project_id, goal), prompt, "result", status=status)
 
 
 def record_worker_evidence(conn, project, message, result, goal_id):
@@ -266,10 +276,11 @@ def unfinished_orchestration(conn, project, message, goal_id):
         return False
     if any(status not in {"done", "cancelled", "inactive"} for status, _ in rows):
         return True
-    return conn.execute(
-        """SELECT 1 FROM delegation_mail WHERE delivered_at IS NULL AND kind='child_goal'
+    rows = conn.execute(
+        """SELECT origin_json FROM delegation_mail WHERE delivered_at IS NULL AND kind='child_goal'
              AND json_extract(origin_json, '$.child_goal_event.orchestrator_id')=?
              AND json_extract(origin_json, '$.child_goal_event.parent_goal_id')=?
-             AND json_extract(origin_json, '$.child_goal_event.source')='result' LIMIT 1""",
+             AND json_extract(origin_json, '$.child_goal_event.source')='result'""",
         (project["subagent_id"], goal_id),
-    ).fetchone() is not None
+    ).fetchall()
+    return any(child_event_state(conn, row[0]) != "closed" for row in rows)

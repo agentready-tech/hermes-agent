@@ -20,7 +20,8 @@ pytest_plugins = ['tests.hermes_runtime.test_main_schedule_tools']
 def _worker(store, db, name, creator):
     node = store.create(name, name, '', workspace={'goal_owner_id': creator})
     child = node['session_id']
-    db.create_session(child, source='delegate', parent_session_id=store.parent_id)
+    db.create_session(child, source='delegate', parent_session_id=store.parent_id,
+                      model_config={'_delegate_from': store.parent_id})
     return node
 
 
@@ -44,6 +45,9 @@ async def _call_panel(connection, operation, **payload):
 
 @pytest.mark.asyncio
 async def test_owned_graph_and_paged_timeline_use_exact_dispatch_receipts(main_home, monkeypatch):
+    from tests.hermes_runtime.test_child_goals import _child_actor
+    from tools.delegate_mail import mail_action
+
     home, db = main_home
     actor = _actor(db)
     first = _open(actor, 'First assignment', slot=1)
@@ -54,9 +58,19 @@ async def test_owned_graph_and_paged_timeline_use_exact_dispatch_receipts(main_h
         _dispatch(store, db, shared, second, 'second dispatched')
         dedicated = _worker(store, db, 'dedicated worker', first)
         _dispatch(store, db, dedicated, first, 'orchestrate')
-    with ProjectStore(SimpleNamespace(_session_db=db, session_id=dedicated['session_id'])) as store:
+        _dispatch(store, db, dedicated, second, 'orchestrate second')
+    coordinator = _child_actor(db, dedicated, first)
+    other_coordinator = _child_actor(db, dedicated, second)
+    child_goal = _open(coordinator, 'Scoped role goal')
+    other_child_goal = _open(other_coordinator, 'Other role goal')
+    with ProjectStore(coordinator) as store:
         leaf = _worker(store, db, 'leaf-first', first)
         _dispatch(store, db, leaf, first, 'Secondary')
+        role = _worker(store, db, 'role worker', child_goal)
+        _dispatch(store, db, role, child_goal, 'Scoped role')
+        _dispatch(store, db, role, other_child_goal, 'Other role')
+    mail_action(coordinator, 'message', role['subagent_id'], 'First role coordination', 'first-role-mail')
+    mail_action(other_coordinator, 'message', role['subagent_id'], 'Other role coordination', 'other-role-mail')
     db.create_session('root-one-shot', source='subagent', parent_session_id=HOME_SESSION_ID)
     db.append_message('root-one-shot', 'user', 'Unlinked direct request')
     db.create_session('unrelated-parent', source='cli')
@@ -71,7 +85,9 @@ async def test_owned_graph_and_paged_timeline_use_exact_dispatch_receipts(main_h
     first_scope = await _call_panel(connection, 'graph', project_id=first)
     assert first_scope['goal']['verification'] == 'Return a verified result'
     nodes = {node['id']: node['parent_id'] for node in first_scope['nodes']}
-    assert nodes == {shared['subagent_id']: 'main', dedicated['subagent_id']: 'main', leaf['subagent_id']: dedicated['subagent_id']}
+    assert nodes == {shared['subagent_id']: 'main', dedicated['subagent_id']: 'main',
+                     leaf['subagent_id']: dedicated['subagent_id'], role['subagent_id']: dedicated['subagent_id']}
+    assert next(node for node in first_scope['nodes'] if node['id'] == role['subagent_id'])['status'] == 'completed'
     assert 'root-one-shot' in {row['id'] for row in (await _call_panel(connection, 'graph'))['nodes']}
     args = {'project_id': first, 'tools': True, 'node_ids': [{'id': key, 'parent_id': value} for key, value in nodes.items()]}
     newest = await _call_panel(connection, 'timeline', **args, limit=2)
@@ -79,8 +95,9 @@ async def test_owned_graph_and_paged_timeline_use_exact_dispatch_receipts(main_h
     events = older['events'] + newest['events']
     assert len({row['id'] for row in events}) == len(events)
     texts = {row['text'] for row in events}
-    assert {'first dispatched', 'first dispatched result', 'first dispatched output', 'Secondary result'}.issubset(texts)
-    assert all('second dispatched' not in value for value in texts)
+    assert {'first dispatched', 'first dispatched result', 'first dispatched output', 'Secondary result',
+            'Scoped role result', 'Scoped role output', 'First role coordination'}.issubset(texts)
+    assert all('second dispatched' not in value and 'Other role' not in value for value in texts)
     assert 'error' in await call(connection, 'timeline', node_ids=[{'id': 'unrelated-child', 'parent_id': 'main'}])
 
 

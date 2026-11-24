@@ -78,9 +78,13 @@ def native_schema(agent, tool_defs=None, *, enabled_toolsets=None, disabled_tool
             params = fn["parameters"]
             props = {**params["properties"], **fields}
             action = props["action"]
-            props["action"] = {**action, "description": action["description"] +
+            props["action"] = {
+                **action,
+                "enum": list(dict.fromkeys([*action["enum"], "project_goal", "external_wait"])),
+                "description": action["description"] +
                 " project_goal manages assignments in this conversation. "
-                "external_wait accepts op=open/select/close for an existing project."}
+                "external_wait accepts op=open/select/close for an existing project.",
+            }
             tool = {**tool, "function": {**fn, "parameters": {**params, "properties": props}}}
         elif fn["name"] == "cronjob_manage":
             params = fn["parameters"]
