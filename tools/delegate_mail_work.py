@@ -41,18 +41,33 @@ def ensure_mail_input(parent, projects, project):
         first = next((row for row in rows if _below(mail, row['target_session_id'], project['session_id'])), None)
         if first is None:
             return
+        from tools.delegate_child_goals import child_scope_for_mail
+
+        with _transaction() as conn:
+            scope = child_scope_for_mail(conn, first['goal_project_id'], project)
         from tools.delegate_projects import _origin
         origin = json.loads(previous[0]) if previous else _origin()
         origin.pop("goal_project_id", None)
-        if first['goal_project_id']:
-            origin['goal_project_id'] = first['goal_project_id']
+        origin.pop("child_goal_event", None)
+        origin.pop("child_goal_mail", None)
+        if scope:
+            origin['goal_project_id'] = scope
+        options = {'agent_mail_wake': True, 'agent_mail_id': first['message_id']}
+        if scope != first['goal_project_id']:
+            origin["child_goal_mail"] = True
+            if mail.tip(first["target_session_id"]) != mail.tip(project["session_id"]):
+                options["child_goal_carrier"] = first["goal_project_id"]
+        if first['kind'] == 'child_goal':
+            event = json.loads(first['origin_json'])['child_goal_event']
+            origin['child_goal_event'] = event
+            origin["child_goal_mail"] = True
         if getattr(parent, "_delegate_depth", 0):
             origin = {**origin, "wake": False}
         if not origin.get("wake"):
             origin["mail_results"] = True
         projects.enqueue(project, "Continue your existing task and handle pending agent messages. "
                          "Their contents will enter your conversation at a safe boundary.", origin,
-                         'mail-wake:' + first['message_id'], {'agent_mail_wake': True, 'agent_mail_id': first['message_id']})
+                         'mail-wake:' + first['message_id'], options)
 
 
 def _blocks_mail(conn, row):
@@ -60,11 +75,12 @@ def _blocks_mail(conn, row):
         alive = _owner_liveness()
         if alive is None or alive(row['owner_pid'], row['owner_started_at']):
             return True
-    return _goal_input_state(conn, project_input_goal_id(row)) == 'open' and not mail_wake_satisfied(conn, row)
+    carrier = json.loads(row["options_json"]).get("child_goal_carrier")
+    return _goal_input_state(conn, carrier or project_input_goal_id(row)) == 'open' and not mail_wake_satisfied(conn, row)
 
 
 def result_mail(parent, project, message, result):
-    if not json.loads(message["origin_json"]).get("mail_results"):
+    if not json.loads(message["origin_json"]).get("mail_results") or result.get("child_goal_id"):
         return
     actor = SimpleNamespace(session_id=result.get("session_id") or project["session_id"], _session_db=parent._session_db)
     with MailStore(actor) as mail:
@@ -78,6 +94,7 @@ def recover_result_mail(parent, store, project):
     with _transaction() as conn:
         rows = conn.execute("SELECT message_id,result_json FROM delegated_project_messages WHERE subagent_id=? "
             "AND state NOT IN ('pending','running') AND json_extract(origin_json,'$.mail_results')=1 "
+            "AND json_extract(result_json,'$.child_goal_id') IS NULL "
             "AND NOT EXISTS(SELECT 1 FROM delegation_mail WHERE event_key='result:' || delegated_project_messages.message_id)",
             (project["subagent_id"],)).fetchall()
     for identity, raw in rows:

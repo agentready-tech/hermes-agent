@@ -177,12 +177,12 @@ def apply_stop_gates(
         return verdict
     from agent.continuation_guard import build_continuation_nudge
     from agent.tool_continuation import review_tool_continuation
-    from hermes_runtime.adapters.goal_turn import current_segment, finish_segment
+    from hermes_runtime.adapters.goal_turn import current_segment, dispatch_goal_id, finish_segment
 
     _continuation, recheck_exhausted = review_tool_continuation(agent)
     if not _continuation and not recheck_exhausted:
         segment = current_segment(agent)
-        if segment is None or not segment.project_ids:
+        if not dispatch_goal_id(agent) and (segment is None or not segment.project_ids):
             _continuation = build_continuation_nudge(agent, messages, final_response or "", user_message=user_message)
     if _continuation:
         agent._continuation_guard_nudges = getattr(agent, "_continuation_guard_nudges", 0) + 1

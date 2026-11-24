@@ -98,28 +98,39 @@ def stage_job(job, identity):
 def _owned_project(conn, project_id):
     from hermes_runtime.sessions import HOME_SESSION_ID
     from hermes_state_runtime import _canonical_chain
+    from tools.delegate_child_goals import validate_wait_owner
 
     row = conn.execute('SELECT workspace_json, parent_session_id, archived, paused FROM delegated_projects '
                        'WHERE subagent_id=?', (project_id,)).fetchone()
-    if row is None or row[1] not in _canonical_chain(conn, HOME_SESSION_ID):
-        raise ValueError('External wait has no verified owning main project')
+    if row is None:
+        raise ValueError('External wait has no verified owning project')
     workspace = json.loads(row[0])
     if not isinstance(workspace, dict):
         raise ValueError('Invalid external wait project workspace')
+    child = validate_wait_owner(conn, project_id, workspace)
+    if not child and row[1] not in _canonical_chain(conn, HOME_SESSION_ID):
+        raise ValueError('External wait has no verified owning main project')
+    wait = workspace.get('external_wait')
+    if isinstance(wait, dict) and wait.get('mode') != ('resume_child' if child else 'resume_main'):
+        raise ValueError('External wait mode does not match its owner')
     return workspace, row[2], row[3]
 
 
 def matches_wait(wait, wait_id, job_id):
     return (isinstance(wait, dict) and
-            (wait.get('wait_id'), wait.get('job_id'), wait.get('mode'), wait.get('return_path'))
-            == (wait_id, job_id, 'resume_main', 'timer'))
+            (wait.get('wait_id'), wait.get('job_id'), wait.get('return_path')) == (wait_id, job_id, 'timer')
+            and wait.get('mode') in {'resume_main', 'resume_child'})
 
 
 def _active_workspace(home, project_id, wait_id, job_id):
+    from tools.delegate_project_store import _goal_input_state
+
     with closing(sqlite3.connect((home / 'state.db').as_uri() + '?mode=ro', uri=True)) as conn:
         workspace, archived, paused = _owned_project(conn, project_id)
         wait = workspace.get('external_wait')
         if archived or paused or not matches_wait(wait, wait_id, job_id) or wait.get('state') != 'BOUND':
+            return None
+        if wait['mode'] == 'resume_child' and _goal_input_state(conn, project_id) != 'open':
             return None
         deadline = datetime.fromisoformat(wait['deadline'])
         return workspace if deadline.tzinfo is not None and datetime.now(UTC) < deadline else None

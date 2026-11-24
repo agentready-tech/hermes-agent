@@ -24,14 +24,22 @@ def pending_mail_rows(conn, *, message_ids=None):
     conn.row_factory = sqlite3.Row
     key = "json_extract(m.origin_json, '$.message_goal_project_id')"
     exact = f" AND m.message_id IN ({','.join('?' for _ in message_ids)})" if message_ids is not None else ''
-    return conn.execute(
-        f"""SELECT m.*, {key} AS goal_project_id FROM delegation_mail m
+    rows = conn.execute(
+        f"""SELECT m.*, {key} AS goal_project_id, json_extract(g.workspace_json, '$.goal_state.parent_goal_id') AS parent_goal_id
+            FROM delegation_mail m
             LEFT JOIN delegated_projects g ON g.subagent_id={key}
             WHERE m.delivered_at IS NULL AND ({key} IS NULL OR (
               g.paused=0 AND g.archived=0 AND json_type(g.workspace_json, '$.goal_state')='object'
               AND json_extract(g.workspace_json, '$.goal_state.status') NOT IN ('closing','done','cancelled','inactive')
             )){exact} ORDER BY m.rowid""", message_ids or (),
     ).fetchall()
+    from tools.delegate_child_goals import pending_child_event
+    from tools.delegate_project_store import _goal_input_state
+
+    return [row for row in rows if (
+        pending_child_event(conn, row) if row["kind"] == "child_goal"
+        else not row["parent_goal_id"] or _goal_input_state(conn, row["goal_project_id"]) == "open"
+    )]
 
 
 class MailStore(ProjectStore):
@@ -125,7 +133,7 @@ class MailStore(ProjectStore):
         from tools.delegate_projects import _origin
         return _origin()
 
-    def send(self, recipient, content, event_id=None, *, kind="message", wake=True):
+    def send(self, recipient, content, event_id=None, *, kind="message", wake=True, child_event=None):
         if not isinstance(content, str) or not content.strip() or len(content) > 16000:
             raise ValueError("An agent message must contain 1 to 16000 characters")
         if event_id is not None and (not isinstance(event_id, str) or not event_id):
@@ -134,6 +142,13 @@ class MailStore(ProjectStore):
         identity = "agent-mail-" + uuid.uuid4().hex
         digest = hashlib.sha256(content.encode()).hexdigest()
         origin = self.routing_origin(target) if wake else {"wake": False}
+        goal_id = None
+        if child_event:
+            from hermes_runtime.adapters.state import main_gateway_origin
+
+            origin = {**origin, **(main_gateway_origin() or {}), "wake": True,
+                      "goal_project_id": child_event["parent_goal_id"],
+                      "message_goal_project_id": child_event["scope_id"], "child_goal_event": child_event}
         if kind == 'message':
             from hermes_runtime.adapters.goal_turn import dispatch_goal_id
 
@@ -142,6 +157,20 @@ class MailStore(ProjectStore):
                 # sender's current accepted dispatch establishes Goal provenance.
                 origin = {**origin, 'message_goal_project_id': goal_id}
         with _transaction() as conn:
+            if goal_id:
+                from tools.delegate_child_goals import validate_child_mail_target
+
+                validate_child_mail_target(conn, goal_id, target)
+            if child_event:
+                previous = conn.execute(
+                    "SELECT message_id, content_hash FROM delegation_mail WHERE kind='child_goal' AND event_key=? "
+                    "AND json_extract(origin_json, '$.child_goal_event.project_id')=?",
+                    (event_id, child_event["project_id"]),
+                ).fetchone()
+                if previous:
+                    if previous[1] != digest:
+                        raise ValueError("event_id already names a different Child Goal event")
+                    return {"message_id": previous[0], "sender_id": self.self_id, "recipient_id": target, "status": "queued"}
             conn.execute("INSERT OR IGNORE INTO delegation_mail(message_id,root_session_id,sender_session_id,target_session_id,"
                          "event_key,content,content_hash,kind,origin_json,accepted_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
                          (identity, self.root_id, self.self_id, target, event_id, content, digest, kind, json.dumps(origin), time.time()))
@@ -174,9 +203,13 @@ class MailStore(ProjectStore):
         scope = getattr(self.actor, '_project_input_goal_id', None)
         with _transaction() as conn:
             rows = pending_mail_rows(conn)
+        from hermes_runtime.adapters.goal_turn import goal_in_scope
+
+        segment = getattr(self.actor, '_project_goal_segment', None)
         return [dict(row) for row in rows if self.tip(row["target_session_id"]) == sid
                 and (not ordinary_only or row["kind"] == "message")
-                and (scope is None or row['goal_project_id'] in (None, scope))]
+                and (scope is None or row['goal_project_id'] in (None, scope)
+                     or segment is not None and goal_in_scope(self.actor, row['goal_project_id']))]
 
     def delivery(self, live_ids, *, first_id=None, request_id=None):
         self.acknowledge_recorded()
@@ -206,10 +239,12 @@ def _delivery_batch(pending, start, delivery_id):
         # An intervening paused message may become eligible before a retry.
         # Preserve the already reserved batch and its durable identity.
         return [row for row in pending if row['delivery_id'] == delivery_id and row['goal_project_id'] == goal_id]
+    if pending[start]["kind"] == "child_goal":
+        return [pending[start]]
     batch, size = [], 0
     for row in pending[start:]:
         size += len(row['content'])
-        if row['delivery_id'] or row['goal_project_id'] != goal_id or size > 32000:
+        if row['delivery_id'] or row["kind"] == "child_goal" or row['goal_project_id'] != goal_id or size > 32000:
             break
         batch.append(row)
     return batch

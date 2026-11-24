@@ -10,16 +10,17 @@ def create(agent, args):
     from cron.wait_binding import new_wait_timer_id, store_home
     from hermes_runtime.adapters.goal_turn import goal_in_scope
     from tools.cronjob_tools import _scan_cron_prompt
-    from tools.delegate_external_wait import _existing, _owns_main, _text
+    from tools.delegate_external_wait import _existing, _text, wait_turn
     from tools.delegate_project_store import ProjectStore
     from tools.registry import tool_error
 
     project, wait_id = args.get('project_id'), args.get('wait_id')
+    turn = wait_turn(agent)
+    mode = 'resume_child' if getattr(turn, 'parent_goal_id', None) else 'resume_main'
     fields = {'action', 'project_id', 'wait_id', 'prompt', 'schedule', 'name'}
     if (args.get('action') != 'create' or args.keys() - fields or not _text(project, 128)
-            or not _text(wait_id, 128) or not _owns_main(agent)
-            or getattr(getattr(agent, '_agentready_active_turn', None), 'external_wait', None) != (project, wait_id)):
-        return tool_error('Select the exact open wait in the owning main before creating its timer')
+            or not _text(wait_id, 128) or getattr(turn, 'external_wait', None) != (project, wait_id)):
+        return tool_error('Select the exact open wait in its owning conversation before creating its timer')
     prompt, schedule, name = args.get('prompt'), args.get('schedule'), args.get('name')
     if (not isinstance(prompt, str) or not prompt.strip() or not isinstance(schedule, str)
             or (name is not None and not isinstance(name, str))):
@@ -31,7 +32,7 @@ def create(agent, args):
 
     def reserve(workspace, _conn):
         wait = _existing(workspace, wait_id)
-        if (wait['state'] not in ('OPEN', 'RESERVED', 'BOUND') or wait.get('mode') != 'resume_main'
+        if (wait['state'] not in ('OPEN', 'RESERVED', 'BOUND') or wait.get('mode') != mode
                 or wait.get('return_path') != 'timer' or datetime.fromisoformat(wait['deadline']) <= datetime.now(UTC)):
             raise ValueError('The wait cannot reserve a timer')
         if wait['state'] == 'OPEN':
@@ -60,7 +61,8 @@ def create(agent, args):
     from cron.scheduler import _notify_provider_jobs_changed
 
     _notify_provider_jobs_changed()
-    return json.dumps({'success': True, 'job_id': job_id, 'next_run_at': job['next_run_at'], 'execution_scope': 'main'})
+    return json.dumps({'success': True, 'job_id': job_id, 'next_run_at': job['next_run_at'],
+                       'execution_scope': 'child' if mode == 'resume_child' else 'main'})
 
 
 def _bind_and_resume(store, project, wait_id, job_id, definition):
