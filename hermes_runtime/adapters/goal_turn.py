@@ -649,6 +649,9 @@ def _recover_ready(store, project_id, goal):
 
         consumed = wake_id and consumed_child_wake(store, wake_id)
     else:
+        from hermes_runtime.standalone.events import recover_deferred_reply
+
+        recover_deferred_reply(project_id, store.read_workspace(project_id).get("external_wait") or {})
         consumed = wake_id and _consumed_wake(store, wake_id)
     if not wake_id or consumed:
         goal = _write_transition(store, project_id, goal, consumed=wake_id, interrupted=bool(consumed))

@@ -188,7 +188,7 @@ def accept_main_reply(store, project_id, header):
                 record_delivery(wait, reply, event_id)
             else:
                 # The old admission is retired while paused. Keep the verified
-                # observation for the next runnable timer occurrence.
+                # observation for resume under a fresh admission identity.
                 reply["attempt"] = reply.get("attempt", 0) + 1
             return active
         receipts = wait.get("reply_receipts")

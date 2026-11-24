@@ -1,9 +1,11 @@
 """Regressions for verified Goal wakes, reply delivery and quiet presentation."""
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock
+
+import pytest
 
 from tests.hermes_runtime.test_external_wait_reply_probe import bind, body, deliver_main, row
 from tests.hermes_runtime.test_project_goal import _actor, _agent, _goal, _models, _open, _snapshot
@@ -138,10 +140,14 @@ def test_identical_tool_output_under_new_call_ids_cannot_restart_the_wake_budget
     assert inbox.pending() == []
 
 
-def test_resume_recovers_the_reply_that_reached_the_inbox_before_pause(source, monkeypatch):
-    from cron.jobs import get_job
+@pytest.mark.parametrize('restart_on_resume', [False, True])
+def test_resume_recovers_the_reply_that_reached_the_inbox_before_pause(source, monkeypatch, restart_on_resume):
+    from cron.jobs import get_job, update_job
+    from hermes_runtime.adapters import goal_turn
     from hermes_runtime.adapters.inbox import HomeInbox
     from hermes_runtime.standalone.events import admit_cron
+    from tools.delegate_project_goal import set_goal_paused
+    from tools.delegate_project_store import ProjectStore
 
     actor, project, _, after, _ = source
     _, job_id = bind(source)
@@ -153,14 +159,22 @@ def test_resume_recovers_the_reply_that_reached_the_inbox_before_pause(source, m
 
     inbox = HomeInbox()
     [before_pause] = inbox.pending()
+    with ProjectStore(actor) as store:
+        deadline = datetime.fromisoformat(store.read_workspace(project)['external_wait']['deadline'])
     _goal(actor, 'pause', project_id=project)
     proceed = Mock(return_value={'completed': True})
     assert deliver_main(actor, inbox, before_pause, proceed)['_notification_reply_muted']
     proceed.assert_not_called()
     assert inbox.pending() == []
 
-    _goal(actor, 'resume', project_id=project)
-    assert admit_cron(get_job(job_id), execution_id='after-resume')[0]
+    update_job(job_id, {'next_run_at': (deadline + timedelta(minutes=1)).isoformat()})
+    if restart_on_resume:
+        with ProjectStore(actor) as store:
+            # The durable resume can commit just before the gateway exits.
+            set_goal_paused(store, project, False)
+        goal_turn.recover()
+    else:
+        _goal(actor, 'resume', project_id=project)
     [after_resume] = inbox.pending()
     assert after_resume[0] != before_pause[0]
     assert 'reply-1' in after_resume[1]

@@ -161,12 +161,12 @@ def _admit_wait_timer(job, request_id, cancel_event):
                 return False, "Schedule cancelled before admission", "", "cancelled"
             job_id = current["id"]
             wait, prompt = workspace["external_wait"], current["prompt"]
+            if "reply_probe" in wait:
+                return _admit_polled_reply(job, current, wait, cancel_event)
             metadata = {
                 "job_id": job_id, "execution_id": request_id,
                 "project_id": tag["project_id"], "wait_id": tag["wait_id"],
             }
-            if "reply_probe" in wait:
-                return _admit_polled_reply(job, current, wait, metadata, cancel_event)
             return _handoff_wait(metadata, request_id, prompt, workspace.get("goal_state"))
     except (ValueError, RuntimeError, OSError, sqlite3.Error, KeyError, TypeError):
         return False, "External wait timer not admitted", "", "external_wait_not_active"
@@ -196,46 +196,67 @@ def _quiet_poll(job, current):
     return no_change_result(current["id"], current.get("name") or current["id"])
 
 
-def _admit_polled_reply(job, current, wait, metadata, cancel_event):
+def _admit_polled_reply(job, current, wait, cancel_event):
     import sqlite3
     from http.client import HTTPException
-    from cron.wait_binding import admitted_binding, update_admitted_wait
-    from cron.wait_reply_probe import bound_read, record_delivery, reply_reference, reply_request_id, stage_reply
+    from cron.wait_reply_probe import stage_reply
 
-    job_id = current["id"]
     try:
-        reply = stage_reply(current["external_wait"], job_id, wait, current["prompt"])
-        if reply is None:
-            return _quiet_poll(job, current)
-        # Fetching the connector releases the jobs lock. Recheck cancellation,
-        # pause, the exact wait and the fire owner before the local queue write.
-        with admitted_binding(job, publish=True) as (tag, current, workspace):
-            saved_wait = workspace["external_wait"]
-            if saved_wait.get("pending_reply") != reply:
-                return _quiet_poll(job, current)
-            if cancel_event is not None and cancel_event.is_set():
-                return False, "Schedule cancelled before admission", "", "cancelled"
-            goal = workspace.get("goal_state")
-            child = bool(goal and goal.get("parent_goal_id"))
-            request_id = reply_request_id(reply)
-            event_id = f"{job_id}:{request_id}"
-            if _reply_already_queued(event_id, child=child):
-                result = _quiet_poll(job, current)
-            else:
-                # An unpublished observation cannot outlive its connector binding.
-                bound_read(saved_wait)
-                metadata["reply_ref"] = reply_reference(reply)
-                prompt = (reply["prompt"] + "\n\nThe bound connector observed a new message from the expected sender. "
-                          "Read the message in the saved source and evaluate the reply criterion. "
-                          f"Original reply reference: {json.dumps(metadata['reply_ref'])}")
-                result = _handoff_wait(metadata, request_id, prompt, goal)
-            if child or not goal:
-                # Worker mail holds paused admissions durably. Main Goals commit
-                # the cursor when their owning turn actually admits the reply.
-                update_admitted_wait(tag, job_id, lambda latest: record_delivery(latest, reply, event_id))
-            return result
+        reply = stage_reply(current["external_wait"], current["id"], wait, current["prompt"])
+        return _quiet_poll(job, current) if reply is None else _publish_staged_reply(job, reply, cancel_event)
     except (ValueError, RuntimeError, OSError, sqlite3.Error, KeyError, TypeError, HTTPException):
         return False, "External wait reply check failed", "", "external_wait_reply_check_failed"
+
+
+def _publish_staged_reply(job, reply, cancel_event=None):
+    from cron.wait_binding import admitted_binding, update_admitted_wait
+    from cron.wait_reply_probe import bound_read, record_delivery, reply_reference, reply_request_id
+
+    # Fetching the connector releases the jobs lock. Recheck cancellation,
+    # pause, the exact wait and the fire owner before the local queue write.
+    with admitted_binding(job, publish=True) as (tag, current, workspace):
+        job_id, saved_wait = current["id"], workspace["external_wait"]
+        if saved_wait.get("pending_reply") != reply:
+            return _quiet_poll(job, current)
+        if cancel_event is not None and cancel_event.is_set():
+            return False, "Schedule cancelled before admission", "", "cancelled"
+        goal = workspace.get("goal_state")
+        child = bool(goal and goal.get("parent_goal_id"))
+        request_id = reply_request_id(reply)
+        event_id = f"{job_id}:{request_id}"
+        if _reply_already_queued(event_id, child=child):
+            result = _quiet_poll(job, current)
+        else:
+            # An unpublished observation cannot outlive its connector binding.
+            bound_read(saved_wait)
+            metadata = {"job_id": job_id, "execution_id": job.get("execution_id"),
+                        "project_id": tag["project_id"], "wait_id": tag["wait_id"], "reply_ref": reply_reference(reply)}
+            prompt = (reply["prompt"] + "\n\nThe bound connector observed a new message from the expected sender. "
+                      "Read the message in the saved source and evaluate the reply criterion. "
+                      f"Original reply reference: {json.dumps(metadata['reply_ref'])}")
+            result = _handoff_wait(metadata, request_id, prompt, goal)
+        if child or not goal:
+            # Worker mail holds paused admissions durably. Main Goals commit
+            # the cursor when their owning turn actually admits the reply.
+            update_admitted_wait(tag, job_id, lambda latest: record_delivery(latest, reply, event_id))
+        return result
+
+
+def recover_deferred_reply(project_id, wait):
+    """Resume a parked reply immediately, including after the last timer slot."""
+    import sqlite3
+    from cron.jobs import get_job
+    from cron.wait_binding import binding
+
+    reply = wait.get("pending_reply")
+    if wait.get("state") != "BOUND" or not reply or not reply.get("attempt"):
+        return
+    try:
+        job = get_job(wait["job_id"])
+        if job and job.get("external_wait") == binding(project_id, wait["wait_id"]):
+            _publish_staged_reply(job, reply)
+    except (ValueError, RuntimeError, OSError, sqlite3.Error, KeyError, TypeError):
+        logger.debug("Verified reply remains deferred for Goal %s", project_id)
 
 
 def _handoff_wait(metadata, request_id, prompt, goal):
