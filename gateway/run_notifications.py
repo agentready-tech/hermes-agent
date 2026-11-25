@@ -1482,9 +1482,15 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
         """Offer completions whose owner process died while this gateway runs (#97202): the launch
         ledger in the launch scope, each served secondary under its own. Startup replay only covers
         owners that were already gone when the gateway started."""
+        from hermes_runtime.adapters.goal_turn import recover as recover_project_goals
         from tools.async_delegation import sweep_orphaned_completions
         from tools.process_registry import process_registry as _pr
-        sweep = lambda: sweep_orphaned_completions(_pr.completion_queue)
+
+        def sweep():
+            with _log_suppressed(logging.DEBUG, "Saved Project Goal recovery deferred: %s"):
+                recover_project_goals()
+            return sweep_orphaned_completions(_pr.completion_queue)
+
         with _log_suppressed(logging.DEBUG, "Orphaned async completion sweep failed: %s"):
             if count := sweep():
                 logger.info("Re-offered %d orphaned async completion(s)", count)

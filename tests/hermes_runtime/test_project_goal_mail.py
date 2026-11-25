@@ -21,7 +21,7 @@ from tools.delegate_mail_work import MailboxDeferred, ensure_mail_input, stage_m
 from tools.delegate_project_goal import read_goal
 from tools.delegate_project_store import ProjectStore, project_input_goal_id
 
-pytest_plugins = ['tests.hermes_runtime.test_main_schedule_tools']
+pytest_plugins = ['tests.hermes_runtime.test_main_schedule_tools', 'tests.hermes_runtime.test_shared_profile_host']
 
 
 def _mail_row(db, identity):
@@ -241,7 +241,10 @@ BLOCKED_CHILD_NEXT_STEP = "Review the saved report and record the outstanding ap
 
 @pytest.fixture
 def blocked_child_assignment(main_home):
-    _, db = main_home
+    return _assignment_with_child(main_home[1])
+
+
+def _assignment_with_child(db):
     main = _actor(db)
     root = _open(main, "Review the finished work and collect its approval")
     with ProjectStore(main) as store:
@@ -255,6 +258,19 @@ def blocked_child_assignment(main_home):
 def _block(owner, child):
     return _goal(owner, "block", project_id=child, blocker="Awaiting the user's authorization",
                  unblock="The user grants access", notify=True)
+
+
+def _save_running_step(main, root, *, stale=False):
+    from tools.delegate_project_goal import add_evidence, mutate_goal
+
+    def save(goal):
+        add_evidence(goal, "project-msg-saved", "worker report", "Review evidence saved before recovery.")
+        goal.update(status="running", checked_revision=goal["revision"], next_step=BLOCKED_CHILD_NEXT_STEP,
+                    step_revision=0 if stale else goal["revision"])
+        return goal
+
+    with ProjectStore(main) as store:
+        mutate_goal(store, root, save)
 
 
 @pytest.mark.asyncio
@@ -309,7 +325,6 @@ async def test_native_report_schedules_parent_step_with_blocked_child(main_home,
 @pytest.mark.parametrize("condition", ["stalled", "active child", "queued dispatch", "stale step"])
 def test_recovery_uses_only_a_verified_parent_step(blocked_child_assignment, monkeypatch, condition):
     from hermes_runtime.adapters.inbox import HomeInbox
-    from tools.delegate_project_goal import add_evidence, mutate_goal
 
     main, root, coordinator, owner, child = blocked_child_assignment
     _block(owner, child)
@@ -317,16 +332,10 @@ def test_recovery_uses_only_a_verified_parent_step(blocked_child_assignment, mon
         _open(owner, "Complete the other review stage", slot=2)
     monkeypatch.setattr("hermes_runtime.adapters.state.main_gateway_origin", dict)
 
-    def seed_stuck_state(goal):
-        add_evidence(goal, "project-msg-saved", "worker report", "Review evidence saved before recovery.")
-        goal.update(status="running", checked_revision=goal["revision"], next_step=BLOCKED_CHILD_NEXT_STEP,
-                    step_revision=0 if condition == "stale step" else goal["revision"])
-        return goal
-
-    with ProjectStore(main) as store:
-        if condition == "queued dispatch":
+    if condition == "queued dispatch":
+        with ProjectStore(main) as store:
             store.enqueue(coordinator, "Finish the other review stage", {"goal_project_id": root, "wake": True})
-        mutate_goal(store, root, seed_stuck_state)
+    _save_running_step(main, root, stale=condition == "stale step")
     before = _snapshot(main, root)
     goal_turn.recover()
     after = _snapshot(main, root)
@@ -340,3 +349,47 @@ def test_recovery_uses_only_a_verified_parent_step(blocked_child_assignment, mon
         goal_turn.recover()
         assert inbox.pending() == [saved]
     assert _snapshot(owner, child)["status"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_shared_gateway_replays_stalled_goal_without_a_viewer(shared_homes, monkeypatch):
+    from queue import Queue
+
+    import hermes_state
+    from gateway.config import GatewayConfig
+    from gateway.run import GatewayRunner
+    from gateway.run_runtime import _build_profile_authority
+    from gateway.session_authorities import SessionAuthorities, owner_scope
+    from tools.process_registry import process_registry
+
+    root, homes = shared_homes
+    monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", hermes_state._IMPORT_DEFAULT_DB_PATH)
+    monkeypatch.setattr(process_registry, "completion_queue", Queue())
+    runner = GatewayRunner(GatewayConfig(multiplex_profiles=True, sessions_dir=root / "sessions"))
+    runner._primary_profile_name = "default"
+    runner._served_profile_homes = homes
+    runner.session_authorities = SessionAuthorities(root, multiplexed=True)
+    runner.session_runtime_descriptor = {"instance_id": "shared-goal-recovery"}
+    try:
+        alpha = await _build_profile_authority(runner, "alpha", homes["alpha"], register=False)
+        bravo = await _build_profile_authority(runner, "bravo", homes["bravo"], register=False)
+        with owner_scope(alpha):
+            main, assignment, _, owner, child = _assignment_with_child(alpha.db)
+            _block(owner, child)
+            _save_running_step(main, assignment)
+
+        await asyncio.to_thread(runner._sweep_orphaned_completion_ledgers)
+        with owner_scope(alpha):
+            saved = _snapshot(main, assignment)
+            assert saved["status"] == "ready" and saved["wake_id"]
+            assert _snapshot(owner, child)["status"] == "blocked"
+        wake = _wake(alpha.db, "main-goal-")
+        assert wake["goal_project_id"] == assignment and wake["session_key"] == "agent:alpha:agentready:home"
+        assert f"Saved next step: {BLOCKED_CHILD_NEXT_STEP}" in wake["summary"]
+        assert not bravo.db._read_all("SELECT 1 FROM async_delegations")
+
+        await asyncio.to_thread(runner._sweep_orphaned_completion_ledgers)
+        assert _wake(alpha.db, "main-goal-") == wake
+        assert sum(e["delegation_id"] == wake["delegation_id"] for e in process_registry.completion_queue.queue) == 1
+    finally:
+        runner.session_store.close_all_db_handles()
