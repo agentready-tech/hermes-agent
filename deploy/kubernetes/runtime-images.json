@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.25.2",
+  "defaultRuntimeVersion": "2026.11.26.1",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -5210,6 +5210,43 @@
         "releaseRegressionTestsPassed": 106
       },
       "description": "Resume saved parent Goals after blocked child stages in the shared gateway.",
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml"
+    },
+    "2026.11.26.1": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:bca0ce72576f5dac5a10c40def874c711093726fa80f20645db467708395c98e",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.26.1",
+      "configDigest": "sha256:c723b158c73ac2fe9fa7d0d83a994836e25533f73c156dfd123b4dac41d71792",
+      "platform": "linux/amd64",
+      "sourceRevision": "8e4acc64c4b2a9c029c6a638198f04eb08165ab5",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:bca0ce72576f5dac5a10c40def874c711093726fa80f20645db467708395c98e",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.26.1",
+        "digest": "sha256:bca0ce72576f5dac5a10c40def874c711093726fa80f20645db467708395c98e",
+        "configDigest": "sha256:c723b158c73ac2fe9fa7d0d83a994836e25533f73c156dfd123b4dac41d71792",
+        "sourceRevision": "8e4acc64c4b2a9c029c6a638198f04eb08165ab5",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 45712585402,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": false,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:063bbbc0832b035debd78755030e37c38d397ab8c0f9db2aee1080bfbff3bab8",
+        "deployRunId": 45714886463
+      },
+      "validation": {
+        "runtimeReady": true,
+        "futureDefaultConfigured": true,
+        "releaseRegressionTestsPassed": 215
+      },
+      "description": "Deliver stopped orchestration reports and blockers to the owning parent.",
       "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
       "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml"
     }
