@@ -83,7 +83,7 @@ async def test_role_goals_resume_the_same_worker_after_restart(main_home, monkey
 
     home, db = main_home
     config = home / "config.yaml"
-    config.write_text(config.read_text() + "delegation:\n  max_spawn_depth: 2\n  worktree_isolation: false\n")
+    config.write_text(config.read_text() + "delegation:\n  worktree_isolation: false\n")
     monkeypatch.setattr("agent.prompt_builder._probe_remote_backend", lambda *_: "Linux Docker fixture")
     monkeypatch.setenv("HERMES_GATEWAY_SESSION", "1")
     runner, authority = await gateway_owner(home, db, monkeypatch, "child-goals")

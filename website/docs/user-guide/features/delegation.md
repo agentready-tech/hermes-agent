@@ -656,8 +656,7 @@ delegate_task(
 ```
 
 - `leaf`: cannot spawn further, but retains `message`, `peers` and `wait`.
-- `orchestrator`: can spawn while below `delegation.max_spawn_depth` (default **1**, flat spawning).
-  With a depth limit of 2, depth-1 children may spawn depth-2 leaf grandchildren.
+- An `orchestrator` can spawn while below `delegation.max_spawn_depth`. The default of **2** lets depth-1 children spawn depth-2 leaf grandchildren.
 - `delegation.orchestrator_enabled: false` or `max_spawn_depth: 1` makes first-level
   children leaves. Coordination remains available.
 - The model does not choose a role; the legacy Python `role` argument does not override depth/configuration.
@@ -776,7 +775,7 @@ delegation:
   # max_concurrent_children: 10             # Parallel children per batch (default: 10)
   # independent_completions: false          # true = each task/group returns as it finishes (default: one message per call)
   # worktree_isolation: false               # Give each child its own git worktree (see Worktree Isolation above)
-  # max_spawn_depth: 1                      # Tree depth (floor 1, no ceiling, default 1 = flat). Raise to 2 to allow orchestrator children to spawn leaves; 3+ for deeper trees.
+  # max_spawn_depth: 2                      # Tree depth (floor 1, no ceiling). Set to 1 for flat delegation.
   # orchestrator_enabled: true              # Disable to force all children to leaf role.
   model: "google/gemini-3-flash-preview"             # Optional provider/model override
   provider: "openrouter"                             # Optional built-in provider
