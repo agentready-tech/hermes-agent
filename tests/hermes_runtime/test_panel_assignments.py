@@ -44,6 +44,34 @@ async def _call_panel(connection, operation, **payload):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_block", [True, False])
+async def test_graph_marks_a_stopped_orchestrator_as_blocked(main_home, monkeypatch, explicit_block):
+    from tests.hermes_runtime.test_child_goals import _child_actor
+    from tests.hermes_runtime.test_project_goal import _goal
+
+    home, db = main_home
+    main = _actor(db)
+    assignment = _open(main, "Complete the review and QA")
+    with ProjectStore(main) as store:
+        coordinator = _worker(store, db, "orchestrator", assignment)
+        owner = _child_actor(db, coordinator, assignment)
+        stage = _open(owner, "Run QA")
+        message_id = store.enqueue(coordinator, "Coordinate QA", {"goal_project_id": assignment, "wake": True})
+        message = store.claim(coordinator)
+        owner._project_goal_segment.input_id = message_id
+        if explicit_block:
+            _goal(owner, "block", project_id=stage, blocker="QA access is missing",
+                  unblock="The stand owner authorizes access", notify=True)
+        assert store.settle(coordinator, message, {"status": "completed", "summary": "QA is outstanding."})
+
+    _, connection = runtime(home, db, monkeypatch)
+    assert "error" not in await resume(connection)
+    graph = await _call_panel(connection, "graph", project_id=assignment)
+    [node] = [node for node in graph["nodes"] if node["id"] == coordinator["subagent_id"]]
+    assert node["status"] == "blocked"
+
+
+@pytest.mark.asyncio
 async def test_owned_graph_and_paged_timeline_use_exact_dispatch_receipts(main_home, monkeypatch):
     from tests.hermes_runtime.test_child_goals import _child_actor
     from tools.delegate_mail import mail_action

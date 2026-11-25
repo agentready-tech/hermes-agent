@@ -291,7 +291,7 @@ class ProjectStore:
             return None
 
     def settle(self, project, message, result):
-        from tools.delegate_child_goals import record_worker_evidence, unfinished_orchestration
+        from tools.delegate_child_goals import record_orchestration_result, record_worker_evidence
 
         canonical = result.get("status") == "completed" and self.committed_result(project, message) is not None
         with _transaction() as conn:
@@ -299,8 +299,7 @@ class ProjectStore:
             if goal_id and conn.execute("SELECT 1 FROM delegated_project_messages WHERE message_id=? AND claim_token=?",
                                         (message["message_id"], message["claim_token"])).fetchone():
                 record_worker_evidence(conn, project, message, result, goal_id)
-                if unfinished_orchestration(conn, project, message, goal_id):
-                    result["goal_continuing"] = True
+                record_orchestration_result(conn, project, message, result, goal_id)
             changed = conn.execute("UPDATE delegated_project_messages SET state=?,result_json=?,completed_at=?,owner_pid=NULL,claim_token=NULL,published=?,content=CASE WHEN ? THEN '' ELSE content END,options_json=CASE WHEN ? THEN '{}' ELSE options_json END WHERE message_id=? AND claim_token=?",
                 (result.get("status", "failed"), json.dumps(result, ensure_ascii=False), time.time(),
                  int(not json.loads(message["origin_json"]).get("wake")), canonical, canonical, message["message_id"], message["claim_token"])).rowcount

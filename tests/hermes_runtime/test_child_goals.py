@@ -217,7 +217,14 @@ async def test_role_goals_resume_the_same_worker_after_restart(main_home, monkey
         event = await async_wait_until(lambda: _pending_event(db, match), what=match)
         await _consume(runner, authority, home, event)
 
-    await consume(ids["first_input"])
+    await async_wait_until(
+        lambda: db._read_one(
+            "SELECT 1 FROM async_delegations WHERE delegation_id=? AND delivery_state='suppressed'",
+            (ids["first_input"],),
+        ),
+        what="the waiting orchestrator's intermediate receipt settles without main admission",
+    )
+    assert _pending_event(db, ids["first_input"]) is None
     await async_wait_until(lambda: ids.get("timer"), what="native coordinator handoffs through confirmation")
     with ProjectStore(_actor(db)) as store:
         child_owner = _child_actor(db, store.get(ids["coordinator"]), ids["main"])

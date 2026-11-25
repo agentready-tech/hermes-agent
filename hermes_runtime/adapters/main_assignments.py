@@ -171,12 +171,15 @@ def _children(store, parent, project_id, before, limit, *, identity=None):
 def _persistent_status(store, node, project_id):
     row = store.db._read_one(
         f"""WITH {_ASSIGNMENT_SCOPE}
-           SELECT state FROM delegated_project_messages WHERE subagent_id=?
+           SELECT CASE WHEN state='completed' AND json_extract(result_json,'$.goal_attention')=1 THEN 'blocked'
+               WHEN state='completed' AND json_extract(result_json,'$.goal_continuing')=1 THEN 'waiting'
+               ELSE state END AS status
+           FROM delegated_project_messages WHERE subagent_id=?
            AND ((SELECT goal_id FROM assignment_root) IS NULL OR json_extract(origin_json, '$.goal_project_id') IN assignment_goals)
            ORDER BY CASE state WHEN 'running' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, rowid DESC LIMIT 1""",
         (project_id, node['id']),
     )
-    return row['state'] if row else 'idle'
+    return row['status'] if row else 'idle'
 
 
 def one_shot_status(store, node):

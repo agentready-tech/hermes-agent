@@ -92,7 +92,8 @@ def _blocks_mail(conn, row):
 
 
 def result_mail(parent, project, message, result):
-    if not json.loads(message["origin_json"]).get("mail_results") or result.get("child_goal_id"):
+    if (not json.loads(message["origin_json"]).get("mail_results")
+            or result.get("child_goal_id") or result.get("goal_continuing")):
         return
     actor = SimpleNamespace(session_id=result.get("session_id") or project["session_id"], _session_db=parent._session_db)
     with MailStore(actor) as mail:
@@ -107,6 +108,7 @@ def recover_result_mail(parent, store, project):
         rows = conn.execute("SELECT message_id,result_json FROM delegated_project_messages WHERE subagent_id=? "
             "AND state NOT IN ('pending','running') AND json_extract(origin_json,'$.mail_results')=1 "
             "AND json_extract(result_json,'$.child_goal_id') IS NULL "
+            "AND COALESCE(json_extract(result_json,'$.goal_continuing'),0)=0 "
             "AND NOT EXISTS(SELECT 1 FROM delegation_mail WHERE event_key='result:' || delegated_project_messages.message_id)",
             (project["subagent_id"],)).fetchall()
     for identity, raw in rows:

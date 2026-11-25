@@ -127,6 +127,10 @@ def recovery_owner(conn, project_id, goal):
         return record["owner"]
     if not open_parent(conn, goal):
         return None
+    if goal["status"] == "ready" and goal.get("wake_id") and goal.get("executor_id"):
+        worker = _project(conn, goal["executor_id"])
+        if not worker or worker["archived"]:
+            return None  # This saved wake can no longer reach its recipient.
     busy = conn.execute(
         """SELECT 1 FROM delegated_project_messages WHERE subagent_id=? AND state IN ('pending','running')
            AND json_extract(origin_json, '$.goal_project_id')=? LIMIT 1""",
@@ -262,25 +266,63 @@ def record_worker_evidence(conn, project, message, result, goal_id):
         write_workspace(conn, goal_id, workspace, lambda _workspace, _conn: None)
 
 
-def unfinished_orchestration(conn, project, message, goal_id):
-    if not goal_id:
-        return False
+def _open_stages(conn, parent_goal_id, orchestrator_id=None):
     rows = conn.execute(
-        """SELECT json_extract(workspace_json, '$.goal_state.status'),
-                  json_extract(workspace_json, '$.goal_state.escalation_input_id')
-           FROM delegated_projects WHERE json_extract(workspace_json, '$.goal_state.parent_goal_id')=?
-             AND json_extract(workspace_json, '$.goal_state.orchestrator_id')=? AND archived=0""",
-        (goal_id, project["subagent_id"]),
+        """SELECT json_extract(stage.workspace_json, '$.goal_state'), stage.paused, EXISTS (
+               SELECT 1 FROM delegated_project_messages m JOIN delegated_projects worker USING(subagent_id)
+               WHERE m.subagent_id=json_extract(stage.workspace_json, '$.goal_state.executor_id')
+                 AND json_extract(m.origin_json, '$.goal_project_id')=stage.subagent_id
+                 AND m.state IN ('pending','running') AND worker.paused=0 AND worker.archived=0
+           ), json_extract(stage.workspace_json, '$.goal_state.executor_id') IS NULL OR executor.archived=0
+           FROM delegated_projects stage
+           LEFT JOIN delegated_projects executor
+             ON executor.subagent_id=json_extract(stage.workspace_json, '$.goal_state.executor_id')
+           WHERE json_extract(stage.workspace_json, '$.goal_state.parent_goal_id')=?
+             AND (? IS NULL OR json_extract(stage.workspace_json, '$.goal_state.orchestrator_id')=?)
+             AND stage.archived=0 AND json_extract(stage.workspace_json, '$.goal_state.status')
+               NOT IN ('done','cancelled','inactive')""",
+        (parent_goal_id, orchestrator_id, orchestrator_id),
     ).fetchall()
-    if not rows or any(status == "blocked" and escalation == message["message_id"] for status, escalation in rows):
-        return False
-    if any(status not in {"done", "cancelled", "inactive"} for status, _ in rows):
-        return True
+    return [(json.loads(state), paused, dispatched, can_wake) for state, paused, dispatched, can_wake in rows]
+
+
+def _stage_has_work(goal, paused, dispatched, can_wake):
+    status = goal["status"]
+    return bool(paused or status != "blocked" and (
+        dispatched or status in {"closing", "awaiting_operation"}
+        or can_wake and (status == "waiting" or status == "ready" and goal.get("wake_id") and goal.get("wake_step"))
+    ))
+
+
+def child_working(conn, parent_goal_id):
+    return (any(_stage_has_work(*stage) for stage in _open_stages(conn, parent_goal_id))
+            or _pending_stage_result(conn, parent_goal_id))
+
+
+def _pending_stage_result(conn, goal_id, orchestrator_id=None):
     rows = conn.execute(
         """SELECT origin_json FROM delegation_mail WHERE delivered_at IS NULL AND kind='child_goal'
-             AND json_extract(origin_json, '$.child_goal_event.orchestrator_id')=?
+             AND (? IS NULL OR json_extract(origin_json, '$.child_goal_event.orchestrator_id')=?)
              AND json_extract(origin_json, '$.child_goal_event.parent_goal_id')=?
              AND json_extract(origin_json, '$.child_goal_event.source')='result'""",
-        (project["subagent_id"], goal_id),
+        (orchestrator_id, orchestrator_id, goal_id),
     ).fetchall()
     return any(child_event_state(conn, row[0]) != "closed" for row in rows)
+
+
+def record_orchestration_result(conn, project, message, result, goal_id):
+    orchestrator_id = project["subagent_id"]
+    stages = _open_stages(conn, goal_id, orchestrator_id)
+    blocked = [goal for goal, paused, _, _ in stages if goal["status"] == "blocked" and not paused]
+    escalations = [goal for goal in blocked if goal.get("escalation_input_id") == message["message_id"]]
+    if not escalations and (any(_stage_has_work(*stage) for stage in stages)
+                            or _pending_stage_result(conn, goal_id, orchestrator_id)):
+        result["goal_continuing"] = True
+        return
+    blockers = escalations or blocked
+    if blockers:
+        notes = [f"Blocker: {goal['blocker']}\nTo resume: {goal['unblock']}" for goal in blockers]
+        result["summary"] = "\n\n".join([*notes, result.get("summary") or ""]).strip()
+    if stages:
+        # An open stage without a continuation still owes its parent the saved report.
+        result["goal_attention"] = True
