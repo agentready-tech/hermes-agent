@@ -324,6 +324,16 @@ def _write_channel_record_locked(sha16: str, path: str, channel: str,
     """
     from utils import atomic_roundtrip_yaml_update
 
+    from hermes_cli.config import config_write_lock, require_readable_config_before_write
+    with config_write_lock(config_path):
+        return _write_channel_record_checked(sha16, path, channel, expected, config_path)
+
+
+def _write_channel_record_checked(sha16: str, path: str, channel: str,
+                                 expected: dict | None, config_path: Path) -> bool:
+    """Read, compare ``expected`` and write under the caller's config transaction."""
+    from utils import atomic_roundtrip_yaml_update
+
     from hermes_cli.config import require_readable_config_before_write
     existing = require_readable_config_before_write(config_path)
     update_cfg = existing.get("update")

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import types
 from pathlib import Path
 
 import pytest
@@ -123,8 +124,10 @@ async def test_scoped_wire_promotion_and_main_turn_readback(main_home, monkeypat
         restored = run._load_gateway_config(config_path)
         with pytest.raises(SubscriptionError, match="примените"):
             await service.handle("subscriptions.disconnect", {"provider": "gemini"}, viewer=VIEWER)
+        # A turn started from the stale Gemini config must refuse at the resolution
+        # boundary: the saved intent no longer matches the fence it would carry.
         with pytest.raises(agy_runtime.AgyError):
-            await asyncio.to_thread(native_turn, route_config, agent)
+            await asyncio.to_thread(resolve_turn_runtime, runner, source, HOME_SESSION_KEY, route_config)
         managed = service._config()["model"]
         monkeypatch.setattr(run, "_resolve_runtime_agent_kwargs", lambda: {
             "provider": "custom", "base_url": managed["base_url"], "api_mode": "chat_completions", "api_key": "fixture"})
@@ -136,16 +139,43 @@ async def test_scoped_wire_promotion_and_main_turn_readback(main_home, monkeypat
         old_agent = AIAgent(model=old_model, session_id=HOME_SESSION_ID, session_db=db, quiet_mode=True,
                             skip_memory=True, skip_context_files=True, enabled_toolsets=[], **old_kwargs)
         observed = []
-        def inert_request(*_args, **_kwargs):
-            observed.append((old_agent.provider, old_agent.model))
-            return {"final_response": "fixture only"}
-        monkeypatch.setattr(old_agent, "run_conversation", inert_request)
+        from openai.types.chat import ChatCompletion
+
+        class InertTransport:
+            """Substituted wire client: the real turn loop and request boundary still run."""
+            def __init__(self):
+                self.chat = types.SimpleNamespace(completions=self)
+
+            def create(self, **request):
+                from hermes_yaml import safe_load
+                from hermes_runtime.standalone.agy_selection import read_selection
+                observed.append((request.get("model"),
+                                 (home / "subscriptions" / "agy" / "native-applied.json").is_file(),
+                                 read_selection(home, safe_load(config_path.read_text())) is not None))
+                if request.get("stream"):
+                    from openai.types.chat import ChatCompletionChunk
+                    chunk = ChatCompletionChunk(id="fixture", created=0, object="chat.completion.chunk",
+                        model=request.get("model") or old_model, choices=[{"index": 0, "finish_reason": "stop",
+                        "delta": {"role": "assistant", "content": "fixture only"}}])
+                    return iter((chunk,))
+                message = types.SimpleNamespace(role="assistant", content="fixture only", tool_calls=None)
+                return ChatCompletion(id="fixture", created=0, object="chat.completion",
+                    model=request.get("model") or old_model, choices=[types.SimpleNamespace(
+                        index=0, finish_reason="stop", message=message)])
+
+            def close(self):
+                return None
+
+        monkeypatch.setattr("agent.agent_runtime_helpers.create_openai_client", lambda *_a, **_k: InertTransport())
+        old_agent._close_cached_request_openai_client(reason="fixture_transport")
         try:
             await asyncio.to_thread(native_turn, restored, old_agent)
-            assert observed == [("custom", "managed-fixture")]
+            assert observed and observed[0] == ("managed-fixture", True, True), observed
             assert await service.handle("subscriptions.disconnect", {"provider": "gemini"}, viewer=VIEWER) == {"disconnected": True}
             assert store.active(home) is None
             assert len(store.children) == 3
+            from hermes_runtime.adapters.main_model import current_main_selection
+            assert current_main_selection(source, HOME_SESSION_KEY, run._load_gateway_config(config_path)) is None
         finally:
             old_agent.close()
     finally:

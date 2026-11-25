@@ -86,7 +86,7 @@ class Subscriptions:
     def _request(self, path, payload=None, method=None):
         return self.auth.authenticated_request(path, payload, method=method)
 
-    def status(self):
+    def status(self, viewer=None):
         config = self._config()
         managed = self._managed_route(config)
         model = config.get("model", {})
@@ -95,7 +95,9 @@ class Subscriptions:
         catalog = self._request("/api/providers/oauth").get("providers", [])
         openai = next((row["status"] for row in catalog if row.get("id") == "openai-codex"), {})
         claude = self._claude()
-        gemini = self.gemini.card()
+        # A legacy connector sends no viewer binding and renders every card it receives;
+        # it must not learn about a provider it cannot drive.
+        gemini = self.gemini.card() if isinstance(viewer, str) and VIEWER.fullmatch(viewer) else None
         # Native account cards may carry token previews, emails and local file paths. None
         # belongs in Panel's response, store or logs.
         return {"selected": selected, "model": model.get("default", ""),
@@ -341,7 +343,7 @@ class Subscriptions:
                 raise AgyError("unavailable")
         if method == "subscriptions.select":
             return await self.select(provider, params.get("model"), params.get("managedFallback") is True)
-        handlers = {"subscriptions.status": lambda: self.status(),
+        handlers = {"subscriptions.status": lambda: self.status(viewer),
             "subscriptions.models": lambda: self.models(provider),
             "subscriptions.login.start": lambda: self.start(provider),
             "subscriptions.login.poll": lambda: self.poll(provider, params.get("sessionId")),
@@ -362,5 +364,6 @@ class Subscriptions:
                 raise SubscriptionError("Сначала примените другой источник инференса в текущем диалоге.")
             if generation is not None:
                 authority.withdraw(self.home, generation, "disconnect")
+            ticket.clear_stamp()
         self.gemini.retire()
         return {"disconnected": True}

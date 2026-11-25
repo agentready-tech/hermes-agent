@@ -693,8 +693,13 @@ def _prepare_turn_input(sid: str, session: dict, st: _TurnRun, text: Any, images
     st.agent = agent = session["agent"]
     from hermes_runtime.standalone.agy_selection import capture_native_selection
     selection = capture_native_selection(session.get("session_key"), _config_model_target())
+    if (selection is not None and selection.provider != "gemini-antigravity"
+            and session.get("panel_transition_revision") == selection.revision):
+        selection = None  # One-shot return already adopted in this dialog.
     if selection:
-        selection.bind_request(agent)
+        selection.attach(agent)
+        if selection.provider != "gemini-antigravity":
+            session["panel_transition_revision"] = selection.revision
     # Snapshot after the model sync: a deferred switch's history mutation belongs to this turn.
     with session["history_lock"]:
         st.history = list(session["history"])

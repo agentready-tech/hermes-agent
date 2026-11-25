@@ -977,10 +977,10 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
             captured = execution_result.get()
             before = (getattr(agent, 'session_prompt_tokens', 0) or 0,
                       getattr(agent, 'session_completion_tokens', 0) or 0)
-            from hermes_runtime.adapters.main_model import current_main_selection
-            selection = current_main_selection(ctx.source, ctx.session_key, ctx.user_config)
+            selection = getattr(self._runner, "_panel_pending_ticket", None)
+            self._runner._panel_pending_ticket = None
             if selection:
-                selection.bind_request(agent)
+                selection.attach(agent)
             with notification_turn(agent, muted=ctx.mute_notification_reply, session_id=ctx.session_id or ""):
                 result = agent.run_conversation(api_message, **kwargs)
             if captured is not None:

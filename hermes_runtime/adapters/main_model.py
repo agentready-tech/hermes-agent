@@ -57,6 +57,7 @@ def current_main_selection(source, session_key, user_config):
 
 def resolve_turn_runtime(runner, source, session_key, user_config):
     ticket = current_main_selection(source, session_key, user_config)
+    runner._panel_pending_ticket = None
     if ticket is not None:
         ticket.require_saved()
     from providers.agy_policy import AgyError, is_agy
@@ -68,8 +69,12 @@ def resolve_turn_runtime(runner, source, session_key, user_config):
         if ticket is None:
             raise AgyError("unavailable")
         runtime(ticket.model)
-    apply_selection(runner, source, session_key, selection_revision(user_config))
+    transitioned = apply_selection(runner, source, session_key, selection_revision(user_config))
     if ticket is not None and is_agy(ticket.provider):
+        runner._panel_pending_ticket = ticket
         from gateway.run import _runtime_agent_kwargs
         return ticket.model, _runtime_agent_kwargs(runtime(ticket.model))
+    if ticket is not None and transitioned:
+        # One-shot return to another source; a later explicit /model owns the session again.
+        runner._panel_pending_ticket = ticket
     return runner._resolve_session_agent_runtime(source=source, session_key=session_key, user_config=user_config)

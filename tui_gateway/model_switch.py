@@ -469,6 +469,10 @@ def _sync_agent_model_with_config(sid: str, session: dict) -> None:
     if reserved or session.get("session_key") == "agentready_home":
         from hermes_runtime.standalone.agy_selection import capture_native_selection
         ticket = capture_native_selection(session.get("session_key"), target)
+        if (ticket is not None and ticket.provider != "gemini-antigravity"
+                and session.get("panel_transition_revision") == ticket.revision):
+            # One-shot return already adopted: a later explicit /model is authoritative.
+            ticket = None
     if reserved:
         from hermes_runtime.standalone.agy_runtime import runtime
         runtime(target[0])  # Even a seen or overridden config must not fall through on refusal.
@@ -506,6 +510,8 @@ def _sync_agent_model_with_config(sid: str, session: dict) -> None:
         _apply_model_switch(
             sid, session, raw, confirm_expensive_model=True, pin_session_override=False,
             persist_override=False, count_switch=False, **({"selection_ticket": ticket} if ticket else {}))
+        if ticket is not None and ticket.provider != "gemini-antigravity":
+            session["panel_transition_revision"] = ticket.revision
     except Exception as e:
         if reserved or ticket:
             if isinstance(e, AgyError):

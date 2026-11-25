@@ -77,18 +77,37 @@ class Selection:
         if self.provider == PROVIDER and (agent.client.home != self.home or agent.client.generation != self.generation):
             raise AgyError("auth_required")
 
-    def bind_request(self, agent):
+    def attach(self, agent):
+        """Fence this and the next request attempt; never publishes an applied receipt."""
+        self.require_saved()
+        agent._panel_selection = self
+        if self.provider == PROVIDER:
+            agent.client.selection = self
+
+    def publish_applied(self, agent):
+        """Request boundary: recheck the persisted intent and the route actually being requested."""
         from hermes_cli.config import config_write_lock
         from utils import atomic_json_write
 
         with config_write_lock(self.home / "config.yaml"):
             self.require_saved()
             self.require_runtime(agent)
-            if self.provider == PROVIDER:
-                # The actual print checks this ticket again, including on subsequent tool steps.
-                agent.client.selection = self
-            elif not self.was_applied():
+            if self.provider != PROVIDER and not self.was_applied():
                 atomic_json_write(self._receipt_path(create=True), self._receipt(), mode=0o600, fsync_dir=True)
+
+    def clear_stamp(self):
+        """A successful disconnect ends the transition: no fence and no applied receipt survives."""
+        from hermes_cli.config import atomic_config_replace, config_write_lock, require_readable_config_before_write
+
+        path = self.home / "config.yaml"
+        with config_write_lock(path):
+            config = require_readable_config_before_write(path)
+            panel = (config.get("autonomous") or {}).get("panel") or {}
+            panel.pop("agy_selection", None)
+            atomic_config_replace(path, config)
+            receipt = self._receipt_path()
+            if receipt.is_file() and not receipt.is_symlink():
+                receipt.unlink()
 
 
 def read_selection(home, config):

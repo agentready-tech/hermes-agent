@@ -135,8 +135,10 @@ def persist_personality(value: Any) -> bool:
 
         config_path = get_hermes_home() / "config.yaml"
         from hermes_constants import mkdir_under_hermes_home
+        from hermes_cli.config import config_write_lock
         mkdir_under_hermes_home(config_path.parent)
-        atomic_roundtrip_yaml_update(config_path, "display.personality", name)
+        with config_write_lock(config_path):
+            atomic_roundtrip_yaml_update(config_path, "display.personality", name)
         try:
             os.chmod(config_path, 0o600)
         except (OSError, NotImplementedError):

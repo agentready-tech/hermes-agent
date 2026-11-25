@@ -2,14 +2,26 @@
 
 import hashlib
 import io
+import importlib.util
 import json
 from pathlib import Path
 import tarfile
 
 import pytest
 
-from deploy.kubernetes import package_inert_agy as packaging
 from providers.agy_policy import BINARY
+
+
+def _packaging():
+    """Load the image-owned installer from its non-Python-package deploy directory."""
+    path = Path(__file__).resolve().parents[2] / "deploy" / "agentready-agy" / "package_inert_agy.py"
+    spec = importlib.util.spec_from_file_location("package_inert_agy", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+packaging = _packaging()
 
 
 def test_pin_and_inert_package_verifier(tmp_path, monkeypatch):

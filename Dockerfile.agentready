@@ -27,7 +27,7 @@ RUN mkdir -p plugins/model-providers/claude-subscription-directsdk-experimental 
     && /opt/hermes/.venv/bin/python deploy/kubernetes/release_source.py verify /opt/hermes
 RUN /opt/hermes/.venv/bin/python -c 'import json,os; from pathlib import Path; p=Path("/etc/hermes/image-provenance.json"); v=json.loads(p.read_text()); v.update(image="agentready-tech/hermes-agent", revision=os.environ["HERMES_GIT_SHA"], version=os.environ["AGENTSEE_RELEASE_VERSION"], capabilities=os.environ["AGENTSEE_RUNTIME_CAPABILITIES"].split(",")); p.write_text(json.dumps(v)+"\n"); p.chmod(0o444)'
 RUN --mount=type=bind,from=inert-agy-archive,source=/agy.tar.gz,target=/run/agy.tar.gz \
-    /opt/hermes/.venv/bin/python deploy/kubernetes/package_inert_agy.py /run/agy.tar.gz /etc/hermes/image-provenance.json \
+    /opt/hermes/.venv/bin/python deploy/agentready-agy/package_inert_agy.py /run/agy.tar.gz /etc/hermes/image-provenance.json \
     && /opt/hermes/.venv/bin/python -c 'from importlib.metadata import version; assert version("jsonschema") == "4.26.0"'
 LABEL org.opencontainers.image.source="https://github.com/agentready-tech/hermes-agent" \
       org.opencontainers.image.revision="${HERMES_GIT_SHA}" \

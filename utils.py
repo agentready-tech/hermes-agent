@@ -470,6 +470,14 @@ def _roundtrip_dump(path: Path, yaml_rt, config, *, extra_content: str | None = 
 
 
 def atomic_roundtrip_yaml_update(path: str | Path, key_path: str, value: Any) -> None:
+    """One dotted-key mutation as a profile config transaction (cross-process lock + atomic replace)."""
+    from hermes_cli.config import config_write_lock
+
+    with config_write_lock(Path(path)):
+        _roundtrip_yaml_update_locked(path, key_path, value)
+
+
+def _roundtrip_yaml_update_locked(path: str | Path, key_path: str, value: Any) -> None:
     """Update one dotted YAML key while preserving comments, ordering, quoting and Unicode.
 
     Narrower than :func:`atomic_yaml_write` on purpose: for user-edited config files where a
