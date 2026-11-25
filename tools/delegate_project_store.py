@@ -22,6 +22,18 @@ def write_workspace(conn, subagent_id, workspace, change):
 
 
 def set_project_paused(conn, subagent_id, paused, archive):
+    if archive:
+        stage = conn.execute(
+            """SELECT subagent_id, json_extract(workspace_json,'$.goal_state.status') AS status
+               FROM delegated_projects WHERE archived=0
+                 AND json_extract(workspace_json,'$.goal_state.executor_id')=?
+                 AND json_extract(workspace_json,'$.goal_state.status') NOT IN ('done','cancelled')
+               ORDER BY rowid LIMIT 1""",
+            (subagent_id,),
+        ).fetchone()
+        if stage:
+            raise ValueError(f"Cannot archive the executor while Child Goal {stage[0]} is {stage[1]}. "
+                             "Complete or cancel the stage first.")
     conn.execute("UPDATE delegated_projects SET paused=?,archived=MAX(archived,?),updated_at=? WHERE subagent_id=?",
                  (int(paused), int(archive), time.time(), subagent_id))
     if archive:
@@ -232,12 +244,16 @@ class ProjectStore:
         return self.get(subagent_id)
 
     def enqueue(self, project, content, origin, event_key=None, options=None):
-        if project["archived"]:
-            raise ValueError("Project is archived")
         if not isinstance(content, str) or not content.strip():
             raise ValueError("A nonempty project message is required")
         message_id = "project-msg-" + uuid.uuid4().hex
         with _transaction() as conn:
+            saved = conn.execute("SELECT archived FROM delegated_projects WHERE subagent_id=?",
+                                 (project["subagent_id"],)).fetchone()
+            if not saved:
+                raise ValueError("Unknown project subagent")
+            if saved[0]:
+                raise ValueError("Project is archived")
             goal_id = origin.get("goal_project_id")
             if event_key is not None and goal_id:
                 old = conn.execute(

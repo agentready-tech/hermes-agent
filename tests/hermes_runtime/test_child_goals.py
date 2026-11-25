@@ -299,6 +299,46 @@ def _bind_timer(actor, project_id):
     return wait["job_id"]
 
 
+@pytest.mark.parametrize("blocked", [False, True])
+def test_archive_keeps_the_executor_until_its_child_goal_is_closed(main_home, blocked):
+    from tools.delegate_project_goal import close_goal
+    from tools.delegate_projects import project_action
+
+    _, db = main_home
+    parent = _actor(db)
+    root = _open(parent, "Complete the assignment")
+    with ProjectStore(parent) as store:
+        coordinator = store.create("coordinator", "Coordinate the assignment", "")
+    owner = _child_actor(db, coordinator, root)
+    stage = _open(owner, "Complete the assigned stage")
+    with ProjectStore(owner) as store:
+        worker = store.create("worker", "Execute the stage", "")
+        worker_id = worker["subagent_id"]
+        accepted = store.enqueue(worker, "Continue the stage", {"goal_project_id": stage})
+        if blocked:
+            _goal(owner, "block", project_id=stage, blocker="Waiting for stand access",
+                  unblock="The stand owner grants access")
+        error = f"{stage}.*{'blocked' if blocked else 'ready'}"
+        with pytest.raises(ValueError, match=error):
+            project_action(owner, "archive", subagent_id=worker_id)
+        saved = store.get(worker_id)
+        assert not saved["archived"] and not saved["paused"] and saved["session_id"] == worker["session_id"]
+        assert store.message(accepted)["state"] == "pending"
+        if blocked:
+            assert store.claim(worker) is None
+            _goal(owner, "resume", project_id=stage)
+        work = store.claim(worker)
+        assert work["message_id"] == accepted
+        assert store.settle(worker, work, {"status": "completed", "summary": "Verified the requested result."})
+        close_goal(store, stage, "done", [accepted])
+        assert project_action(owner, "archive", subagent_id=worker_id)["status"] == "archived"
+
+        another_stage = _open(owner, "A separate stage", slot=2)
+        with pytest.raises(ValueError, match="Project is archived"):
+            store.enqueue(worker, "Do the next stage", {"goal_project_id": another_stage})
+        assert _snapshot(owner, another_stage).get("executor_id") is None
+
+
 def test_child_control_and_pending_inputs_are_scoped_by_parent_and_executor(main_home):
     from cron.jobs import get_job
     from hermes_runtime.standalone.events import admit_cron

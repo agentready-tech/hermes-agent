@@ -262,6 +262,7 @@ def _block(owner, child):
 
 def _archive_executor_with_saved_wake(owner, child):
     from tools.delegate_project_goal import mutate_goal
+    from tools.delegate_project_store import _transaction
 
     def schedule(goal):
         goal.update(status="ready", wake_id=f"{child}:1", wake_step="Verify the saved spec")
@@ -272,7 +273,10 @@ def _archive_executor_with_saved_wake(owner, child):
         store.enqueue(worker, "Write the spec", {"goal_project_id": child})
         assert store.settle(worker, store.claim(worker), {"status": "completed", "summary": "Spec written."})
         mutate_goal(store, child, schedule)
-        store.pause(worker["subagent_id"], archive=True)
+        # Replay an orphaned wake written by versions that allowed this archive.
+        with _transaction() as conn:
+            conn.execute("UPDATE delegated_projects SET archived=1,paused=1 WHERE subagent_id=?",
+                         (worker["subagent_id"],))
 
 
 def _save_running_step(main, root, *, stale=False):
