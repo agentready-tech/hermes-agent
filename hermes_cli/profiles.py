@@ -102,7 +102,6 @@ _PLACEHOLDER_ENV = (
 
 
 def _non_exportable_entries(directory: str, contents: list) -> set:
-    """Exclude runtime bindings, transient entries and unsupported file types from copies."""
     ignored: set = set()
     for entry in contents:
         if entry == "__pycache__" or entry.endswith((".sock", ".tmp", ".pyc", ".pyo")):

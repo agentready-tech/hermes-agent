@@ -10151,6 +10151,8 @@ def test_config_set_model_requires_confirmation_for_expensive_model(monkeypatch)
 
 
 def test_config_set_model_global_persists(monkeypatch):
+    from hermes_cli.config import get_config_path, require_readable_config_before_write, set_config_value
+
     class _Agent:
         provider = "openrouter"
         model = "old/model"
@@ -10170,7 +10172,7 @@ def test_config_set_model_global_persists(monkeypatch):
         warning_message="",
     )
     seen = {}
-    saved_values = {}
+
 
     def _switch_model(**kwargs):
         seen.update(kwargs)
@@ -10180,9 +10182,7 @@ def test_config_set_model_global_persists(monkeypatch):
     monkeypatch.setattr("hermes_cli.model_switch.switch_model", _switch_model)
     monkeypatch.setattr(server, "_restart_slash_worker", lambda sid, session: None)
     monkeypatch.setattr(server, "_emit", lambda *args, **kwargs: None)
-    # persist_model_selection uses targeted per-key writes (#48305) so it
-    # preserves sibling model.* keys instead of rewriting the whole block.
-    monkeypatch.setattr("utils.atomic_roundtrip_yaml_update", lambda path, key, value: saved_values.__setitem__(key, value))
+    set_config_value("model.persist_switch_by_default", "true")
 
     resp = server.handle_request(
         {
@@ -10198,9 +10198,9 @@ def test_config_set_model_global_persists(monkeypatch):
 
     assert resp["result"]["value"] == "anthropic/claude-sonnet-4.6"
     assert seen["is_global"] is True
-    assert saved_values["model.default"] == "anthropic/claude-sonnet-4.6"
-    assert saved_values["model.provider"] == "anthropic"
-    assert saved_values["model.base_url"] == "https://api.anthropic.com"
+    saved = require_readable_config_before_write(get_config_path())["model"]
+    assert saved == {"default": "anthropic/claude-sonnet-4.6", "provider": "anthropic",
+        "base_url": "https://api.anthropic.com", "api_mode": "anthropic_messages", "persist_switch_by_default": True}
 
 
 def test_config_set_model_explicit_provider_skips_broken_default_init(monkeypatch):
