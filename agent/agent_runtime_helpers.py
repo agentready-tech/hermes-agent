@@ -1914,27 +1914,16 @@ def _gemini_native_client(agent, client_kwargs: dict, httpx_verify, *, reason: s
 
 
 def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: bool) -> Any:
-    from providers.agy_policy import AgyError, PROVIDER, is_agy
-    if is_agy(getattr(agent, "provider", None)):
-        if agent.provider != PROVIDER:
-            raise AgyError("unavailable")
-        from hermes_constants import get_hermes_home
-        from hermes_runtime.standalone.agy_runtime import profile_for
-        return profile_for(get_hermes_home()).create_client(cancelled=lambda: bool(agent._interrupt_requested))
+    from agent.agy_turn import supplied_client
+    if process_client := supplied_client(agent):
+        return process_client
     from agent.auxiliary_client import (
         _to_openai_base_url,
         _validate_base_url,
         _validate_proxy_env_urls,
     )
     from agent.ssl_verify import resolve_httpx_verify
-    # Treat client_kwargs as read-only: callers pass agent._client_kwargs, and in-place mutation
-    # leaks into later requests (a torn-down httpx transport got reused).
-    # Callers pass agent._client_kwargs (or shallow copies of it) in; any in-place mutation leaks back into
-    # the stored dict and is reused on subsequent requests. #10933 hit this by injecting an httpx.Client
-    # transport that was torn down after the first request, so the next request wrapped a closed transport
-    # and raised "Cannot send a request, as the client has been closed" on every retry. The revert resolved
-    # that specific path; this copy locks the contract so future transport/keepalive work can't reintroduce
-    # the same class of bug.
+    # Preserve the constructor snapshot: later retries must not reuse a torn-down transport.
     client_kwargs = dict(client_kwargs)
     if client_kwargs.get("base_url"):
         client_kwargs["base_url"] = _to_openai_base_url(client_kwargs["base_url"])

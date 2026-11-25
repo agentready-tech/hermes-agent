@@ -987,7 +987,6 @@ def _apply_openai_header_policy(agent, client_kwargs: dict[str, Any]) -> None:
 
 
 def _init_openai_client(agent, api_key, base_url, fallback_model, _provider_timeout):
-    """OpenAI-wire client: resolve kwargs, apply header/TLS policy, construct."""
     if api_key and base_url:
         client_kwargs = _explicit_client_kwargs(agent, api_key, base_url, _provider_timeout)
     else:
@@ -1008,7 +1007,7 @@ def _init_openai_client(agent, api_key, base_url, fallback_model, _provider_time
         if agent.provider == "bedrock" and "bedrock-mantle." in str(client_kwargs.get("base_url", "")):
             raise
 
-    agent._client_kwargs = client_kwargs  # stored for rebuilding after interrupt
+    agent._client_kwargs = client_kwargs  # also reused when rebuilding after interrupt
     _apply_openai_header_policy(agent, client_kwargs)
     agent.api_key = client_kwargs.get("api_key", "")
     agent.base_url = client_kwargs.get("base_url", agent.base_url)
@@ -1026,18 +1025,10 @@ def _init_openai_client(agent, api_key, base_url, fallback_model, _provider_time
 
 
 def _build_client(agent, api_key, base_url, fallback_model):
-    # LLM client per wire mode (raw_codex=True: the main agent needs direct
-    # responses.stream()). One provider/model timeout up front so every path applies it.
+    from agent.agy_turn import initialize
     agent._anthropic_client = None
     agent._is_anthropic_oauth = False
-    from providers.agy_policy import AgyError, LOCAL_ENDPOINT, PROVIDER, is_agy
-    if is_agy(agent.provider):
-        if agent.provider != PROVIDER or (base_url and base_url != LOCAL_ENDPOINT):
-            raise AgyError("unavailable")
-        agent.api_mode, agent.base_url = "chat_completions", LOCAL_ENDPOINT
-        agent.api_key = "local-process"
-        agent._client_kwargs = {"base_url": LOCAL_ENDPOINT, "api_key": agent.api_key}
-        agent.client = agent._create_openai_client(agent._client_kwargs, reason="agent_init", shared=True)
+    if initialize(agent, base_url):
         return
     _provider_timeout = get_provider_request_timeout(agent.provider, agent.model)
     if agent.api_mode == "anthropic_messages":

@@ -108,7 +108,7 @@ def setup(tmp_path, monkeypatch):
         def attempt(*args):
             return Attempt(*args, validate_url=lambda value: value == FIXTURE_URL, timeout=3)
         service = Subscriptions(home, Auth(), gemini=GeminiSubscriptions(home, attempt_factory=attempt))
-        monkeypatch.setattr(service, "_claude", lambda: {})
+        monkeypatch.setattr(service, "_claude", dict)
         services.append(service)
     def admit(home, _op):
         authority = fixtures.get(home)

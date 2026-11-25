@@ -30,6 +30,7 @@ def child_environment(scratch):
             "XDG_STATE_HOME": str(root / "state"), "TMPDIR": str(root / "tmp"), "LANG": "C.UTF-8"}
 
 
+# Any qualified launcher must isolate the CLI's own auth diagnostics in scratch.
 LOGIN_COMMAND = (BINARY, "acp", "--login")
 
 

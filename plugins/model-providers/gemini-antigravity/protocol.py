@@ -26,7 +26,7 @@ INSTRUCTIONS = (
 
 
 def valid_id(value):
-    return isinstance(value, str) and ID.fullmatch(value) and not value.startswith(("call_", "fc_", "bridge_", "toolu_"))
+    return isinstance(value, str) and ID.fullmatch(value) and not value.startswith(("call_", "fc_", "bridge_", "toolu_", "chatcmpl-tool-"))
 
 
 def _pairs(pairs):
@@ -178,7 +178,8 @@ class Stream:
             raise AgyError("protocol")
         if self.last_step is not None:
             previous_idx, previous_kind, previous_state = self.last_step
-            if idx < previous_idx or (idx == previous_idx and (previous_state == "DONE" or previous_kind != kind)):
+            if ((idx < previous_idx or (idx > previous_idx and previous_state != "DONE"))
+                    or (idx == previous_idx and (previous_state == "DONE" or previous_kind != kind))):
                 raise AgyError("protocol")
         _metric_fields(step)
         self.last_step = idx, kind, state
@@ -202,7 +203,7 @@ class Stream:
     def finish(self, status):
         if status != 0:
             raise AgyError("transport")
-        if self.pending or self.result is None:
+        if self.pending or self.result is None or (self.last_step is not None and self.last_step[2] != "DONE"):
             raise AgyError("protocol")
         return strict_object(self.result)
 

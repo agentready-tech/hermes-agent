@@ -46,6 +46,16 @@ class ToolRoundVerdict:
     result: Optional[dict[str, Any]] = None
 
 
+def _log_proposals(agent, assistant_message, guarded):
+    if not agent.quiet_mode:
+        agent._vprint(f"{agent.log_prefix}🔧 Processing {len(assistant_message.tool_calls)} tool call(s)...")
+    if agent.verbose_logging and not guarded:
+        for tc in assistant_message.tool_calls:
+            raw_args = tc.function.arguments
+            args_preview = raw_args[:200] if isinstance(raw_args, str) else repr(raw_args)[:200]
+            logging.debug("Tool call: %s with args: %s...", tc.function.name, args_preview)
+
+
 def run_tool_round(
     agent: Any, *, assistant_message: Any, finish_reason: Any, messages: Any,
     conversation_history: Any, api_call_count: Any, effective_task_id: Any, user_message: Any,
@@ -70,21 +80,13 @@ def run_tool_round(
 
     from providers.agy_policy import is_agy
     guarded = is_agy(getattr(agent, "provider", None))
-    if guarded:
-        from agent.agy_turn import reject_proposal
-        if error := reject_proposal(agent, assistant_message.tool_calls, messages):
-            return _verdict("return", {"final_response": str(error), "messages": messages,
-                "failed": True, "completed": False, "failure_reason": error.code,
-                "failure_retryable": False, "error": str(error)})
+    from agent.agy_turn import refuse_if_interrupted, refused_flush, reject_in_round
+    if error := reject_in_round(agent, assistant_message.tool_calls, messages, guarded):
+        return _verdict("return", {"final_response": str(error), "messages": messages,
+            "failed": True, "completed": False, "failure_reason": error.code,
+            "failure_retryable": False, "error": str(error)})
 
-    if not agent.quiet_mode:
-        agent._vprint(f"{agent.log_prefix}🔧 Processing {len(assistant_message.tool_calls)} tool call(s)...")
-
-    if agent.verbose_logging:
-        for tc in assistant_message.tool_calls:
-            raw_args = tc.function.arguments
-            args_preview = raw_args[:200] if isinstance(raw_args, str) else repr(raw_args)[:200]
-            logging.debug("Tool call: %s with args: %s...", tc.function.name, args_preview)
+    _log_proposals(agent, assistant_message, guarded)
 
     _tvv = validate_tool_calls(
         agent, assistant_message, finish_reason, messages=messages,
@@ -151,7 +153,7 @@ def run_tool_round(
             exc,
         )
 
-    if _tool_turn_persisted is False or (guarded and _tool_turn_persisted is not True):
+    if refused_flush(_tool_turn_persisted, guarded):
         # Canonical append failed: never project the row or run tools from process-only
         # state; break rather than retry. No recorded cause means genuinely unknown.
         if getattr(agent, "_last_persistence_error_cause", None) is None:
@@ -172,7 +174,7 @@ def run_tool_round(
         with suppress(Exception):
             agent.stream_delta_callback(None)
 
-    if guarded and agent._interrupt_requested:
+    if refuse_if_interrupted(agent, guarded):
         _turn_exit_reason, final_response, failed = "cancelled", "", True
         return _verdict("break")
     agent._execute_tool_calls(assistant_message, messages, effective_task_id, api_call_count)

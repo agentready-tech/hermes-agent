@@ -30,3 +30,39 @@ def reject_proposal(agent, calls, messages):
             return AgyError("duplicate_tool_call")
     admitted.add(call_id)
     return None
+
+
+def initialize(agent, base_url):
+    from providers.agy_policy import LOCAL_ENDPOINT, PROVIDER, is_agy
+    if not is_agy(agent.provider):
+        return False
+    if agent.provider != PROVIDER or (base_url and base_url != LOCAL_ENDPOINT):
+        raise AgyError("unavailable")
+    agent.api_mode, agent.base_url, agent.api_key = "chat_completions", LOCAL_ENDPOINT, "local-process"
+    agent._client_kwargs = {"base_url": LOCAL_ENDPOINT, "api_key": agent.api_key}
+    agent.client = agent._create_openai_client(agent._client_kwargs, reason="agent_init", shared=True)
+    return True
+
+
+def supplied_client(agent):
+    from hermes_constants import get_hermes_home
+    from hermes_runtime.standalone.agy_runtime import profile_for
+    from providers.agy_policy import PROVIDER, is_agy
+    provider = getattr(agent, "provider", None)
+    if not is_agy(provider):
+        return None
+    if provider != PROVIDER:
+        raise AgyError("unavailable")
+    return profile_for(get_hermes_home()).create_client(cancelled=lambda: bool(agent._interrupt_requested))
+
+
+def reject_in_round(agent, calls, messages, guarded):
+    return reject_proposal(agent, calls, messages) if guarded else None
+
+
+def refused_flush(outcome, guarded):
+    return outcome is not True if guarded else outcome is False
+
+
+def refuse_if_interrupted(agent, guarded):
+    return guarded and agent._interrupt_requested

@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import time
+import signal
 
 
 def frame(kind, value, **extra):
@@ -29,8 +29,8 @@ def child(mode, response='{"type":"final","answer":"Ответ ☃"}', prompt=""
             return 3
         return 0
     if mode == "tree":
-        subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"])
-        time.sleep(60)
+        subprocess.Popen([sys.executable, "-I", "-c", "import signal; signal.pause()"])
+        signal.pause()
         return 0
     if mode == "stderr":
         sys.stderr.buffer.write(b"x" * 70000)

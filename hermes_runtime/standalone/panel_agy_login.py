@@ -3,9 +3,10 @@
 from dataclasses import dataclass
 import re
 import secrets
-from threading import Event, RLock, Thread
+from threading import Event, RLock
 from urllib.parse import parse_qs, urlsplit
 
+from agent.memory_provider import spawn_context_thread
 from hermes_runtime.standalone import agy_runtime
 from providers.agy_policy import AgyError, CAPABILITY, MODEL
 from providers.agy_process import communicate
@@ -50,7 +51,7 @@ class Attempt:
         self.home, self.authority, self.validate_url = home, authority, validate_url
         self.timeout = timeout
         self.child = authority.spawn(home, stage.generation, "login", agy_runtime.LOGIN_COMMAND)
-        self.worker = Thread(target=self._run, name="protected-agy-login", daemon=True)
+        self.worker = spawn_context_thread(self._run, name="protected-agy-login")
         self.worker.start()
 
     def _run(self):

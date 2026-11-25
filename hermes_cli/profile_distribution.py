@@ -640,3 +640,17 @@ def describe_distribution(profile_name: str) -> dict[str, Any]:
     """Return a structured view of a profile's distribution metadata ({} if not a distribution)."""
     manifest = read_manifest(_existing_profile(profile_name)[1])
     return {} if manifest is None else manifest.to_dict()
+
+
+def discard_imported_subscription_binding(root):
+    """A restore cannot import this runtime authority's connection metadata."""
+    import shutil
+    directory = root / "subscriptions"
+    if directory.is_symlink():
+        directory.unlink()  # Do not traverse an archive's external reference.
+        return
+    binding = directory / "agy"
+    if binding.is_symlink() or binding.is_file():
+        binding.unlink()
+    elif binding.is_dir():
+        shutil.rmtree(binding)

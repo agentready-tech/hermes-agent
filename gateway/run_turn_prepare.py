@@ -39,6 +39,20 @@ if TYPE_CHECKING:  # string annotations only; never imported at runtime (cycle)
 logger = logging.getLogger("gateway.run")
 
 
+def _log_no_session_override(runner, session_key, model):
+    if not logger.isEnabledFor(logging.DEBUG):
+        return  # The override scan walks every session.
+    keys = [key for key, state in runner._sessions_map().items() if state.conversation.model_override][:5]
+    logger.debug("No session model override: session=%s config_model=%s override_keys=%s", session_key or "", model, keys or "[]")
+
+
+def _resolve_reserved_override(override, model, resolve):
+    from providers.agy_policy import is_agy
+    if override and is_agy(override.get("provider")):
+        return override.get("model", model), resolve(override["provider"], target_model=override.get("model") or None)
+    return None
+
+
 def _resolve_policy_agent_runtime(runner, policy) -> tuple[str, dict]:
     """``_resolve_session_agent_runtime`` for a session bound to a launch policy: the route's FROZEN
     config and launch credential, walking its own fallback chain on an AuthError. Module-level so
@@ -141,10 +155,8 @@ class GatewayTurnPrepareMixin:
             self._rehydrate_session_model_override(skey)
         _override_state = self._peek_session_state(skey) if skey else None
         override = _override_state.conversation.model_override if _override_state else None
-        from providers.agy_policy import is_agy
-        if override and is_agy(override.get("provider")):
-            return override.get("model", model), _resolve_runtime_agent_kwargs_for_provider(
-                override["provider"], target_model=override.get("model") or None)
+        if reserved := _resolve_reserved_override(override, model, _resolve_runtime_agent_kwargs_for_provider):
+            return reserved
         if override:
             override_model = override.get("model", model)
             override_runtime = {
@@ -168,16 +180,8 @@ class GatewayTurnPrepareMixin:
                 "Session model override (no api_key, fallback): session=%s config_model=%s override_model=%s",
                 skey or "", model, override_model,
             )
-        elif logger.isEnabledFor(logging.DEBUG):
-            # The override_keys scan walks every session; only pay for it when DEBUG is on.
-            logger.debug(
-                "No session model override: session=%s config_model=%s override_keys=%s",
-                skey or "", model,
-                [
-                    _key for _key, _st in list(self._sessions_map().items())
-                    if _st.conversation.model_override is not None
-                ][:5] or "[]",
-            )
+        else:
+            _log_no_session_override(self, skey, model)
 
         runtime_kwargs, unavailable_override = None, None
         if override and override.get("provider"):
