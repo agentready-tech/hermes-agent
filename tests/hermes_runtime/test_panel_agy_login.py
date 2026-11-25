@@ -50,7 +50,11 @@ class FixtureAuthority:
             assert argv[-2] == "-p"
             if self.mode == "expired-fixture":
                 raise AgyError("auth_expired")
-            child = spawn(home, "ok", '{"type":"final","answer":"fixed fixture reply"}', argv[-1])
+            if op == "inference":
+                request = json.loads(argv[-1])
+                assert request["version"] == 1
+            # The test child returns a fixed answer and does not need the full managed system prompt.
+            child = spawn(home, "ok", '{"type":"final","answer":"fixed fixture reply"}')
         self.children.append((op, generation, child))
         return child
 

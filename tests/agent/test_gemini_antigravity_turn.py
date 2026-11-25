@@ -141,3 +141,18 @@ def test_unproven_tool_result_blocks_followup(native, monkeypatch, flush):
         assert result.get("failed") and calls == ["echo-1"] and len(auth.processes) == 1
     finally:
         agent.close()
+
+
+def test_native_stream_failure_is_terminal_and_redacted(native, monkeypatch, caplog):
+    start, calls, _, _, _ = native
+    agent, auth = start(("nonzero", '{"type":"final","answer":"never publish fixture marker"}'))
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("switched provider on an ambiguous print outcome")
+    monkeypatch.setattr(agent, "_try_activate_fallback", forbidden)
+    try:
+        result = agent.run_conversation("Benign failure fixture")
+        assert result.get("failure_reason") == "transport" and not result.get("failure_retryable")
+        assert not calls and len(auth.processes) == 1
+        assert "never publish fixture marker" not in result["final_response"] and "never publish fixture marker" not in caplog.text
+    finally:
+        agent.close()
