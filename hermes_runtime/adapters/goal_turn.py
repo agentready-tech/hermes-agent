@@ -778,13 +778,17 @@ def _recover_saved_goal(store, project_id, goal):
 
 
 def recover():
-    """Use the existing main inbox recovery pass for interrupted Goal transitions."""
+    """Reconcile interrupted Goal transitions for the idle owning profile."""
     from types import SimpleNamespace
+    from hermes_runtime.adapters.hermes import enabled
     from hermes_runtime.adapters.state import current_home_session_id
+    from hermes_runtime.adapters.turns import home_turn_active
     from hermes_runtime.standalone.events import recover_wait_reply
     from hermes_state import SessionDB
     from tools.delegate_child_goals import recovery_owner
 
+    if not enabled() or home_turn_active():
+        return
     home = current_home_session_id()
     with SessionDB() as db:
         rows = db._read_all(
