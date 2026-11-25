@@ -727,6 +727,8 @@ def _prepare_turn_input(sid: str, session: dict, st: _TurnRun, text: Any, images
         if ctx.blocked:
             _emit(
                 "error", sid, {"message": "\n".join(ctx.warnings) or "Context injection refused."})
+            from hermes_runtime.standalone.agy_selection import release_fence
+            release_fence(agent)
             return None
         prompt = ctx.message
     st.prompt_text = prompt if isinstance(prompt, str) else ""
@@ -816,7 +818,11 @@ def _invoke_agent(
     try:
         from agent.notification_presentation import notification_turn, event_presentation_muted
         with notification_turn(agent, muted=event_presentation_muted("message.delta", sid), session_id=sid):
-            st.result = agent.run_conversation(run_message, **st.run_kwargs)
+            try:
+                st.result = agent.run_conversation(run_message, **st.run_kwargs)
+            finally:
+                from hermes_runtime.standalone.agy_selection import release_fence
+                release_fence(agent)
     finally:
         # Stop AND join before anything emits: a tick surviving past message.complete would
         # roll the client's usage back to a stale snapshot (unbounded join: same worst case).

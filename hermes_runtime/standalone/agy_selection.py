@@ -110,6 +110,11 @@ class Selection:
                 receipt.unlink()
 
 
+def release_fence(agent):
+    """Turn teardown: the fence never outlives the turn that carried it."""
+    agent._panel_selection = None
+
+
 def read_selection(home, config):
     """Read only the exact intent that Panel committed, never infer a receipt from a revision."""
     panel = (config.get("autonomous") or {}).get("panel") or {}

@@ -977,12 +977,19 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
             captured = execution_result.get()
             before = (getattr(agent, 'session_prompt_tokens', 0) or 0,
                       getattr(agent, 'session_completion_tokens', 0) or 0)
-            selection = getattr(self._runner, "_panel_pending_ticket", None)
-            self._runner._panel_pending_ticket = None
-            if selection:
+            from hermes_runtime.adapters.main_model import take_panel_ticket
+            from hermes_runtime.sessions import home_session_key
+            from hermes_runtime.standalone.agy_selection import release_fence
+            selection = take_panel_ticket(self._runner, ctx.session_key)
+            if selection is not None and ctx.session_key == home_session_key():
                 selection.attach(agent)
             with notification_turn(agent, muted=ctx.mute_notification_reply, session_id=ctx.session_id or ""):
-                result = agent.run_conversation(api_message, **kwargs)
+                try:
+                    result = agent.run_conversation(api_message, **kwargs)
+                finally:
+                    # The fence belongs to this turn: a turn that ends before its request
+                    # must not leave it on the cached agent.
+                    release_fence(agent)
             if captured is not None:
                 incoming = max(0, (getattr(agent, 'session_prompt_tokens', 0) or 0) - before[0])
                 outgoing = max(0, (getattr(agent, 'session_completion_tokens', 0) or 0) - before[1])

@@ -1,9 +1,45 @@
 """Apply an explicit Panel profile selection at the existing main turn boundary."""
 from dataclasses import replace
 import re
+import threading
 
 
 _RECEIPT = 'panel_model_selection_revision'
+_TICKET_SLOTS_INIT = threading.Lock()
+
+
+def _ticket_slots(runner):
+    """Create the runner's per-session ticket store once; concurrent gateway turns share it."""
+    slots = getattr(runner, "_panel_tickets", None)
+    if slots is None:
+        with _TICKET_SLOTS_INIT:
+            slots = getattr(runner, "_panel_tickets", None)
+            if slots is None:
+                slots = {}
+                runner._panel_tickets = slots
+                runner._panel_tickets_lock = threading.Lock()
+    return slots, runner._panel_tickets_lock
+
+
+def stash_panel_ticket(runner, session_key, ticket):
+    """Publish or clear the fence for exactly one logical session."""
+    if not session_key:
+        return
+    slots, lock = _ticket_slots(runner)
+    with lock:
+        if ticket is None:
+            slots.pop(session_key, None)
+        else:
+            slots[session_key] = ticket
+
+
+def take_panel_ticket(runner, session_key):
+    """Atomically consume this session's ticket; a foreign turn never sees it."""
+    if not session_key:
+        return None
+    slots, lock = _ticket_slots(runner)
+    with lock:
+        return slots.pop(session_key, None)
 
 
 def _consume_selection(store, session_key, revision):
@@ -57,7 +93,7 @@ def current_main_selection(source, session_key, user_config):
 
 def resolve_turn_runtime(runner, source, session_key, user_config):
     ticket = current_main_selection(source, session_key, user_config)
-    runner._panel_pending_ticket = None
+    stash_panel_ticket(runner, session_key, None)
     if ticket is not None:
         ticket.require_saved()
     from providers.agy_policy import AgyError, is_agy
@@ -71,10 +107,10 @@ def resolve_turn_runtime(runner, source, session_key, user_config):
         runtime(ticket.model)
     transitioned = apply_selection(runner, source, session_key, selection_revision(user_config))
     if ticket is not None and is_agy(ticket.provider):
-        runner._panel_pending_ticket = ticket
+        stash_panel_ticket(runner, session_key, ticket)
         from gateway.run import _runtime_agent_kwargs
         return ticket.model, _runtime_agent_kwargs(runtime(ticket.model))
     if ticket is not None and transitioned:
         # One-shot return to another source; a later explicit /model owns the session again.
-        runner._panel_pending_ticket = ticket
+        stash_panel_ticket(runner, session_key, ticket)
     return runner._resolve_session_agent_runtime(source=source, session_key=session_key, user_config=user_config)

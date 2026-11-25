@@ -322,9 +322,7 @@ def _write_channel_record_locked(sha16: str, path: str, channel: str,
     the dotted writer would otherwise turn a scalar into a mapping and
     destroy whatever the user had there.
     """
-    from utils import atomic_roundtrip_yaml_update
-
-    from hermes_cli.config import config_write_lock, require_readable_config_before_write
+    from hermes_cli.config import config_write_lock
     with config_write_lock(config_path):
         return _write_channel_record_checked(sha16, path, channel, expected, config_path)
 

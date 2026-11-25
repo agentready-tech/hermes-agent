@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import types
 from threading import Event, Thread
 
 import pytest
@@ -218,3 +219,76 @@ def test_tui_one_shot_return_does_not_outrank_a_later_explicit_pick(tmp_path, mo
     model_switch._sync_agent_model_with_config("fixture-sid", session)
     assert applied and session["panel_transition_revision"] == REVISION
     assert config["autonomous"]["panel"]["agy_selection"]["generation"] == "fixture-generation"
+
+
+def test_transition_ticket_is_scoped_to_its_session():
+    """Two concurrent gateway turns: a foreign turn never takes the home ticket."""
+    from threading import Barrier, Lock
+    from hermes_runtime.adapters.main_model import stash_panel_ticket, take_panel_ticket
+    from hermes_runtime.sessions import HOME_SESSION_KEY
+
+    class Runner:
+        pass
+
+    runner = Runner()
+    sentinel = object()
+    stash_panel_ticket(runner, HOME_SESSION_KEY, sentinel)
+    barrier, results, lock = Barrier(2), {}, Lock()
+
+    def foreign():
+        barrier.wait()
+        with lock:
+            results["foreign"] = take_panel_ticket(runner, "agent:main:agentready:other")
+
+    def home():
+        barrier.wait()
+        with lock:
+            results["home"] = take_panel_ticket(runner, HOME_SESSION_KEY)
+
+    threads = [Thread(target=foreign), Thread(target=home)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    assert results == {"foreign": None, "home": sentinel}
+    assert take_panel_ticket(runner, HOME_SESSION_KEY) is None  # consumed once
+
+
+def test_no_request_turn_releases_the_fence_and_later_request_has_no_receipt(tmp_path, monkeypatch):
+    from run_agent import AIAgent
+    from hermes_runtime.sessions import HOME_SESSION_ID
+    from hermes_runtime.standalone.agy_selection import Selection, read_selection, release_fence
+
+    home = tmp_path / "profile"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    config = _managed_config(home, generation="fixture-generation")
+    ticket = read_selection(home, config)
+    assert ticket is not None and ticket.provider == "custom"
+    published = []
+    monkeypatch.setattr(Selection, "publish_applied", lambda _ticket, agent: published.append(agent))
+
+    class InertTransport:
+        def __init__(self):
+            self.chat = types.SimpleNamespace(completions=self)
+
+        def create(self, **_request):
+            return "fixture-only"
+
+    monkeypatch.setattr("agent.agent_runtime_helpers.create_openai_client", lambda *_a, **_k: InertTransport())
+    agent = AIAgent(provider="custom", model="managed-fixture", session_id=HOME_SESSION_ID, quiet_mode=True,
+                    skip_memory=True, skip_context_files=True, enabled_toolsets=[], base_url=config["model"]["base_url"],
+                    api_key="fixture")
+    try:
+        ticket.attach(agent)
+        assert agent._panel_selection is ticket
+        # The turn ends before any request (preflight refusal): teardown drops the fence.
+        release_fence(agent)
+        assert agent._panel_selection is None
+        # A later explicit /model is a different route; the pending request must not inherit it.
+        agent.model = "later-explicit-model"
+        client = agent._create_request_openai_client(reason="fixture_request")
+        assert isinstance(client, InertTransport) and published == []
+        assert not (home / "subscriptions" / "agy" / "native-applied.json").exists()
+    finally:
+        agent.close()

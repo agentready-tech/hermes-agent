@@ -445,8 +445,11 @@ class ClientLifecycleMixin:
         ticket = getattr(self, "_panel_selection", None)
         if ticket is not None:
             # The client request is the first point that actually consults the selected route.
-            ticket.publish_applied(self)
-            self._panel_selection = None
+            # Release on every path: a refused publication must not fence later requests.
+            try:
+                ticket.publish_applied(self)
+            finally:
+                self._panel_selection = None
         if is_agy(self.provider):
             client = getattr(self, "client", None)
             if not callable(getattr(client, "for_request", None)):
