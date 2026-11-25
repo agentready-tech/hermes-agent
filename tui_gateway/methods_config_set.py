@@ -70,7 +70,7 @@ def _cfgset_model_ok(rid, key, value, warning="", confirm_message="", scope="ses
                confirm_message=confirm_message, scope=scope, **extra)
 
 
-def _stash_pending_model_switch(rid, key, value, session, confirmed, parsed):
+def _stash_pending_model_switch(rid, key, value, session, confirmed, parsed, *, panel_selection=None):
     """No live swap while a turn streams (agent.switch_model() mutates fields the worker thread
     reads every iteration): stash the pick for the NEXT turn start. Selection guards run HERE (the
     only moment a confirm round-trip is possible; an unconfirmed stashed pick is dropped at turn
@@ -91,7 +91,8 @@ def _stash_pending_model_switch(rid, key, value, session, confirmed, parsed):
     # display_*: _session_info shows the user's pick while pending, not the live old model.
     session["pending_model_switch"] = {
         "raw": value, "confirm_expensive_model": confirmed,
-        "display_model": pending_model, "display_provider": pending_provider}
+        "display_model": pending_model, "display_provider": pending_provider,
+        **({"panel_selection": panel_selection} if panel_selection is not None else {})}
     return _cfgset_model_ok(rid, key, pending_model, deferred=True)
 
 
@@ -113,10 +114,21 @@ def _set_model(rid, params, key, value, session):
     if not value:
         return _err(rid, 4002, "model value required")
     confirmed = bool(params.get("confirm_expensive_model", False))
+    selection = params.get("panel_selection")
+    receipt = None
     if session:
         from hermes_cli.model_switch import parse_model_switch_args
         sid = params.get("session_id", "")
         parsed_flags = parse_model_switch_args(value)
+        if selection is not None:
+            if (parsed_flags.scope not in {"default", "session"} or parsed_flags.errors
+                    or parsed_flags.force_refresh or parsed_flags.reasoning_effort):
+                return _err(rid, 4002, "Panel selection requires a session-scoped model switch")
+            from hermes_runtime.standalone.agy_runtime import standalone_selection
+            with _session_profile_runtime_scope(session, hydrate_secrets=False):
+                receipt = standalone_selection(selection, session.get("session_key"), parsed_flags.model_input,
+                                               parsed_flags.explicit_provider)
+            receipt["session_id"] = sid
         # Compute-host sessions ALWAYS defer, busy or idle. Their live agent is in
         # the child process — the direct path below would build a SECOND agent in
         # the server, switch that copy, and leave the child (which handles every
@@ -124,7 +136,11 @@ def _set_model(rid, params, key, value, session):
         # model. The stash crosses the boundary in the turn frame and the child's
         # turn thread applies it (_apply_pending_model_switch).
         if session.get("running") or session.get("_compute_host_active"):
-            return _stash_pending_model_switch(rid, key, value, session, confirmed, parsed_flags)
+            reply = _stash_pending_model_switch(rid, key, value, session, confirmed, parsed_flags,
+                                                panel_selection=selection)
+            if receipt and reply.get("result", {}).get("deferred"):
+                reply["result"]["panel_selection"] = receipt
+            return reply
         explicit_provider = parsed_flags.explicit_provider
         failed_agent_init = session.get("agent") is None and session.get("agent_error") is not None
         failed_ready = session.get("agent_ready") if failed_agent_init else None
@@ -142,7 +158,7 @@ def _set_model(rid, params, key, value, session):
                 return init_err
         with _session_profile_runtime_scope(session):
             result = _apply_model_switch(sid, session, value, confirm_expensive_model=confirmed,
-                                         parsed_flags=parsed_flags)
+                                         parsed_flags=parsed_flags, persist_override=False if receipt else None)
         if failed_agent_init and not result.get("confirm_required"):
             _restart_completed_failed_agent_build(sid, session, failed_ready)
             if init_err := _cfgset_await_agent(session, rid):
@@ -164,7 +180,8 @@ def _set_model(rid, params, key, value, session):
                         "Settings -> Models (Desktop)")
     return _kv(rid, key, result["value"], warning=result["warning"],
                confirm_required=result.get("confirm_required", False),
-               confirm_message=result.get("confirm_message", ""), scope=result.get("scope", "session"))
+               confirm_message=result.get("confirm_message", ""), scope=result.get("scope", "session"),
+               **({"panel_selection": receipt, "deferred": session.get("agent") is None} if session and receipt else {}))
 
 
 _FAST_WORDS = {"fast": "fast", "on": "fast", "normal": "normal", "off": "normal",
@@ -505,6 +522,8 @@ _SESSION_SCOPED_KEYS = frozenset({"model", "fast", "yolo", "reasoning"})
 @_profile_scoped
 def _(rid, params: dict) -> dict:
     key, value = params.get("key", ""), params.get("value", "")
+    if key != "model" and params.get("panel_selection") is not None:
+        return _err(rid, 4002, "Panel selection requires config.set model")
     session = _sessions.get(params.get("session_id", ""))
     if session is None and params.get("session_id") and key in _SESSION_SCOPED_KEYS \
             and _word(params.get("scope")) != "global":

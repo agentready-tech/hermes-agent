@@ -497,6 +497,12 @@ export interface ConfigSetParams {
   session_id?: string | null
   scope?: string | null
   confirm_expensive_model?: boolean
+  panel_selection?: PanelModelSelection | null
+}
+/** Standalone Panel's precondition for applying an already saved model selection. */
+export interface PanelModelSelection {
+  revision: string
+  generation: string
 }
 /** ``{key, value}`` plus the setter's extras: model switches add ``warning`` / ``confirm_required`` / ``confirm_message`` / ``scope`` / ``deferred``; ``focus`` adds ``tool_progress``; ``cwd`` adds ``cwd`` / ``branch``; ``personality`` adds ``history_reset`` / ``info``; ``yolo`` reports its ``scope``. ``value`` is a bool only for the display toggles. */
 export interface ConfigSetResult {
@@ -507,11 +513,21 @@ export interface ConfigSetResult {
   confirm_message?: string | null
   scope?: string | null
   deferred?: boolean | null
+  panel_selection?: PanelModelSelectionReceipt | null
   tool_progress?: string | null
   cwd?: string | null
   branch?: string | null
   history_reset?: boolean | null
   info?: SessionLiveInfo | null
+}
+/** Apply/queue receipt tied to the resumed native session; not an auth grant. */
+export interface PanelModelSelectionReceipt {
+  revision: string
+  generation: string
+  session_id: string
+  session_key: string
+  provider: string
+  model: string
 }
 /** ``tui_gateway/server.py::_session_info`` — the ``session.info`` event and the ``info`` field of ``session.create`` / ``session.resume`` / ``session.activate`` results. */
 export interface SessionLiveInfo {

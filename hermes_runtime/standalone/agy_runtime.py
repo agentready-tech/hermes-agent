@@ -53,3 +53,25 @@ def runtime(target_model):
     return {"provider": PROVIDER, "requested_provider": PROVIDER, "model": MODEL,
             "base_url": LOCAL_ENDPOINT, "api_mode": "chat_completions", "api_key": "local-process",
             "source": "external-process"}
+
+
+def standalone_selection(selection, session_key, requested_model, requested_provider):
+    """Validate a native apply precondition (not an auth credential or a route override)."""
+    import re
+    from hermes_cli.config import read_user_config_raw
+    from hermes_runtime.sessions import HOME_SESSION_ID
+    if (session_key != HOME_SESSION_ID or requested_model != MODEL or requested_provider != PROVIDER
+            or not isinstance(selection, dict) or set(selection) != {"revision", "generation"}):
+        raise AgyError("unavailable")
+    revision, generation = selection["revision"], selection["generation"]
+    if not isinstance(revision, str) or not re.fullmatch(r"[a-f0-9]{32}", revision) or not isinstance(generation, str):
+        raise AgyError("unavailable")
+    home = get_hermes_home()
+    config = read_user_config_raw(home / "config.yaml")
+    actual_revision = (config.get("autonomous") or {}).get("panel", {}).get("model_selection_revision")
+    model = config.get("model")
+    if model != {"provider": PROVIDER, "default": MODEL} or actual_revision != revision:
+        raise AgyError("unavailable")
+    if admit(home, "inference").active(home) != generation:
+        raise AgyError("auth_required")
+    return {**selection, "session_key": session_key, "model": MODEL, "provider": PROVIDER}

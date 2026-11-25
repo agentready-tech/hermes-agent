@@ -12755,6 +12755,17 @@
             "default": false,
             "title": "Confirm Expensive Model",
             "type": "boolean"
+          },
+          "panel_selection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PanelModelSelection"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -12845,6 +12856,17 @@
             ],
             "default": null,
             "title": "Deferred"
+          },
+          "panel_selection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PanelModelSelectionReceipt"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "tool_progress": {
             "anyOf": [
@@ -25662,6 +25684,66 @@
           "history"
         ],
         "title": "PanelHistoryResult",
+        "type": "object"
+      },
+      "PanelModelSelection": {
+        "additionalProperties": false,
+        "description": "Standalone Panel's precondition for applying an already saved model selection.",
+        "properties": {
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "generation": {
+            "title": "Generation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision",
+          "generation"
+        ],
+        "title": "PanelModelSelection",
+        "type": "object"
+      },
+      "PanelModelSelectionReceipt": {
+        "additionalProperties": false,
+        "description": "Apply/queue receipt tied to the resumed native session; not an auth grant.",
+        "properties": {
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "generation": {
+            "title": "Generation",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "session_key": {
+            "title": "Session Key",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision",
+          "generation",
+          "session_id",
+          "session_key",
+          "provider",
+          "model"
+        ],
+        "title": "PanelModelSelectionReceipt",
         "type": "object"
       },
       "PanelPersistentSubagent": {

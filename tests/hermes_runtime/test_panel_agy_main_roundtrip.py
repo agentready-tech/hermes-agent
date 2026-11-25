@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -10,7 +11,8 @@ pytest_plugins = ["tests.hermes_runtime.test_main_schedule_tools"]
 
 @pytest.mark.asyncio
 @pytest.mark.platforms("posix")
-async def test_scoped_wire_promotion_and_main_turn_readback(main_home, monkeypatch, tmp_path):
+@pytest.mark.parametrize("ingress", ["wire", "panel"])
+async def test_scoped_wire_promotion_and_main_turn_readback(main_home, monkeypatch, tmp_path, ingress):
     from gateway import run
     from gateway.config import GatewayConfig
     from hermes_runtime.adapters.main_model import resolve_turn_runtime
@@ -26,6 +28,8 @@ async def test_scoped_wire_promotion_and_main_turn_readback(main_home, monkeypat
     from tests.waiting import async_wait_until
     from websockets.asyncio.server import serve
 
+    if ingress == "panel" and not _panel_script().is_file():
+        pytest.skip("cross-repository proof requires the sibling AGE-11 AgentReady checkout")
     home, db = main_home
     config_path = home / "config.yaml"
     config_path.write_text(json.dumps({
@@ -72,15 +76,20 @@ async def test_scoped_wire_promotion_and_main_turn_readback(main_home, monkeypat
             await socket.close()
 
     try:
-        async with serve(panel, "127.0.0.1", 0) as listener:
-            address = f"ws://127.0.0.1:{listener.sockets[0].getsockname()[1]}"
-            await asyncio.wait_for(service.bridge(address, "fixture-connector", viewer=VIEWER), 8)
-            assert done.is_set() and saved.get("deferred")
+        if ingress == "panel":
+            await _component_through_relay(service)
+            revision = service._config()["autonomous"]["panel"]["model_selection_revision"]
+        else:
+            async with serve(panel, "127.0.0.1", 0) as listener:
+                address = f"ws://127.0.0.1:{listener.sockets[0].getsockname()[1]}"
+                await asyncio.wait_for(service.bridge(address, "fixture-connector", viewer=VIEWER), 8)
+                assert done.is_set() and saved.get("deferred")
+            revision = saved["revision"]
         route_config = run._load_gateway_config(config_path)
         assert route_config["model"] == {"provider": PROVIDER, "default": MODEL}
         model, kwargs = resolve_turn_runtime(runner, source, HOME_SESSION_KEY, route_config)
         assert model == MODEL and kwargs["provider"] == PROVIDER
-        assert runner.session_store._entries[HOME_SESSION_KEY].metadata["panel_model_selection_revision"] == saved["revision"]
+        assert runner.session_store._entries[HOME_SESSION_KEY].metadata["panel_model_selection_revision"] == revision
         agent = AIAgent(model=model, session_id=HOME_SESSION_ID, session_db=db, quiet_mode=True, skip_memory=True,
                         skip_context_files=True, enabled_toolsets=[], max_iterations=2, **kwargs)
         try:
@@ -98,3 +107,48 @@ async def test_scoped_wire_promotion_and_main_turn_readback(main_home, monkeypat
         service.gemini.retire()
         await connection.close()
         runner.session_store.close_all_db_handles()
+
+
+def _panel_script():
+    return (Path(__file__).resolve().parents[3] / "AgentReady" / "apps/control-plane/scripts"
+            / "subscriptions-hermes-loopback.mjs")
+
+
+async def _component_through_relay(service):
+    from contextlib import suppress
+    from websockets.exceptions import ConnectionClosed
+    from hermes_runtime.standalone.panel import connection
+
+    script = _panel_script()
+    child = await asyncio.create_subprocess_exec("node", str(script), cwd=script.parent.parent,
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    output = []
+    connector = None
+
+    async def line_with(prefix):
+        while line := await child.stdout.readline():
+            decoded = line.decode("utf-8", "replace").strip()
+            output.append(decoded)
+            if prefix in decoded:
+                return decoded.split(prefix, 1)[1]
+        pytest.fail("Panel fixture did not reach its milestone:\n" + "\n".join(output))
+
+    try:
+        async with asyncio.timeout(20):
+            port = int(await line_with("AGE11_LOOPBACK_PORT="))
+            connector = asyncio.create_task(connection({"url": f"http://127.0.0.1:{port}", "environment_id": "A"},
+                None, "fixture-connector", service.auth, subscriptions=service))
+            await line_with("AGE11_AGENT_AUTH")
+            child.stdin.write(b"ready\n")
+            await child.stdin.drain()
+            child.stdin.close()
+            await line_with("AGE11_VIEW_SELECTED")
+            assert await child.wait() == 0, "\n".join(output) + (await child.stdout.read()).decode()
+    finally:
+        if connector is not None:
+            connector.cancel()
+            with suppress(asyncio.CancelledError, ConnectionClosed):
+                await connector
+        if child.returncode is None:
+            child.kill()
+            await child.wait()

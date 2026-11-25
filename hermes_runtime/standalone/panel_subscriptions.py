@@ -242,15 +242,22 @@ class Subscriptions:
             if not self.auth.gateway_owned:
                 resume.update(source="agentready", close_on_disconnect=False, inline_images=False)
             session = await call(1, "session.resume", resume)
+            selection = None
             if agy_authority is not None:
+                if session.get("session_key") != resume["session_id"] or not session.get("session_id"):
+                    raise SubscriptionError("Настройка сохранена, но текущий диалог не переключён. Повторите применение.")
                 self._verify_gemini_selection(route, revision, agy_authority, agy_generation)
+                selection = {"revision": revision, "generation": agy_generation}
             # Managed custom routes need the endpoint and key-env from config, not the old
             # subscription's endpoint. Native model switching resolves the explicit provider.
             result = await call(2, "config.set", {"session_id": session["session_id"], "key": "model",
-                "value": f"{route['default']} --provider {route['provider']}", "confirm_expensive_model": True})
+                "value": f"{route['default']} --provider {route['provider']}", "confirm_expensive_model": True,
+                **({"panel_selection": selection} if selection else {})})
         if agy_authority is not None:
             self._verify_gemini_selection(route, revision, agy_authority, agy_generation)
-            if result.get("value") != AGY_MODEL or result.get("confirm_required"):
+            expected = {"revision": revision, "generation": agy_generation, "session_id": session["session_id"],
+                        "session_key": resume["session_id"], "provider": AGY_PROVIDER, "model": AGY_MODEL}
+            if result.get("panel_selection") != expected or result.get("value") != AGY_MODEL or result.get("confirm_required"):
                 raise SubscriptionError("Настройка сохранена, но текущий диалог не переключён. Повторите применение.")
         return {"saved": True, "deferred": bool(result.get("deferred")), **({"revision": revision} if provider == "gemini" else {})}
 

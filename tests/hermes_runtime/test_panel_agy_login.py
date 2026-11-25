@@ -213,35 +213,3 @@ def test_cancel_retire_and_production_denial(tmp_path, monkeypatch):
     symlink = tmp_path / "restored"
     symlink.symlink_to(a.home, target_is_directory=True)
     assert GeminiSubscriptions(symlink).card() is None
-
-
-@pytest.mark.asyncio
-async def test_standalone_selection_reads_native_value_and_detects_fresh_config(tmp_path, monkeypatch):
-    from hermes_cli.model_switch import switch_model
-    from hermes_runtime.workspace.transport import profile_scope
-    from websockets.asyncio.server import serve
-    a, _, store, _ = setup(tmp_path, monkeypatch)
-    stage = store.stage(a.home)
-    assert store.promote(a.home, stage)
-    a.auth.gateway_owned = False
-    seen = []
-    async def native(socket):
-        async for raw in socket:
-            request = json.loads(raw)
-            method, params = request["method"], request["params"]
-            seen.append((method, params))
-            if method == "session.resume":
-                result = {"session_id": "inert-home"}
-            else:
-                model, provider = params["value"].split(" --provider ")
-                with profile_scope(a.home):
-                    decision = switch_model(model, "custom", "managed-fixture", explicit_provider=provider)
-                assert decision.success and decision.target_provider == PROVIDER
-                result = {"value": decision.new_model, "confirm_required": False}
-            await socket.send(json.dumps({"id": request["id"], "result": result}))
-    async with serve(native, "127.0.0.1", 0) as socket:
-        a.auth.rpc_connection = lambda: (f"ws://127.0.0.1:{socket.sockets[0].getsockname()[1]}", {})
-        saved = await a.handle("subscriptions.select", {"provider": "gemini", "model": MODEL, "managedFallback": False}, viewer=VIEWER)
-    assert saved == {"saved": True, "deferred": False, "revision": a._config()["autonomous"]["panel"]["model_selection_revision"]}
-    assert seen[0][1]["session_id"] == "agentready_home" and seen[1][1]["session_id"] == "inert-home"
-    assert not store.children  # route/apply is not inference
