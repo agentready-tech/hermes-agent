@@ -39,7 +39,7 @@ if TYPE_CHECKING:  # string annotations only; never imported at runtime (cycle)
 logger = logging.getLogger("gateway.run")
 
 
-def _resolve_policy_agent_runtime(runner, policy) -> tuple[str, dict]:
+def _resolve_policy_agent_runtime(runner, policy, *, report_fallback=True) -> tuple[str, dict]:
     """``_resolve_session_agent_runtime`` for a session bound to a launch policy: the route's FROZEN
     config and launch credential, walking its own fallback chain on an AuthError. Module-level so
     tests that bind the method onto bare namespaces still reach it."""
@@ -53,13 +53,48 @@ def _resolve_policy_agent_runtime(runner, policy) -> tuple[str, dict]:
     provider = (frozen.get('model') or {}).get('provider')
     runtime, fallback_entry = route_runtime(policy, frozen, model, launch_key(authority, policy))
     if fallback_entry is not None:
-        from hermes_cli.fallback_config import pre_agent_fallback_notice
-        runner._pre_agent_fallback_notice = pre_agent_fallback_notice(
-            provider or '', model or '',
-            runtime.get('provider') or fallback_entry.get('provider') or 'unknown',
-            fallback_entry.get('model') or 'default')
+        if report_fallback:
+            from hermes_cli.fallback_config import pre_agent_fallback_notice
+            runner._pre_agent_fallback_notice = pre_agent_fallback_notice(
+                provider or '', model or '',
+                runtime.get('provider') or fallback_entry.get('provider') or 'unknown',
+                fallback_entry.get('model') or 'default')
         return fallback_entry['model'], _runtime_agent_kwargs(runtime)
     return model, _runtime_agent_kwargs(runtime)
+
+
+def _resolve_session_provider(runner, model, override, report_fallback):
+    """Resolve credentials and keep any provider fallback notice with its foreground turn."""
+    from gateway.run import _resolve_runtime_agent_kwargs, _resolve_runtime_agent_kwargs_for_provider
+
+    runtime_kwargs, unavailable_override = None, None
+    if override and override.get("provider"):
+        try:
+            runtime_kwargs = _resolve_runtime_agent_kwargs_for_provider(
+                override["provider"], target_model=override.get("model") or None)
+        except Exception as exc:
+            # Layering the override on the default runtime sent its model to the default provider's
+            # endpoint (openai-codex on the Nous URL). Run this turn on the whole default route and say
+            # so; the persisted override is kept, so the next turn retries it.
+            logger.warning("Session /model override provider %s unavailable: %s", override["provider"], exc,
+                           exc_info=True)
+            unavailable_override, override = override, None
+    if runtime_kwargs is None:
+        runtime_kwargs = _resolve_runtime_agent_kwargs()
+    # Private notice metadata must never reach an ``AIAgent(**runtime_kwargs)`` spread; the turn
+    # runner surfaces it through the agent's one-shot fallback notice (#74349).
+    fallback_notice = runtime_kwargs.pop("_fallback_notice", None)
+    if report_fallback:
+        runner._pre_agent_fallback_notice = fallback_notice
+    runtime_model = runtime_kwargs.pop("model", None)
+    if runtime_model:
+        logger.info("Runtime provider supplied explicit model override: %s -> %s", model, runtime_model)
+        model = runtime_model
+    if report_fallback and unavailable_override and not fallback_notice:
+        from hermes_cli.fallback_config import pre_agent_fallback_notice
+        runner._pre_agent_fallback_notice = pre_agent_fallback_notice(
+            unavailable_override["provider"], unavailable_override.get("model"), runtime_kwargs.get("provider"), model)
+    return model, runtime_kwargs, override
 
 
 def _recover_or_remember_model(runner, skey, model):
@@ -118,7 +153,7 @@ class GatewayTurnPrepareMixin:
 
     def _resolve_session_agent_runtime(
         self, *, source: Optional[SessionSource] = None, session_key: Optional[str] = None,
-        user_config: Optional[dict] = None,
+        user_config: Optional[dict] = None, report_fallback: bool = True,
     ) -> tuple[str, dict]:
         """Resolve model/runtime for a session.
 
@@ -126,15 +161,16 @@ class GatewayTurnPrepareMixin:
         (``_resolve_gateway_model(user_config)`` and default provider resolution)."""
         from gateway.run import (
             _credential_pool_for_provider, _get_channel_override, _resolve_gateway_model,
-            _resolve_runtime_agent_kwargs, _resolve_runtime_agent_kwargs_for_provider,
+            _resolve_runtime_agent_kwargs_for_provider,
         )
         from gateway.session_policy import policy_for_source
         # Every exit path starts clean: a stale notice must never attach to another session's next
         # turn (#74349). Set again below only when THIS resolution fell back.
-        self._pre_agent_fallback_notice = None
+        if report_fallback:
+            self._pre_agent_fallback_notice = None
         policy = policy_for_source(self, source) if source is not None else None
         if policy is not None:
-            return _resolve_policy_agent_runtime(self, policy)
+            return _resolve_policy_agent_runtime(self, policy, report_fallback=report_fallback)
         skey = self._resolve_session_key_or_none(source, session_key)
         model = _resolve_gateway_model(user_config)
         if skey:
@@ -175,31 +211,7 @@ class GatewayTurnPrepareMixin:
                 ][:5] or "[]",
             )
 
-        runtime_kwargs, unavailable_override = None, None
-        if override and override.get("provider"):
-            try:
-                runtime_kwargs = _resolve_runtime_agent_kwargs_for_provider(
-                    override["provider"], target_model=override.get("model") or None)
-            except Exception as exc:
-                # Layering the override on the default runtime sent its model to the default provider's
-                # endpoint (openai-codex on the Nous URL). Run this turn on the whole default route and say
-                # so; the persisted override is kept, so the next turn retries it.
-                logger.warning("Session /model override provider %s unavailable: %s", override["provider"], exc,
-                               exc_info=True)
-                unavailable_override, override = override, None
-        if runtime_kwargs is None:
-            runtime_kwargs = _resolve_runtime_agent_kwargs()
-        # Private notice metadata must never reach an ``AIAgent(**runtime_kwargs)`` spread; the turn
-        # runner surfaces it through the agent's one-shot fallback notice (#74349).
-        self._pre_agent_fallback_notice = runtime_kwargs.pop("_fallback_notice", None)
-        runtime_model = runtime_kwargs.pop("model", None)
-        if runtime_model:
-            logger.info("Runtime provider supplied explicit model override: %s -> %s", model, runtime_model)
-            model = runtime_model
-        if unavailable_override and not self._pre_agent_fallback_notice:
-            from hermes_cli.fallback_config import pre_agent_fallback_notice
-            self._pre_agent_fallback_notice = pre_agent_fallback_notice(
-                unavailable_override["provider"], unavailable_override.get("model"), runtime_kwargs.get("provider"), model)
+        model, runtime_kwargs, override = _resolve_session_provider(self, model, override, report_fallback)
 
         cfg = getattr(self, "config", None)  # getattr: bare object.__new__ test runners
         if cfg and source is not None:
@@ -232,7 +244,9 @@ class GatewayTurnPrepareMixin:
                         "No model configured — defaulting to %s for provider %s", model, runtime_kwargs["provider"],
                     )
 
-        return _recover_or_remember_model(self, skey, model), runtime_kwargs
+        if report_fallback:
+            model = _recover_or_remember_model(self, skey, model)
+        return model, runtime_kwargs
 
     def _resolve_turn_agent_config(self, user_message: str, model: str, runtime_kwargs: dict) -> dict:
         """Effective model/runtime config for one turn. With `/fast` priority on, fast-mode

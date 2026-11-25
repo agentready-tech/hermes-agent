@@ -29,13 +29,13 @@ def _below(store, target, ancestor):
     return False
 
 
-def ensure_mail_input(parent, projects, project):
+def ensure_mail_input(parent, projects, project, *, mail_id=None):
     if project["archived"] or project["paused"]:
         return
     with MailStore(parent) as mail:
         mail.acknowledge_recorded()
         with _transaction() as conn:
-            rows = pending_mail_rows(conn)
+            rows = pending_mail_rows(conn, message_ids=(mail_id,) if mail_id else None)
             active = conn.execute("SELECT * FROM delegated_project_messages WHERE subagent_id=? AND state IN ('pending','running')",
                                   (project["subagent_id"],)).fetchall()
             if any(_blocks_mail(conn, row) for row in active):
@@ -56,7 +56,11 @@ def ensure_mail_input(parent, projects, project):
         from tools.delegate_projects import _origin
 
         # A synchronous first dispatch can still have a later, explicitly routed continuation.
-        if child_mail and not nested_owner and receipt_origin.get("wake"):
+        mail_origin = getattr(parent, "_project_mail_origin", None)
+        direct = mail_origin and not scope
+        if direct:
+            origin = {**mail_origin, "wake": False}
+        elif child_mail and not nested_owner and receipt_origin.get("wake"):
             origin = receipt_origin.copy()
         else:
             origin = json.loads(previous[0]) if previous else _origin()
@@ -76,9 +80,9 @@ def ensure_mail_input(parent, projects, project):
             origin['child_goal_event'] = event
         if nested_owner:
             origin = {**origin, "wake": False}
-        if not origin.get("wake"):
+        if not origin.get("wake") and not direct:
             origin["mail_results"] = True
-        projects.enqueue(project, "Continue your existing task and handle pending agent messages. "
+        return projects.enqueue(project, "Continue your existing task and handle pending agent messages. "
                          "Their contents will enter your conversation at a safe boundary.", origin,
                          'mail-wake:' + first['message_id'], options)
 

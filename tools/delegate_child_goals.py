@@ -193,8 +193,34 @@ def child_event_state(conn, origin_json):
 
 
 def consumed_child_wake(store, wake_id):
-    return bool(store.db._read_one(
-        "SELECT 1 FROM delegation_mail WHERE event_key=? AND delivered_at IS NOT NULL", ("child-goal:" + wake_id,),
+    """A mailbox ACK records the input. Only its executing turn can consume a wake."""
+    receipt = store.db._read_one(
+        "SELECT message_id, delivery_id FROM delegation_mail WHERE kind='child_goal' AND event_key=? "
+        "AND delivered_at IS NOT NULL", ("child-goal:" + wake_id,),
+    )
+    if not receipt:
+        return False
+    mail_id, input_id = receipt
+    if not (input_id and input_id.startswith("project-msg-")):
+        # A running recipient can add mail to an existing turn. Older transcripts
+        # have the original project input immediately before that turn's messages.
+        row = store.db._read_one(
+            """SELECT COALESCE(json_extract(m.display_metadata, '$.project_input_id'),
+                      CASE WHEN m.platform_message_id LIKE 'project-msg-%' THEN m.platform_message_id END,
+                      (SELECT start.platform_message_id FROM messages start
+                       WHERE start.session_id=m.session_id AND start.id<m.id AND start.role='user'
+                         AND start.platform_message_id LIKE 'project-msg-%' ORDER BY start.id DESC LIMIT 1))
+               FROM messages m, json_each(CASE WHEN json_valid(m.display_metadata) THEN m.display_metadata END,
+                                          '$.agent_message_ids') mail
+               WHERE mail.value=? AND m.role='user' AND m.display_kind='agent_message'
+                 AND (m.platform_message_id=? OR json_extract(CASE WHEN json_valid(m.display_metadata)
+                                              THEN m.display_metadata END, '$.agent_mail_delivery_id')=?)
+               ORDER BY m.id DESC LIMIT 1""", (mail_id, input_id, input_id),
+        )
+        input_id = row[0] if row else None
+    return bool(input_id and store.db._read_one(
+        "SELECT 1 FROM delegated_project_messages WHERE message_id=? AND completed_at IS NOT NULL "
+        "AND result_json IS NOT NULL AND state NOT IN ('pending','running')", (input_id,),
     ))
 
 

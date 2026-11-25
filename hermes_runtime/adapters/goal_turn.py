@@ -679,7 +679,8 @@ def _recover_ready(store, project_id, goal):
     else:
         consumed = wake_id and _consumed_wake(store, wake_id)
     if not wake_id or consumed:
-        goal = _write_transition(store, project_id, goal, consumed=wake_id, interrupted=bool(consumed))
+        goal = _write_transition(store, project_id, goal, consumed=wake_id,
+                                 interrupted=bool(consumed and not goal.get("parent_goal_id")))
     _publish(project_id, goal)
 
 
