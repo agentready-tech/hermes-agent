@@ -441,6 +441,12 @@ class ClientLifecycleMixin:
 
     def _create_request_openai_client(self, *, reason: str, api_kwargs: Optional[dict] = None) -> Any:
         from unittest.mock import Mock
+        from providers.agy_policy import AgyError, is_agy
+        if is_agy(self.provider):
+            client = getattr(self, "client", None)
+            if not callable(getattr(client, "for_request", None)):
+                raise AgyError("unavailable")
+            return client.for_request()
         primary_client = self._ensure_primary_openai_client(reason=reason)
         if self.provider == "moa" or isinstance(primary_client, Mock):
             return primary_client

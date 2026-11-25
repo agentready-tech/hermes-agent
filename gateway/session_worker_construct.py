@@ -77,6 +77,11 @@ def route_runtime(policy, frozen, model, key):
     from hermes_cli.runtime_provider import frozen_runtime_config, resolve_runtime_with_fallback
     from hermes_cli.runtime_provider_custom import _resolve_named_custom_runtime
     provider = (frozen.get('model') or {}).get('provider')
+    from providers.agy_policy import is_agy
+    if is_agy(provider):
+        # The reserved route cannot be shadowed by a named custom endpoint.
+        with frozen_runtime_config(frozen):
+            return resolve_runtime_with_fallback(frozen, requested=provider, target_model=model)
     launch_url = json.loads(policy.request_json).get('base_url')
     if launch_url:
         # The creation request is immutable identity, not the current selection: once a canonical

@@ -43,6 +43,33 @@ def apply_selection(runner, source, session_key, revision):
     return False
 
 
+def current_main_selection(source, session_key, user_config):
+    from hermes_runtime.adapters.hermes import enabled, managed_home
+    from hermes_runtime.sessions import home_session_key
+    from hermes_runtime.standalone.agy_selection import read_selection
+    from hermes_cli.profiles import profile_matches_home
+
+    if enabled() and session_key == home_session_key() and (
+            not source.profile or profile_matches_home(source.profile, managed_home())):
+        return read_selection(managed_home(), user_config)
+    return None
+
+
 def resolve_turn_runtime(runner, source, session_key, user_config):
+    ticket = current_main_selection(source, session_key, user_config)
+    if ticket is not None:
+        ticket.require_saved()
+    from providers.agy_policy import AgyError, is_agy
+    model_config = (user_config or {}).get("model")
+    if isinstance(model_config, dict) and is_agy(model_config.get("provider")):
+        # Check the reserved configured route before any cached override, launch policy,
+        # channel routing or generic default could replace it.
+        from hermes_runtime.standalone.agy_runtime import runtime
+        if ticket is None:
+            raise AgyError("unavailable")
+        runtime(ticket.model)
     apply_selection(runner, source, session_key, selection_revision(user_config))
+    if ticket is not None and is_agy(ticket.provider):
+        from gateway.run import _runtime_agent_kwargs
+        return ticket.model, _runtime_agent_kwargs(runtime(ticket.model))
     return runner._resolve_session_agent_runtime(source=source, session_key=session_key, user_config=user_config)

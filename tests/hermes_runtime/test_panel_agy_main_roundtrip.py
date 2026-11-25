@@ -15,6 +15,10 @@ pytest_plugins = ["tests.hermes_runtime.test_main_schedule_tools"]
 async def test_scoped_wire_promotion_and_main_turn_readback(main_home, monkeypatch, tmp_path, ingress):
     from gateway import run
     from gateway.config import GatewayConfig
+    from gateway.run_turn_runner import TurnRunner
+    from gateway.turn_context import TurnContext
+    from hermes_runtime.standalone.panel_subscriptions import SubscriptionError
+    from hermes_runtime.workspace.transport import profile_scope
     from hermes_runtime.adapters.main_model import resolve_turn_runtime
     from hermes_runtime.sessions import HOME_SESSION_ID, HOME_SESSION_KEY
     from hermes_runtime.standalone import agy_runtime
@@ -42,7 +46,7 @@ async def test_scoped_wire_promotion_and_main_turn_readback(main_home, monkeypat
     store.binding = tmp_path / "A-fixture-store.json"
     monkeypatch.setattr(agy_runtime, "admit", lambda owner, _op: store if owner == home else None)
     service = Subscriptions(home, Auth(), gemini=GeminiSubscriptions(home, attempt_factory=lambda *args: Attempt(
-        *args, validate_url=lambda url: url == FIXTURE_URL, timeout=5)))
+        *args, timeout=5)))
     monkeypatch.setattr(service, "_claude", dict)
     authority, connection = runtime(home, db, monkeypatch)
     assert "result" in await connection.dispatch({"id": 0, "method": "session.resume", "params": {"session_id": HOME_SESSION_ID}})
@@ -92,10 +96,19 @@ async def test_scoped_wire_promotion_and_main_turn_readback(main_home, monkeypat
         assert runner.session_store._entries[HOME_SESSION_KEY].metadata["panel_model_selection_revision"] == revision
         agent = AIAgent(model=model, session_id=HOME_SESSION_ID, session_db=db, quiet_mode=True, skip_memory=True,
                         skip_context_files=True, enabled_toolsets=[], max_iterations=2, **kwargs)
-        try:
+        def native_turn(config, current_agent):
+            ctx = TurnContext(source=source, session_id=HOME_SESSION_ID, session_key=HOME_SESSION_KEY,
+                              message="Inert fixture only", user_config=config)
+            turn = TurnRunner(runner, ctx)
             history = db.get_messages_as_conversation(HOME_SESSION_ID)
-            result = await asyncio.to_thread(agent.run_conversation, "Inert fixture only", conversation_history=history)
+            with profile_scope(home):
+                return turn._run_conversation_with_approval(current_agent, history, None, None, None)
+
+        try:
+            result = await asyncio.to_thread(native_turn, route_config, agent)
             assert result["final_response"] == "fixed fixture reply"
+            assert agent.client.selection.revision == revision
+            assert agent.client.selection.generation == store.active(home)
         finally:
             agent.close()
         with SessionDB(home / "state.db") as readback:
@@ -103,6 +116,38 @@ async def test_scoped_wire_promotion_and_main_turn_readback(main_home, monkeypat
         assert [op for op, _, _ in store.children] == ["login", "probe", "inference"]
         assert {gen for _, gen, _ in store.children} == {store.active(home)}
         assert len({child.pid for _, _, child in store.children}) == 3
+
+        # Returning to the original managed route must be applied on the native main, not
+        # inferred from the consumed revision. Keep the managed request itself inert.
+        await service.handle("subscriptions.select", {"provider": "managed"}, viewer=VIEWER)
+        restored = run._load_gateway_config(config_path)
+        with pytest.raises(SubscriptionError, match="примените"):
+            await service.handle("subscriptions.disconnect", {"provider": "gemini"}, viewer=VIEWER)
+        with pytest.raises(agy_runtime.AgyError):
+            await asyncio.to_thread(native_turn, route_config, agent)
+        managed = service._config()["model"]
+        monkeypatch.setattr(run, "_resolve_runtime_agent_kwargs", lambda: {
+            "provider": "custom", "base_url": managed["base_url"], "api_mode": "chat_completions", "api_key": "fixture"})
+        old_model, old_kwargs = resolve_turn_runtime(runner, source, HOME_SESSION_KEY, restored)
+        assert old_model == "managed-fixture" and old_kwargs["provider"] == "custom"
+        # Consume is not applied: the resolver ran, but no real native agent was bound yet.
+        with pytest.raises(SubscriptionError, match="примените"):
+            await service.handle("subscriptions.disconnect", {"provider": "gemini"}, viewer=VIEWER)
+        old_agent = AIAgent(model=old_model, session_id=HOME_SESSION_ID, session_db=db, quiet_mode=True,
+                            skip_memory=True, skip_context_files=True, enabled_toolsets=[], **old_kwargs)
+        observed = []
+        def inert_request(*_args, **_kwargs):
+            observed.append((old_agent.provider, old_agent.model))
+            return {"final_response": "fixture only"}
+        monkeypatch.setattr(old_agent, "run_conversation", inert_request)
+        try:
+            await asyncio.to_thread(native_turn, restored, old_agent)
+            assert observed == [("custom", "managed-fixture")]
+            assert await service.handle("subscriptions.disconnect", {"provider": "gemini"}, viewer=VIEWER) == {"disconnected": True}
+            assert store.active(home) is None
+            assert len(store.children) == 3
+        finally:
+            old_agent.close()
     finally:
         service.gemini.retire()
         await connection.close()

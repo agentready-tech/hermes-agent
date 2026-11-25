@@ -18,7 +18,8 @@ from tests.waiting import wait_until
 
 pytestmark = pytest.mark.platforms("posix")
 VIEWER = "a" * 43
-FIXTURE_URL = "https://protected.fixture.invalid/code"
+FIXTURE_URL = ("https://accounts.google.com/o/oauth2/v2/auth?redirect_uri=https%3A%2F%2Fcodeassist.google.com%2Fauthcode"
+               "&response_type=code&state=fixture-state&code_challenge=inert-challenge&code_challenge_method=S256")
 
 
 class FixtureAuthority:
@@ -27,7 +28,6 @@ class FixtureAuthority:
         self.home, self.mode, self.mismatch = home, "login", None
         self.lock, self.children, self.pending = RLock(), [], None
         self.binding = home.parent / (home.name + "-fixture-store.json")
-        self.applied_revision = None
 
     def active(self, home):
         assert home == self.home
@@ -44,7 +44,7 @@ class FixtureAuthority:
         assert home == self.home
         if op == "login":
             assert argv == agy_runtime.LOGIN_COMMAND and generation == self.pending.generation
-            child = spawn(home, self.mode, login=True)
+            child = spawn(home, self.mode, FIXTURE_URL, login=True)
         else:
             assert generation in {self.active(home), self.pending.generation if self.pending else None}
             assert argv[-2] == "-p"
@@ -82,9 +82,6 @@ class FixtureAuthority:
         if self.pending == stage:
             self.pending = None
 
-    def applied(self, home, revision):
-        return home == self.home and revision is not None and revision == self.applied_revision
-
     def withdraw(self, home, generation, _reason):
         with self.lock:
             if self.active(home) == generation:
@@ -110,7 +107,7 @@ def setup(tmp_path, monkeypatch):
             "autonomous": {"panel": {"url": "https://panel.fixture.invalid", "environment_id": key}}}))
         fixtures[home] = FixtureAuthority(home)
         def attempt(*args):
-            return Attempt(*args, validate_url=lambda value: value == FIXTURE_URL, timeout=3)
+            return Attempt(*args, timeout=3)
         service = Subscriptions(home, Auth(), gemini=GeminiSubscriptions(home, attempt_factory=attempt))
         monkeypatch.setattr(service, "_claude", dict)
         services.append(service)
@@ -173,11 +170,8 @@ def test_two_fixture_owners_login_same_pipe_then_probe_expire_and_disconnect(tmp
     with pytest.raises(ValueError):
         rpc(a, "disconnect")
     asyncio.run(a.handle("subscriptions.select", {"provider": "managed"}))
-    store_a.applied_revision = selected["revision"]
     with pytest.raises(ValueError):
-        rpc(a, "disconnect")
-    store_a.applied_revision = a._config()["autonomous"]["panel"]["model_selection_revision"]
-    assert rpc(a, "disconnect")["disconnected"]
+        rpc(a, "disconnect")  # Persisting a different route is not native application.
     assert store_b.binding.read_bytes() == old_b
     assert "fixture-only" not in caplog.text and FIXTURE_URL not in caplog.text
 
@@ -213,3 +207,12 @@ def test_cancel_retire_and_production_denial(tmp_path, monkeypatch):
     symlink = tmp_path / "restored"
     symlink.symlink_to(a.home, target_is_directory=True)
     assert GeminiSubscriptions(symlink).card() is None
+
+
+@pytest.mark.parametrize("url, expected", [(FIXTURE_URL, True),
+    (FIXTURE_URL.replace("/v2/auth", "/auth"), False),
+    (FIXTURE_URL.replace("%2Fauthcode", "%2Ffixture-other"), False),
+    (FIXTURE_URL + "&state=duplicate", False)])
+def test_production_login_url_validation_on_synthetic_shape(url, expected):
+    from hermes_runtime.standalone.panel_agy_login import login_url
+    assert login_url(url) is expected

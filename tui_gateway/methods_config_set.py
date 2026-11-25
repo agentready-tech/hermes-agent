@@ -115,7 +115,7 @@ def _set_model(rid, params, key, value, session):
         return _err(rid, 4002, "model value required")
     confirmed = bool(params.get("confirm_expensive_model", False))
     selection = params.get("panel_selection")
-    receipt = None
+    receipt = ticket = None
     if session:
         from hermes_cli.model_switch import parse_model_switch_args
         sid = params.get("session_id", "")
@@ -124,18 +124,19 @@ def _set_model(rid, params, key, value, session):
             if (parsed_flags.scope not in {"default", "session"} or parsed_flags.errors
                     or parsed_flags.force_refresh or parsed_flags.reasoning_effort):
                 return _err(rid, 4002, "Panel selection requires a session-scoped model switch")
-            from hermes_runtime.standalone.agy_runtime import standalone_selection
+            from hermes_runtime.standalone.agy_selection import standalone_selection
             with _session_profile_runtime_scope(session, hydrate_secrets=False):
-                receipt = standalone_selection(selection, session.get("session_key"), parsed_flags.model_input,
-                                               parsed_flags.explicit_provider)
-            receipt["session_id"] = sid
+                ticket = standalone_selection(selection, session.get("session_key"), parsed_flags.model_input,
+                                              parsed_flags.explicit_provider)
+            receipt = {**selection, "session_id": sid, "session_key": session["session_key"],
+                       "provider": ticket.provider, "model": ticket.model}
         # Compute-host sessions ALWAYS defer, busy or idle. Their live agent is in
         # the child process — the direct path below would build a SECOND agent in
         # the server, switch that copy, and leave the child (which handles every
         # turn) on the old model: checkmark shows the pick, requests keep the old
         # model. The stash crosses the boundary in the turn frame and the child's
         # turn thread applies it (_apply_pending_model_switch).
-        if session.get("running") or session.get("_compute_host_active"):
+        if session.get("running") or session.get("_compute_host_active") or (ticket and session.get("agent") is None):
             reply = _stash_pending_model_switch(rid, key, value, session, confirmed, parsed_flags,
                                                 panel_selection=selection)
             if receipt and reply.get("result", {}).get("deferred"):
@@ -158,7 +159,8 @@ def _set_model(rid, params, key, value, session):
                 return init_err
         with _session_profile_runtime_scope(session):
             result = _apply_model_switch(sid, session, value, confirm_expensive_model=confirmed,
-                                         parsed_flags=parsed_flags, persist_override=False if receipt else None)
+                                         parsed_flags=parsed_flags, persist_override=False if receipt else None,
+                                         **({"selection_ticket": ticket, "pin_session_override": False} if ticket else {}))
         if failed_agent_init and not result.get("confirm_required"):
             _restart_completed_failed_agent_build(sid, session, failed_ready)
             if init_err := _cfgset_await_agent(session, rid):

@@ -119,13 +119,15 @@ async def update_config(
     body: ConfigUpdate, profile: Optional[str] = None, preserve_language: bool = False
 ):
     def _run():
+        from hermes_cli.config import config_write_lock, get_config_path
+
         approvals_mode_changed = False
         with _profile_scope(body.profile or profile):
             # The dashboard form is schema-driven; root keys absent from the
             # schema (``custom_providers``, ``agent.personalities``, ...) are not
             # in the PUT body, so deep-merge incoming over disk rather than
             # full-replace — the frontend can only overwrite what it sends.
-            with _CONFIG_MUTATION_LOCK:
+            with _CONFIG_MUTATION_LOCK, config_write_lock(get_config_path()):
                 # Strict read: the merge below builds a new dict, so a swallowed read error here
                 # would save the PUT body alone over the whole file.
                 existing = require_readable_config_before_write()

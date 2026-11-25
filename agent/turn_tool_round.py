@@ -80,7 +80,8 @@ def run_tool_round(
 
     from providers.agy_policy import is_agy
     guarded = is_agy(getattr(agent, "provider", None))
-    from agent.agy_turn import refuse_if_interrupted, refused_flush, reject_in_round
+    from agent.agy_turn import require_current_tool_authority, refused_flush, reject_in_round
+    from providers.agy_policy import AgyError
     if error := reject_in_round(agent, assistant_message.tool_calls, messages, guarded):
         return _verdict("return", {"final_response": str(error), "messages": messages,
             "failed": True, "completed": False, "failure_reason": error.code,
@@ -174,10 +175,18 @@ def run_tool_round(
         with suppress(Exception):
             agent.stream_delta_callback(None)
 
-    if refuse_if_interrupted(agent, guarded):
-        _turn_exit_reason, final_response, failed = "cancelled", "", True
-        return _verdict("break")
-    agent._execute_tool_calls(assistant_message, messages, effective_task_id, api_call_count)
+    try:
+        if guarded:
+            require_current_tool_authority(agent)
+        agent._execute_tool_calls(assistant_message, messages, effective_task_id, api_call_count)
+    except AgyError as error:
+        if not guarded:
+            raise
+        # The durable proposal is deliberately left without a success receipt. A reopened
+        # turn must not execute it or retry it with a newer credential generation.
+        return _verdict("return", {"final_response": str(error), "messages": messages,
+            "failed": True, "completed": False, "failure_reason": error.code,
+            "failure_retryable": False, "error": str(error)})
     from hermes_cli.observability.shared_metrics_harness import finish_tool_round
 
     finish_tool_round(agent)

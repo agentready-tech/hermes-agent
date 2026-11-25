@@ -226,3 +226,23 @@ def test_keyless_worker_on_a_fallback_never_sends_its_key_to_the_primary_endpoin
     assert primary and fallback_key not in primary
     assert all(fallback_key != key for key, _ in clients)
     assert built['api_key'] is None
+
+
+
+@pytest.mark.parametrize("provider", ["gemini-antigravity", "custom:gemini-antigravity"])
+def test_reserved_route_refuses_before_named_custom_resolution(monkeypatch, provider):
+    from gateway.session_worker_construct import route_runtime
+    from hermes_cli import runtime_provider_custom
+    from providers.agy_policy import AgyError, MODEL
+
+    calls = []
+    def generic(*args, **kwargs):
+        calls.append("generic runtime")
+        raise AssertionError("generic runtime called")
+
+    monkeypatch.setattr(runtime_provider_custom, "_resolve_named_custom_runtime", generic)
+    frozen = {"model": {"provider": provider, "default": MODEL}, "fallback_providers": [
+        {"provider": "custom", "model": "benign-fixture"}]}
+    with pytest.raises(AgyError) as error:
+        route_runtime(SimpleNamespace(request_json="{}"), frozen, MODEL, None)
+    assert error.value.code == "unavailable" and not calls

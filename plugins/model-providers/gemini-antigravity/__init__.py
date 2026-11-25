@@ -28,9 +28,16 @@ class Client:
         self.home, self.authority, self.generation = home, authority, generation
         self.cancelled, self.closed = cancelled, Event()
         self.chat = SimpleNamespace(completions=self)
+        self.selection = None
 
     def close(self):
         self.closed.set()
+
+    def for_request(self):
+        self.require_current()
+        child = Client(self.home, self.authority, self.generation, self._cancelled)
+        child.selection = self.selection
+        return child
 
     def _cancelled(self):
         return self.closed.is_set() or self.cancelled()
@@ -42,18 +49,30 @@ class Client:
         if self._cancelled():
             raise AgyError("cancelled")
         result = self._request(prompt, validators)
-        if self._cancelled():
-            raise AgyError("cancelled")
+        self.require_current()
         return _completion(result, stream)
 
-    def _request(self, prompt, validators):
+    def require_current(self):
+        if self._cancelled():
+            raise AgyError("cancelled")
         from hermes_runtime.standalone import agy_runtime
         authority = agy_runtime.admit(self.home, "inference")
         if authority is not self.authority or authority.active(self.home) != self.generation:
             raise AgyError("auth_required")
+        if self.selection is not None:
+            self.selection.require_saved()
+        return authority
+
+    def _request(self, prompt, validators):
+        from contextlib import nullcontext
+        from hermes_cli.config import config_write_lock
+
+        authority = self.authority
         parser = Stream()
         try:
-            child = authority.spawn(self.home, self.generation, "inference", print_command(prompt))
+            with config_write_lock(self.home / "config.yaml") if self.selection is not None else nullcontext():
+                self.require_current()
+                child = authority.spawn(self.home, self.generation, "inference", print_command(prompt))
             rc, diagnostics = communicate(child, parser.feed, timeout=125, cancelled=self._cancelled)
             row = parser.finish(rc)
             if diagnostics:

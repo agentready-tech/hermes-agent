@@ -207,12 +207,13 @@ def _apply_pending_model_switch(sid: str, session: dict) -> None:
     model = pending.get("display_model") or pending["raw"]
     try:
         selection = pending.get("panel_selection")
+        options = {}
         if selection is not None:
-            from hermes_runtime.standalone.agy_runtime import standalone_selection
-            standalone_selection(selection, session.get("session_key"), model, pending["display_provider"])
+            from hermes_runtime.standalone.agy_selection import standalone_selection
+            ticket = standalone_selection(selection, session.get("session_key"), model, pending["display_provider"])
+            options = {"selection_ticket": ticket, "persist_override": False, "pin_session_override": False}
         result = _apply_model_switch(sid, session, pending["raw"],
-                                     confirm_expensive_model=bool(pending.get("confirm_expensive_model")),
-                                     persist_override=False if selection is not None else None)
+                                     confirm_expensive_model=bool(pending.get("confirm_expensive_model")), **options)
         # Honour the expensive-model confirm: drop the switch rather than spend on a model the user
         # never confirmed.
         if not result.get("confirm_required"):

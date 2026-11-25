@@ -7,10 +7,13 @@ import logging
 import re
 import secrets
 import threading
+
+from hermes_cli.config import config_write_lock
+from hermes_runtime.standalone.agy_selection import read_selection, selection_config
 from urllib.parse import urlsplit
 
 from hermes_runtime.standalone.panel_agy_login import GeminiSubscriptions, VIEWER
-from providers.agy_policy import AgyError, MODEL as AGY_MODEL, PROVIDER as AGY_PROVIDER
+from providers.agy_policy import AgyError, MODEL as AGY_MODEL, PROVIDER as AGY_PROVIDER, is_agy
 
 CLAUDE = "claude-subscription-directsdk-experimental"
 PROVIDERS = {"claude": CLAUDE, "openai": "openai-codex", "gemini": AGY_PROVIDER}
@@ -23,6 +26,16 @@ _PROTECTED_WIRE.disabled = True
 
 class SubscriptionError(ValueError):
     """An intentionally public message; upstream exception text is never forwarded."""
+
+
+_APPLY_ERROR = "Настройка сохранена, но текущий диалог не переключён. Повторите применение."
+
+
+def _verify_selection(ticket):
+    try:
+        ticket.require_saved()
+    except AgyError:
+        raise SubscriptionError(_APPLY_ERROR) from None
 
 
 class Subscriptions:
@@ -77,7 +90,8 @@ class Subscriptions:
         config = self._config()
         managed = self._managed_route(config)
         model = config.get("model", {})
-        selected = next((name for name, provider in PROVIDERS.items() if model.get("provider") == provider), "managed")
+        selected = ("gemini" if is_agy(model.get("provider")) else next(
+            (name for name, provider in PROVIDERS.items() if model.get("provider") == provider), "managed"))
         catalog = self._request("/api/providers/oauth").get("providers", [])
         openai = next((row["status"] for row in catalog if row.get("id") == "openai-codex"), {})
         claude = self._claude()
@@ -116,14 +130,15 @@ class Subscriptions:
                     "userCode": result.get("user_code"), "expiresIn": result.get("expires_in", 900),
                     "pollInterval": max(5, result.get("poll_interval", 5))}
             from hermes_runtime.standalone.panel_claude_login import ClaudeLogin
-            config = self._config()
-            plugin = config.setdefault("plugins", {}).setdefault("entries", {}).setdefault(CLAUDE, {}).setdefault("settings", {})
-            if not plugin.get("claude_config_dir"):
-                directory = self.home / "subscriptions" / "claude"
-                directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-                directory.chmod(0o700)
-                plugin["claude_config_dir"] = str(directory)
-                self._write(config)
+            with config_write_lock(self.home / "config.yaml"):
+                config = self._config()
+                plugin = config.setdefault("plugins", {}).setdefault("entries", {}).setdefault(CLAUDE, {}).setdefault("settings", {})
+                if not plugin.get("claude_config_dir"):
+                    directory = self.home / "subscriptions" / "claude"
+                    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    directory.chmod(0o700)
+                    plugin["claude_config_dir"] = str(directory)
+                    self._write(config)
             status = self._claude()
             if not status.get("available") or not status.get("login_command"):
                 raise SubscriptionError("Claude DirectSDK пока не установлен. Обратитесь в agentsee.")
@@ -194,7 +209,14 @@ class Subscriptions:
             agy_authority = self.gemini.connected()
             agy_generation = agy_authority.active(self.home)
         status = await asyncio.to_thread(self.status) if provider not in {"managed", "gemini"} else None
-        with self.lock:
+        route, revision, ticket = await asyncio.to_thread(self._save_selection, provider, model, managed_fallback,
+                                                           status, agy_authority, agy_generation)
+        return await self._apply_selection(provider, route, revision, ticket)
+
+    def _save_selection(self, provider, model, managed_fallback, status, agy_authority, agy_generation):
+        from hermes_runtime.standalone import agy_runtime
+
+        with self.lock, config_write_lock(self.home / "config.yaml"):
             config = self._config()
             managed = copy.deepcopy(self._managed_route(config))
             if managed is None and (provider in {"managed", "gemini"} or managed_fallback):
@@ -212,14 +234,32 @@ class Subscriptions:
                 panel["managed_inference"] = managed
                 config["fallback_providers"] = [{**{k: v for k, v in managed.items() if k != "default"},
                     "model": managed["default"]}] if managed_fallback and provider != "managed" else []
-            if self.auth.gateway_owned or provider == "gemini" or config.get("model", {}).get("provider") == AGY_PROVIDER:
+            previous_ticket = read_selection(self.home, config)
+            leaving_gemini = provider != "gemini" and (is_agy((config.get("model") or {}).get("provider")) or previous_ticket)
+            if self.auth.gateway_owned or provider == "gemini" or leaving_gemini:
                 panel["model_selection_revision"] = secrets.token_hex(16)
             revision = panel.get("model_selection_revision")
             if agy_authority is not None and (self.gemini.connected() is not agy_authority
                                               or agy_authority.active(self.home) != agy_generation):
                 raise AgyError("unavailable")
+            if leaving_gemini:
+                # An unavailable Gemini must not prevent a deliberate return to managed.
+                try:
+                    agy_generation = agy_runtime.admit(self.home, "inference").active(self.home)
+                except AgyError:
+                    agy_generation = None
             config["model"] = route
+            if agy_generation:
+                panel["agy_selection"] = selection_config(config, agy_generation)
+            else:
+                panel.pop("agy_selection", None)
+            ticket = read_selection(self.home, config)
             self._write(config)
+            return route, revision, ticket
+
+    async def _apply_selection(self, provider, route, revision, ticket):
+        from hermes_runtime.sessions import HOME_SESSION_ID
+
         if self.auth.gateway_owned:
             # Main has no frozen local-session policy. Its owner consumes this selection
             # at the next turn boundary, preserving the answer already in progress.
@@ -238,37 +278,28 @@ class Subscriptions:
                             if result.get("error"):
                                 raise SubscriptionError("Настройка сохранена, но текущий диалог не переключён. Повторите применение.")
                             return result["result"]
-            resume = {"session_id": "agentready_home"}
+            resume = {"session_id": HOME_SESSION_ID}
             if not self.auth.gateway_owned:
                 resume.update(source="agentready", close_on_disconnect=False, inline_images=False)
             session = await call(1, "session.resume", resume)
             selection = None
-            if agy_authority is not None:
+            if ticket is not None:
                 if session.get("session_key") != resume["session_id"] or not session.get("session_id"):
-                    raise SubscriptionError("Настройка сохранена, но текущий диалог не переключён. Повторите применение.")
-                self._verify_gemini_selection(route, revision, agy_authority, agy_generation)
-                selection = {"revision": revision, "generation": agy_generation}
+                    raise SubscriptionError(_APPLY_ERROR)
+                _verify_selection(ticket)
+                selection = {"revision": revision, "generation": ticket.generation}
             # Managed custom routes need the endpoint and key-env from config, not the old
             # subscription's endpoint. Native model switching resolves the explicit provider.
             result = await call(2, "config.set", {"session_id": session["session_id"], "key": "model",
                 "value": f"{route['default']} --provider {route['provider']}", "confirm_expensive_model": True,
                 **({"panel_selection": selection} if selection else {})})
-        if agy_authority is not None:
-            self._verify_gemini_selection(route, revision, agy_authority, agy_generation)
-            expected = {"revision": revision, "generation": agy_generation, "session_id": session["session_id"],
-                        "session_key": resume["session_id"], "provider": AGY_PROVIDER, "model": AGY_MODEL}
-            if result.get("panel_selection") != expected or result.get("value") != AGY_MODEL or result.get("confirm_required"):
-                raise SubscriptionError("Настройка сохранена, но текущий диалог не переключён. Повторите применение.")
+        if ticket is not None:
+            _verify_selection(ticket)
+            expected = {"revision": revision, "generation": ticket.generation, "session_id": session["session_id"],
+                        "session_key": resume["session_id"], "provider": ticket.provider, "model": ticket.model}
+            if result.get("panel_selection") != expected or result.get("value") != ticket.model or result.get("confirm_required"):
+                raise SubscriptionError(_APPLY_ERROR)
         return {"saved": True, "deferred": bool(result.get("deferred")), **({"revision": revision} if provider == "gemini" else {})}
-
-    def _verify_gemini_selection(self, route, revision, authority, generation):
-        from hermes_runtime.standalone import agy_runtime
-        current = self._config()
-        if (current.get("model") != route
-                or current.get("autonomous", {}).get("panel", {}).get("model_selection_revision") != revision
-                or agy_runtime.admit(self.home, "inference") is not authority
-                or authority.active(self.home) != generation):
-            raise SubscriptionError("Настройка сохранена, но текущий диалог не переключён. Повторите применение.")
 
     def disconnect(self, provider):
         if self.status()["selected"] == provider:
@@ -323,14 +354,13 @@ class Subscriptions:
 
     def _disconnect_gemini(self):
         from hermes_runtime.standalone import agy_runtime
-        with self.lock:
+        with self.lock, config_write_lock(self.home / "config.yaml"):
             authority = agy_runtime.admit(self.home, "disconnect")
-            config = self._config()
-            revision = config.get("autonomous", {}).get("panel", {}).get("model_selection_revision")
-            if config.get("model", {}).get("provider") == AGY_PROVIDER or not authority.applied(self.home, revision):
-                raise SubscriptionError("Сначала выберите другой источник инференса и сохраните настройку.")
-            self.gemini.retire()
             generation = authority.active(self.home)
+            ticket = read_selection(self.home, self._config())
+            if not ticket or ticket.provider == AGY_PROVIDER or ticket.generation != generation or not ticket.was_applied():
+                raise SubscriptionError("Сначала примените другой источник инференса в текущем диалоге.")
             if generation is not None:
                 authority.withdraw(self.home, generation, "disconnect")
-            return {"disconnected": True}
+        self.gemini.retire()
+        return {"disconnected": True}

@@ -64,5 +64,10 @@ def refused_flush(outcome, guarded):
     return outcome is not True if guarded else outcome is False
 
 
-def refuse_if_interrupted(agent, guarded):
-    return guarded and agent._interrupt_requested
+def require_current_tool_authority(agent):
+    from providers.agy_policy import is_agy
+    if not is_agy(getattr(agent, "provider", None)):
+        return
+    if agent._interrupt_requested:
+        raise AgyError("cancelled")
+    agent.client.require_current()

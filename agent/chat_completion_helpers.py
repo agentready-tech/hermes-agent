@@ -1605,13 +1605,12 @@ def _assistant_reasoning_text(agent, assistant_message) -> Optional[str]:
 
 
 def _assistant_content_for_storage(agent, assistant_message):
-    # Sanitize surrogates (Kimi/GLM via Ollama emit code points that crash json.dumps),
-    # strip inline <think> tags at the storage boundary (they leaked to platforms and
-    # polluted titles), then redact inlined credentials before the message enters
-    # history / state.db / gateway delivery (no-op with HERMES_REDACT_SECRETS off).
+    # Redact credentials after provider-specific text normalization, before state.db or display.
     content = _sanitize_surrogates(flatten_message_text(getattr(assistant_message, "content", None)))
     if isinstance(content, str) and content:
-        content = agent._strip_think_blocks(content).strip()
+        from providers.agy_policy import is_agy
+        if not is_agy(getattr(agent, "provider", None)):
+            content = agent._strip_think_blocks(content).strip()
         if content:
             from agent.redact import redact_sensitive_text
             content = redact_sensitive_text(content)

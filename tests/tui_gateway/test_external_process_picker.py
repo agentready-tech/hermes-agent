@@ -140,3 +140,37 @@ def test_native_picker_selection_preserves_process_runtime(picker_env, monkeypat
         assert runtime["api_mode"] == profile.api_mode
         assert runtime["base_url"] == profile.base_url
     assert (home / "config.yaml").read_bytes() == config_before
+
+
+
+def test_configured_reserved_route_refusal_stops_native_prompt(monkeypatch):
+    from tui_gateway import server
+    from tests.tui_gateway.test_tui_gateway_server import _session
+    from providers.agy_policy import MODEL, PROVIDER
+
+    calls = []
+
+    class ExistingAgent:
+        provider, model = "custom", "fixture-existing"
+
+        def run_conversation(self, *_args, **_kwargs):
+            calls.append("old client")
+            raise AssertionError("old client called")
+
+    class ImmediateThread:
+        def __init__(self, target=None, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(server.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(server, "_load_cfg", lambda: {"model": {"provider": PROVIDER, "default": MODEL}})
+    events = []
+    monkeypatch.setattr(server, "_emit", lambda *event: events.append(event))
+    monkeypatch.setitem(server._sessions, "closed-route-fixture", _session(ExistingAgent(), config_model_seen=(MODEL, PROVIDER)))
+    reply = server.handle_request({"id": 1, "method": "prompt.submit",
+        "params": {"session_id": "closed-route-fixture", "text": "Inert request"}})
+    assert "result" in reply and not calls
+    settled = [event[2] for event in events if event[0] == "message.complete"]
+    assert len(settled) == 1 and "unavailable" in str(settled[0]), events

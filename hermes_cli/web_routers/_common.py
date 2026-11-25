@@ -32,8 +32,10 @@ _CONFIG_MUTATION_LOCK = LateState("_CONFIG_MUTATION_LOCK")
 def config_write_scope(profile: Optional[str]):
     """Profile scope, then the config mutation lock — the write-path nesting
     every config-mutating handler uses."""
+    from hermes_cli.config import config_write_lock, get_config_path
+
     with _profile_scope(profile):
-        with _CONFIG_MUTATION_LOCK:
+        with _CONFIG_MUTATION_LOCK, config_write_lock(get_config_path()):
             yield
 
 

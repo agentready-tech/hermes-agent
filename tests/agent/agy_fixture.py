@@ -21,7 +21,7 @@ def spawn(cwd, mode, *args, login=False):
 
 def child(mode, response='{"type":"final","answer":"Ответ ☃"}', prompt=""):
     if mode in {"login", "invalid-grant"}:
-        print("https://protected.fixture.invalid/code", flush=True)
+        print(response, flush=True)
         if sys.stdin.buffer.read() != b"fixture-only\n":
             return 5
         if mode == "invalid-grant":

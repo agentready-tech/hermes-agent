@@ -74,3 +74,53 @@ def test_import_restores_the_session_store_with_its_message_uids(tmp_path, monke
         assert [m["message_uid"] for m in restored.get_messages_as_conversation("s")] == uids
     finally:
         restored.close()
+
+
+
+@pytest.mark.parametrize("named_target", [False, True])
+def test_zip_roundtrip_never_transfers_binding_and_keeps_workspace(tmp_path, monkeypatch, named_target):
+    from zipfile import ZipFile
+    from hermes_cli.backup import run_backup, run_import
+
+    machine = tmp_path / "source" / ".hermes"
+    home = machine / "profiles" / "employee" if named_target else machine
+    home.mkdir(parents=True)
+    profiles = (Path("profiles/employee"),) if named_target else (Path(), Path("profiles/employee"))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "source")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    for relative in profiles:
+        profile = machine / relative
+        (profile / "subscriptions/agy").mkdir(parents=True)
+        (profile / "workspace/subscriptions/agy").mkdir(parents=True)
+        (profile / "subscriptions/agy/binding.json").write_text('"fixture-only"')
+        (profile / "workspace/subscriptions/agy/notes.txt").write_text("keep the person's workspace")
+        (profile / "config.yaml").write_text("model: benign-fixture\n")
+    archive = tmp_path / "fixture.zip"
+    assert run_backup(Namespace(output=str(archive)))
+    with ZipFile(archive, "a") as zf:
+        names = set(zf.namelist())
+        for relative in profiles:
+            assert str(relative / "subscriptions/agy/binding.json") not in names
+            assert str(relative / "workspace/subscriptions/agy/notes.txt") in names
+            # Synthetic older backup containing a non-portable binding.
+            zf.writestr(str(relative / "subscriptions/agy/binding.json"), '"obsolete fixture"')
+    target_machine = tmp_path / "target" / ".hermes"
+    restored = target_machine / "profiles" / "employee" if named_target else target_machine
+    restored.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "target")
+    monkeypatch.setenv("HERMES_HOME", str(restored))
+    if named_target:
+        # Native backup is machine-wide; a named-profile restore imports a profile-relative
+        # ZIP. Exercise that existing input shape without changing the machine-wide format.
+        local = tmp_path / "named-fixture.zip"
+        prefix = "profiles/employee/"
+        with ZipFile(archive) as original, ZipFile(local, "w") as selected:
+            for name in original.namelist():
+                assert name.startswith(prefix)
+                selected.writestr(name.removeprefix(prefix), original.read(name))
+        archive = local
+        profiles = (Path(),)
+    assert run_import(Namespace(zipfile=str(archive), force=True)) is None
+    for relative in profiles:
+        assert not (restored / relative / "subscriptions/agy").exists()
+        assert (restored / relative / "workspace/subscriptions/agy/notes.txt").read_text() == "keep the person's workspace"

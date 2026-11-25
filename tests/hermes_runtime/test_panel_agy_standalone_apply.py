@@ -12,7 +12,7 @@ from tests.hermes_runtime.test_panel_agy_login import VIEWER, setup
 
 @pytest.mark.asyncio
 @pytest.mark.platforms("posix")
-@pytest.mark.parametrize("case", ["applied", "stale-revision", "foreign-session", "busy", "busy-stale"])
+@pytest.mark.parametrize("case", ["applied", "stale-revision", "switch-conflict", "foreign-session", "busy", "busy-stale"])
 async def test_native_subscription_apply_and_receipt(tmp_path, monkeypatch, case):
     from hermes_cli.config import set_config_value
     from hermes_runtime.sessions import HOME_SESSION_ID
@@ -40,6 +40,16 @@ async def test_native_subscription_apply_and_receipt(tmp_path, monkeypatch, case
         monkeypatch.setitem(server._sessions, foreign_sid, {**own, "session_key": "neighbor-fixture"})
         own["running"] = busy = case.startswith("busy")
         seen = []
+        if case == "switch-conflict":
+            from hermes_cli import model_switch
+            real = model_switch.switch_model
+
+            def resolve_then_write(*args, **kwargs):
+                resolved = real(*args, **kwargs)
+                set_config_value("model.default", "fixture-newer-model")
+                return resolved
+
+            monkeypatch.setattr(model_switch, "switch_model", resolve_then_write)
 
         async def native(socket):
             async for raw in socket:
@@ -63,12 +73,12 @@ async def test_native_subscription_apply_and_receipt(tmp_path, monkeypatch, case
         try:
             async with serve(native, "127.0.0.1", 0) as socket:
                 a.auth.rpc_connection = lambda: (f"ws://127.0.0.1:{socket.sockets[0].getsockname()[1]}", {})
-                if case in {"stale-revision", "foreign-session"}:
+                if case in {"stale-revision", "switch-conflict", "foreign-session"}:
                     with pytest.raises(SubscriptionError, match="не переключён"):
                         await select()
                     assert "error" in seen[-1][1] and own.get("model_override") is None
                     assert agent.client is previous_client and not store.children
-                    expected = "fixture-newer-model" if case == "stale-revision" else MODEL
+                    expected = MODEL if case == "foreign-session" else "fixture-newer-model"
                     assert a._config()["model"]["default"] == expected
                     assert db.get_messages("neighbor-fixture") == []
                     return
@@ -104,3 +114,36 @@ async def test_native_subscription_apply_and_receipt(tmp_path, monkeypatch, case
             server._sessions.pop(foreign_sid, None)
             server.handle_request({"id": 3, "method": "session.close", "params": {"session_id": main_sid}})
             agent.close()
+
+
+@pytest.mark.asyncio
+async def test_panel_and_native_writer_share_read_modify_write_lock(tmp_path, monkeypatch):
+    from threading import Event
+    from hermes_cli import config
+    from hermes_runtime.workspace.transport import profile_scope
+
+    service, _, store, _ = setup(tmp_path, monkeypatch)
+    assert store.promote(service.home, store.stage(service.home))
+    write_ready, writer_entered, writer_done = Event(), Event(), Event()
+    original = service._write
+
+    def paused_panel_write(data):
+        write_ready.set()  # Panel has read, edited, and still owns the physical config lock.
+        assert writer_entered.wait(5)
+        assert not writer_done.is_set()
+        original(data)
+
+    def native_writer():
+        assert write_ready.wait(5)
+        writer_entered.set()
+        with profile_scope(service.home):
+            config.set_config_value("agent.max_turns", "77")
+        writer_done.set()
+
+    monkeypatch.setattr(service, "_write", paused_panel_write)
+    await asyncio.gather(asyncio.to_thread(native_writer),
+        service.handle("subscriptions.select", {"provider": "gemini", "model": MODEL, "managedFallback": False}, viewer=VIEWER))
+    raw = service._config()
+    assert writer_done.is_set()
+    assert raw["agent"]["max_turns"] == 77 and raw["model"] == {"provider": PROVIDER, "default": MODEL}
+    assert not store.children

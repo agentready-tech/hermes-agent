@@ -220,3 +220,55 @@ def test_restart_does_not_dispatch_an_orphaned_assistant_call(native):
             assert sum(bool(row.get("tool_calls")) for row in reopened.get_messages(session)) == 1
         finally:
             resumed.close()
+
+
+@pytest.mark.parametrize("withdraw", [True, False])
+def test_pending_echo_loses_authority_inside_native_dispatch(native, monkeypatch, withdraw):
+    from agent import tool_executor
+
+    start, calls, _, path, session = native
+    agent, authority = start(proposal("pending-echo"))
+    original = tool_executor._pre_tool_block
+    entered = []
+
+    def withdraw_after_admission(owner, ref):
+        assert owner is agent and ref.call_id == "pending-echo"
+        with SessionDB(path) as reader:
+            assert reader.get_messages(session)[-1]["tool_calls"][0]["id"] == "pending-echo"
+        entered.append(ref.call_id)
+        if withdraw:
+            monkeypatch.setattr(authority, "active", lambda _home: None)
+        else:
+            agent.interrupt()
+        return original(owner, ref)
+
+    monkeypatch.setattr(tool_executor, "_pre_tool_block", withdraw_after_admission)
+    try:
+        result = agent.run_conversation("Echo only if the fixture generation is still active")
+        assert result["failure_reason"] == ("auth_required" if withdraw else "cancelled")
+        assert entered == ["pending-echo"] and not calls and len(authority.processes) == 1
+    finally:
+        agent.close()
+    with SessionDB(path) as reopened:
+        persisted = reopened.get_messages(session)
+        assert [r["tool_calls"][0]["id"] for r in persisted if r.get("tool_calls")] == ["pending-echo"]
+        assert not [r for r in persisted if r["role"] == "tool"]
+        restarted, authority = start(proposal("pending-echo"), active_db=reopened)
+        try:
+            assert restarted.run_conversation("Inert echo after reopen")["failure_reason"] == "duplicate_tool_call"
+            assert not calls and len(authority.processes) == 1
+        finally:
+            restarted.close()
+
+
+def test_valid_final_with_literal_legacy_marker_has_no_retry(native):
+    start, _, db, _, session = native
+    answer = "Literal marker: <REASONING_SCRATCHPAD>"
+    agent, authority = start(("ok", json.dumps({"type": "final", "answer": answer})))
+    try:
+        result = agent.run_conversation("Show a literal text marker")
+        assert result["final_response"] == answer
+        assert db.get_messages(session)[-1]["content"] == answer
+        assert len(authority.processes) == 1
+    finally:
+        agent.close()

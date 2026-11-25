@@ -142,3 +142,27 @@ def test_fixed_launch_environment_is_not_inherited(tmp_path, monkeypatch):
     pointer.symlink_to(tmp_path, target_is_directory=True)
     with pytest.raises(AgyError, match="unavailable"):
         agy_runtime.child_environment(pointer)
+
+
+
+def test_generation_withdrawn_after_child_finishes_before_response(tmp_path, monkeypatch):
+    import importlib
+    from providers.agy_policy import AgyError
+    from hermes_runtime.standalone import agy_runtime
+
+    adapter = importlib.import_module("plugins.model-providers.gemini-antigravity")
+    authority = Authority(tmp_path, [("ok", '{"type":"final","answer":"not published"}')])
+    monkeypatch.setattr(agy_runtime, "admit", lambda *_: authority)
+    real_communicate = adapter.communicate
+
+    def finish_then_withdraw(*args, **kwargs):
+        outcome = real_communicate(*args, **kwargs)
+        monkeypatch.setattr(authority, "active", lambda _home: None)
+        return outcome
+
+    monkeypatch.setattr(adapter, "communicate", finish_then_withdraw)
+    client = agy_runtime.profile_for(tmp_path).create_client(cancelled=lambda: False)
+    with pytest.raises(AgyError) as error:
+        client.create(model=MODEL, messages=[{"role": "user", "content": "Inert"}])
+    assert error.value.code == "auth_required"
+    assert len(authority.processes) == 1 and authority.processes[0].returncode == 0
