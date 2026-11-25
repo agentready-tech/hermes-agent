@@ -1914,6 +1914,13 @@ def _gemini_native_client(agent, client_kwargs: dict, httpx_verify, *, reason: s
 
 
 def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: bool) -> Any:
+    from providers.agy_policy import AgyError, PROVIDER, is_agy
+    if is_agy(getattr(agent, "provider", None)):
+        if agent.provider != PROVIDER:
+            raise AgyError("unavailable")
+        from hermes_constants import get_hermes_home
+        from hermes_runtime.standalone.agy_runtime import profile_for
+        return profile_for(get_hermes_home()).create_client(cancelled=lambda: bool(agent._interrupt_requested))
     from agent.auxiliary_client import (
         _to_openai_base_url,
         _validate_base_url,

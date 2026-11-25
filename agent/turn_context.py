@@ -593,6 +593,9 @@ def _bind_turn_identity(
     )
     agent._relay_pending_turn_id = None
     agent._current_turn_id = turn_id
+    from providers.agy_policy import is_agy
+    if is_agy(getattr(agent, "provider", None)):
+        agent._agy_admitted_call_ids = set()
     agent._current_api_request_id = ""
     # Tripwire: warn when this turn starts before the previous turn-end persist
     # (concurrent turns interleave transcript writes). Cleared in _persist_session.

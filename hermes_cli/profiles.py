@@ -107,7 +107,7 @@ def _non_exportable_entries(directory: str, contents: list) -> set:
     :func:`shutil.copytree` cannot copy special files, so a single live Unix socket without a
     ``.sock`` name (or a FIFO, or a device node) would abort the whole export or clone with
     ``[Errno 6] No such device or address``. Symlinks survive — copytree recreates them."""
-    ignored: set = set()
+    ignored: set = {"agy"} & set(contents) if Path(directory).name == "subscriptions" else set()
     for entry in contents:
         if entry == "__pycache__" or entry.endswith((".sock", ".tmp", ".pyc", ".pyo")):
             ignored.add(entry)
@@ -2288,6 +2288,13 @@ def import_profile(archive_path: str, name: Optional[str] = None) -> Path:
         extracted = staging_root / archive_root
         if not extracted.is_dir():
             raise ValueError(f"Profile archive root is missing or invalid: {archive_root}")
+        private = extracted / "subscriptions"
+        if private.is_symlink():
+            private.unlink()  # Do not traverse an archive's external reference.
+        elif (binding := private / "agy").is_symlink() or binding.is_file():
+            binding.unlink()
+        elif binding.is_dir():
+            shutil.rmtree(binding)
         final_source = extracted
         if archive_root != canon:
             final_source = staging_root / canon

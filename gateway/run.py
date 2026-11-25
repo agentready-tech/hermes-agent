@@ -2320,6 +2320,9 @@ def _resolve_runtime_agent_kwargs() -> dict:
     try:
         runtime, fallback_entry = resolve_runtime_with_fallback(_load_gateway_config())
     except Exception as exc:
+        from providers.agy_policy import AgyError
+        if isinstance(exc, AgyError):
+            raise
         raise RuntimeError(format_runtime_provider_error(exc)) from exc
 
     if fallback_entry is not None:
@@ -2460,6 +2463,9 @@ def _resolve_runtime_agent_kwargs_for_provider(provider: str, target_model: Opti
     try:
         runtime = resolve_runtime_provider(requested=provider, target_model=target_model or None)
     except Exception as exc:
+        from providers.agy_policy import AgyError
+        if isinstance(exc, AgyError):
+            raise
         raise RuntimeError(format_runtime_provider_error(exc)) from exc
     return {
         **_runtime_agent_kwargs(runtime),

@@ -79,6 +79,16 @@ def handle_api_error(
     if agent.thinking_callback:
         agent.thinking_callback("")
 
+    from providers.agy_policy import AgyError, is_agy
+    if is_agy(getattr(agent, "provider", None)):
+        error = api_error if isinstance(api_error, AgyError) else AgyError("transport")
+        agent._flush_messages_to_session_db(messages, conversation_history)
+        return _verdict("return", {
+            "final_response": str(error), "messages": messages, "api_calls": api_call_count,
+            "completed": False, "failed": True, "error": str(error),
+            "failure_reason": error.code, "failure_retryable": False,
+        })
+
     _recovered, active_system_prompt = recover_before_classification(
         agent, api_error, messages=messages, api_messages=api_messages, api_kwargs=api_kwargs,
         active_system_prompt=active_system_prompt,

@@ -127,6 +127,9 @@ def register_provider(profile: ProviderProfile) -> None:
     bundled profiles without editing repo code. A registration made while a
     ``$HERMES_HOME`` plugin is being imported lands in that home's layer.
     """
+    from providers.agy_policy import is_agy
+    if is_agy(profile.name) or any(map(is_agy, profile.aliases)):
+        return  # Hosted admission, never discovery, owns this route.
     global _PROVIDER_LIST_CACHE
     layer = _REGISTRATION_TARGET.get()
     if layer is not None:
@@ -194,6 +197,9 @@ def get_provider_profile(name: str) -> ProviderProfile | None:
 
     Returns None if the provider has no profile (falls back to generic).
     """
+    from providers.agy_policy import is_agy
+    if is_agy(name):
+        return None  # The guarded main runtime resolves through its owner.
     from agent.safe_worker_policy import safe_worker_enabled
 
     if safe_worker_enabled():

@@ -210,7 +210,9 @@ def _flush_session_db_after_tool_progress(agent, messages: list, *, stage: str) 
     _maybe_inject_run_budget_wrapup(agent, messages)
     _maybe_inject_iteration_budget_warning(agent, messages)
     try:
-        persisted = agent._flush_messages_to_session_db(messages) is not False
+        outcome = agent._flush_messages_to_session_db(messages)
+        from providers.agy_policy import is_agy
+        persisted = outcome is True if is_agy(getattr(agent, "provider", None)) else outcome is not False
         if not persisted:
             agent._incremental_persistence_failed = True
             # The flush recorded any classified cause; default to 'unknown' only if nothing more specific exists.

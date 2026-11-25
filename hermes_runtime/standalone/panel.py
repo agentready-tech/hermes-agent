@@ -148,7 +148,8 @@ async def bridge(command, config, port, credential, auth, subscriptions=None, go
         if subscriptions is None:
             raise ValueError("Subscriptions unavailable")
         remote_url = socket_url(config["url"], config["environment_id"], "reverse", urlencode({"id": identity}))
-        await subscriptions.bridge(remote_url, credential)
+        viewer = command.get("viewerBinding") if command.get("canConfigure") is True else None
+        await subscriptions.bridge(remote_url, credential, viewer=viewer)
         return
     if kind == "chat":
         from hermes_runtime.standalone.panel_chat import gateway_chat_available, bridge_chat
@@ -235,9 +236,10 @@ async def connection(config, port, credential, auth, subscriptions=None, google_
     from websockets.asyncio.client import connect
     from websockets.exceptions import WebSocketException
     tasks = set()
+    from hermes_runtime.standalone.panel_subscriptions import _PROTECTED_WIRE
     url = socket_url(config["url"], config["environment_id"], "agent")
     async with connect(url, additional_headers={"Authorization": f"Bearer {credential}"},
-                       max_size=4096, open_timeout=15, close_timeout=5, proxy=None) as control:
+                       max_size=4096, open_timeout=15, close_timeout=5, proxy=None, logger=_PROTECTED_WIRE) as control:
         logger.info("Computer connected to Panel")
         google_ready = False
         if google_auth is not None:
@@ -247,7 +249,9 @@ async def connection(config, port, credential, auth, subscriptions=None, google_
                 google_ready = await asyncio.to_thread(available)
             except (OSError, ValueError):
                 pass  # No intent capability until the existing own gateway is ready.
+        gemini = await asyncio.to_thread(subscriptions.gemini.card) if subscriptions else None
         await control.send(json.dumps({"type": "hello", "capabilities": ["screen", "chat", INSTRUCTIONS_CAPABILITY, *(["subscriptions"] if subscriptions else []),
+            *([gemini["capability"]] if gemini else []),
             *(["google-browser-window-v1"] if google_ready else []),
             *(["skills-library-read-v1", "skills-personal-edit-v1", "skills-builtin-selection-v1"] if skills is not None else [])]}))
         async def open_channel(command):
@@ -270,6 +274,8 @@ async def connection(config, port, credential, auth, subscriptions=None, google_
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            if subscriptions:
+                await asyncio.to_thread(subscriptions.gemini.retire)
 
 
 async def _worker(home):

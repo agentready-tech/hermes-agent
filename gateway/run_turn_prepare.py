@@ -141,6 +141,10 @@ class GatewayTurnPrepareMixin:
             self._rehydrate_session_model_override(skey)
         _override_state = self._peek_session_state(skey) if skey else None
         override = _override_state.conversation.model_override if _override_state else None
+        from providers.agy_policy import is_agy
+        if override and is_agy(override.get("provider")):
+            return override.get("model", model), _resolve_runtime_agent_kwargs_for_provider(
+                override["provider"], target_model=override.get("model") or None)
         if override:
             override_model = override.get("model", model)
             override_runtime = {

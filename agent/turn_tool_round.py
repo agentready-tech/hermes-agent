@@ -68,6 +68,15 @@ def run_tool_round(
             current_turn_user_idx=current_turn_user_idx, result=result,
         )
 
+    from providers.agy_policy import is_agy
+    guarded = is_agy(getattr(agent, "provider", None))
+    if guarded:
+        from agent.agy_turn import reject_proposal
+        if error := reject_proposal(agent, assistant_message.tool_calls, messages):
+            return _verdict("return", {"final_response": str(error), "messages": messages,
+                "failed": True, "completed": False, "failure_reason": error.code,
+                "failure_retryable": False, "error": str(error)})
+
     if not agent.quiet_mode:
         agent._vprint(f"{agent.log_prefix}🔧 Processing {len(assistant_message.tool_calls)} tool call(s)...")
 
@@ -142,7 +151,7 @@ def run_tool_round(
             exc,
         )
 
-    if _tool_turn_persisted is False:
+    if _tool_turn_persisted is False or (guarded and _tool_turn_persisted is not True):
         # Canonical append failed: never project the row or run tools from process-only
         # state; break rather than retry. No recorded cause means genuinely unknown.
         if getattr(agent, "_last_persistence_error_cause", None) is None:
@@ -163,6 +172,9 @@ def run_tool_round(
         with suppress(Exception):
             agent.stream_delta_callback(None)
 
+    if guarded and agent._interrupt_requested:
+        _turn_exit_reason, final_response, failed = "cancelled", "", True
+        return _verdict("break")
     agent._execute_tool_calls(assistant_message, messages, effective_task_id, api_call_count)
     from hermes_cli.observability.shared_metrics_harness import finish_tool_round
 
