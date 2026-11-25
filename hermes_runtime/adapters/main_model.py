@@ -15,9 +15,11 @@ def _ticket_slots(runner):
         with _TICKET_SLOTS_INIT:
             slots = getattr(runner, "_panel_tickets", None)
             if slots is None:
+                lock = threading.Lock()
+                # Lock first: a fast-path reader that sees the dict must already see its lock.
+                runner._panel_tickets_lock = lock
                 slots = {}
                 runner._panel_tickets = slots
-                runner._panel_tickets_lock = threading.Lock()
     return slots, runner._panel_tickets_lock
 
 

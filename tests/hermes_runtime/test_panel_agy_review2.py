@@ -292,3 +292,95 @@ def test_no_request_turn_releases_the_fence_and_later_request_has_no_receipt(tmp
         assert not (home / "subscriptions" / "agy" / "native-applied.json").exists()
     finally:
         agent.close()
+
+
+def test_gateway_turn_teardown_is_scoped_and_releases_the_fence(tmp_path, monkeypatch):
+    """The real turn path: fence gone after success and after an exception, foreign slot untouched."""
+    from gateway.run import GatewayConfig, GatewayRunner
+    from gateway.run_turn_runner import TurnRunner
+    from gateway.turn_context import TurnContext
+    from hermes_runtime.adapters.main_model import stash_panel_ticket, take_panel_ticket
+    from hermes_runtime.sessions import HOME_SESSION_ID, HOME_SESSION_KEY
+
+    home = tmp_path / "profile"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    ticket = read_selection(home, _managed_config(home, generation="fixture-generation"))
+    runner = GatewayRunner(GatewayConfig())
+    source = types.SimpleNamespace(user_id="fixture", user_name="fixture", is_bot=False)
+    foreign_key, foreign_ticket = "agent:main:agentready:fixture-foreign", object()
+
+    class Agent:
+        _panel_selection = None
+
+        def __init__(self, outcome):
+            self.outcome = outcome
+
+        def run_conversation(self, _message, **_kwargs):
+            if isinstance(self.outcome, Exception):
+                raise self.outcome
+            return self.outcome
+
+    def turn(agent, session_key=HOME_SESSION_KEY):
+        ctx = TurnContext(source=source, session_id=HOME_SESSION_ID, session_key=session_key,
+                          message="echo fixture")
+        TurnRunner(runner, ctx)._run_conversation_with_approval(agent, [], None, None, None)
+        return agent
+
+    stash_panel_ticket(runner, HOME_SESSION_KEY, ticket)
+    stash_panel_ticket(runner, foreign_key, foreign_ticket)
+    assert turn(Agent("fixture only"))._panel_selection is None
+    assert take_panel_ticket(runner, HOME_SESSION_KEY) is None and \
+        take_panel_ticket(runner, foreign_key) is foreign_ticket
+
+    stash_panel_ticket(runner, HOME_SESSION_KEY, ticket)
+    with pytest.raises(RuntimeError, match="fixture failure"):
+        turn(Agent(RuntimeError("fixture failure")))
+    assert take_panel_ticket(runner, HOME_SESSION_KEY) is None
+
+    stash_panel_ticket(runner, HOME_SESSION_KEY, ticket)
+    assert turn(Agent("foreign only"), session_key=foreign_key)._panel_selection is None
+    assert take_panel_ticket(runner, HOME_SESSION_KEY) is ticket
+
+
+@pytest.mark.parametrize("outcome", ["fixture only", RuntimeError("fixture failure")])
+def test_tui_turn_teardown_releases_the_fence(tmp_path, monkeypatch, outcome):
+    """The TUI turn boundary as installed on server.py, with the real attach import."""
+    import threading
+    from tui_gateway import server
+    from tui_gateway.prompt_turn import _TurnRun
+    from hermes_runtime.sessions import HOME_SESSION_ID
+
+    home = tmp_path / "profile"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    ticket = read_selection(home, _managed_config(home, generation="fixture-generation"))
+
+    class Agent:
+        _panel_selection = None
+
+        def run_conversation(self, _message, **_kwargs):
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+    agent = Agent()
+    ticket.attach(agent)
+    assert agent._panel_selection is ticket
+    stop = threading.Event()
+    monkeypatch.setattr(server, "_start_usage_ticker",
+                        lambda *_a, **_k: (stop, types.SimpleNamespace(join=lambda: None)))
+    monkeypatch.setattr(server, "_adopt_submit_user_row", lambda *_a, **_k: None)
+    monkeypatch.setattr(server, "_emit", lambda *_a, **_k: None)
+    monkeypatch.setattr("agent.notification_presentation.event_presentation_muted", lambda *_a: True)
+    session = {"history_lock": threading.Lock(), "session_key": HOME_SESSION_ID}
+    state = _TurnRun(agent=agent, one_turn_restore=None, terminal_callback=None,
+                                        receipt_committed=False)
+    if isinstance(outcome, Exception):
+        with pytest.raises(RuntimeError, match="fixture failure"):
+            server._invoke_agent("fixture-sid", session, state, "echo", "echo", None, [], None, None)
+    else:
+        server._invoke_agent("fixture-sid", session, state, "echo", "echo", None, [], None, None)
+        assert state.result == outcome
+    assert agent._panel_selection is None
+    assert not (home / "subscriptions" / "agy" / "native-applied.json").exists()
