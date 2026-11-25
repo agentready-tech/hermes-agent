@@ -494,7 +494,8 @@ def _goal_judgments(goals) -> dict[str, _GoalJudgment]:
 def _working(store, project_id):
     if store.db._read_one(
         """SELECT 1 FROM delegated_projects WHERE json_extract(workspace_json,'$.goal_state.parent_goal_id')=?
-           AND archived=0 AND json_extract(workspace_json,'$.goal_state.status') NOT IN ('done','cancelled','inactive')
+           AND archived=0
+           AND json_extract(workspace_json,'$.goal_state.status') NOT IN ('done','cancelled','inactive','blocked')
            LIMIT 1""", (project_id,),
     ):
         return True
@@ -747,6 +748,19 @@ def finish_segment(agent, response, *, verify=True):
     return response
 
 
+def _stalled_on_blocked_child(store, project_id, goal):
+    # A blocked child could leave a verified parent step saved without a wake.
+    revision = goal["revision"]
+    if (goal.get("wake_id") or not goal["next_step"] or goal.get("step_revision") != revision
+            or goal["checked_revision"] != revision):
+        return False
+    return bool(store.db._read_one(
+        """SELECT 1 FROM delegated_projects WHERE json_extract(workspace_json,'$.goal_state.parent_goal_id')=?
+           AND archived=0 AND json_extract(workspace_json,'$.goal_state.status')='blocked' LIMIT 1""",
+        (project_id,),
+    )) and not _working(store, project_id)
+
+
 def _recover_saved_goal(store, project_id, goal):
     if goal["status"] == "closing":
         current = close_goal(store, project_id, goal["outcome"], goal["final_evidence"])
@@ -755,7 +769,8 @@ def _recover_saved_goal(store, project_id, goal):
     elif goal["status"] == "ready":
         _recover_ready(store, project_id, goal)
     elif (goal["status"] == "waiting" and not _waiting(store, project_id, until_deadline=True)
-          or goal["status"] == "awaiting_operation" and not _awaiting_operation(store, goal)):
+          or goal["status"] == "awaiting_operation" and not _awaiting_operation(store, goal)
+          or goal["status"] == "running" and _stalled_on_blocked_child(store, project_id, goal)):
         current = _write_transition(store, project_id, goal)
         _publish(project_id, current)
     elif goal.get("parent_goal_id") and goal["status"] in {"done", "blocked"}:
@@ -780,6 +795,8 @@ def recover():
                )
                SELECT subagent_id, state, wait FROM goals
                WHERE json_extract(state, '$.status') IN ('ready','closing','waiting','awaiting_operation')
+                  OR (json_extract(state, '$.status')='running'
+                      AND json_extract(state, '$.step_revision')=json_extract(state, '$.revision'))
                   OR (json_type(wait, '$.pending_reply')='object' AND json_extract(wait, '$.state')='BOUND'
                       AND json_extract(state, '$.status') NOT IN ('closing','done','cancelled','inactive','blocked'))
                   OR (json_extract(state, '$.parent_goal_id') IS NOT NULL

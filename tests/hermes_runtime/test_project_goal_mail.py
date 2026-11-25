@@ -1,5 +1,6 @@
-"""Native coordination mail respects the lifecycle of its exact Project Goal."""
+"""Native coordination mail and worker reports respect their Project Goal's lifecycle."""
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -7,9 +8,13 @@ from unittest.mock import Mock
 import pytest
 
 from hermes_runtime.adapters import goal_turn
+from hermes_runtime.sessions import HOME_SESSION_ID
+from tests.hermes_runtime.test_child_goals import _child_actor
+from tests.hermes_runtime.test_main_cron_wake import owner as gateway_owner
 from tests.hermes_runtime.test_panel_assignments import _call_panel, _dispatch, _worker
 from tests.hermes_runtime.test_panel_main_bootstrap import resume, runtime
-from tests.hermes_runtime.test_project_goal import _actor, _open
+from tests.hermes_runtime.test_project_goal import _actor, _agent, _consume, _goal, _models, _open, _snapshot, _wake
+from tests.tools.test_delegate_mail_live import _response
 from tools.delegate_mail import mail_action, publish_pending_mail
 from tools.delegate_mail_store import MailStore
 from tools.delegate_mail_work import MailboxDeferred, ensure_mail_input, stage_mail_input
@@ -229,3 +234,109 @@ def test_mail_recovery_keeps_admitted_stage_and_pending_descendant(main_home):
             mail.acknowledge_recorded()
         projects.release(wake)
         assert projects.claim(leaf)['message_id'] == wake['message_id']
+
+
+BLOCKED_CHILD_NEXT_STEP = "Review the saved report and record the outstanding approval separately."
+
+
+@pytest.fixture
+def blocked_child_assignment(main_home):
+    _, db = main_home
+    main = _actor(db)
+    root = _open(main, "Review the finished work and collect its approval")
+    with ProjectStore(main) as store:
+        coordinator = store.create("coordinator", "Coordinate the review", "")
+    owner = _child_actor(db, coordinator, root)
+    db.create_session(owner.session_id, source="delegate", parent_session_id=HOME_SESSION_ID)
+    child = _open(owner, "Confirm the external approval")
+    return main, root, coordinator, owner, child
+
+
+def _block(owner, child):
+    return _goal(owner, "block", project_id=child, blocker="Awaiting the user's authorization",
+                 unblock="The user grants access", notify=True)
+
+
+@pytest.mark.asyncio
+async def test_native_report_schedules_parent_step_with_blocked_child(main_home, blocked_child_assignment, monkeypatch):
+    from hermes_runtime.adapters.state import main_gateway_origin
+    from tools.delegate_projects import _publish_completed
+
+    home, db = main_home
+    main, root, coordinator, owner, child = blocked_child_assignment
+    monkeypatch.setattr("agent.prompt_builder._probe_remote_backend", lambda *_: "Linux Docker fixture")
+    monkeypatch.setenv("HERMES_GATEWAY_SESSION", "1")
+    runner, authority = await gateway_owner(home, db, monkeypatch, "blocked-child-report")
+    with ProjectStore(main) as store:
+        message_id = store.enqueue(coordinator, "Return the review findings",
+                                   {**main_gateway_origin(), "goal_project_id": root, "wake": True})
+        message = store.claim(coordinator)
+        owner._project_goal_segment.input_id = message_id
+        _block(owner, child)
+        receipt = {"status": "completed", "summary": "The evidence was reviewed. Approval is outstanding."}
+        assert store.settle(coordinator, message, receipt)
+        assert not receipt.get("goal_continuing")
+        _publish_completed(store, coordinator, store.message(message_id), receipt)
+
+    def verify(goals):
+        assert goals[root]["evidence"][message_id]["kind"] == "worker report"
+        return {root: goal_turn._GoalJudgment(missing_evidence="The approval receipt", next_step=BLOCKED_CHILD_NEXT_STEP)}
+
+    model = Mock(return_value=_response("The findings are recorded."))
+    _models(monkeypatch, model, verify)
+
+    async def execute(event, *_args):
+        agent = _agent(db)
+        try:
+            result = await asyncio.to_thread(agent.run_conversation, event.text)
+            assert result["_notification_reply_muted"]
+            assert result["final_response"] == ""
+            return result["final_response"]
+        finally:
+            agent.close()
+
+    monkeypatch.setattr(runner, "_handle_message_with_agent", execute)
+    await _consume(runner, authority, home, _wake(db, message_id))
+    saved = _snapshot(main, root)
+    assert saved["next_step"] == BLOCKED_CHILD_NEXT_STEP and message_id in saved["evidence"]
+    assert saved["status"] == "ready" and saved["wake_id"]
+    await _consume(runner, authority, home, _wake(db, "main-goal-"))
+    assert model.call_count == 2
+    assert _snapshot(owner, child)["status"] == "blocked"
+    assert _snapshot(main, root)["status"] == "pending"
+
+
+@pytest.mark.parametrize("condition", ["stalled", "active child", "queued dispatch", "stale step"])
+def test_recovery_uses_only_a_verified_parent_step(blocked_child_assignment, monkeypatch, condition):
+    from hermes_runtime.adapters.inbox import HomeInbox
+    from tools.delegate_project_goal import add_evidence, mutate_goal
+
+    main, root, coordinator, owner, child = blocked_child_assignment
+    _block(owner, child)
+    if condition == "active child":
+        _open(owner, "Complete the other review stage", slot=2)
+    monkeypatch.setattr("hermes_runtime.adapters.state.main_gateway_origin", dict)
+
+    def seed_stuck_state(goal):
+        add_evidence(goal, "project-msg-saved", "worker report", "Review evidence saved before recovery.")
+        goal.update(status="running", checked_revision=goal["revision"], next_step=BLOCKED_CHILD_NEXT_STEP,
+                    step_revision=0 if condition == "stale step" else goal["revision"])
+        return goal
+
+    with ProjectStore(main) as store:
+        if condition == "queued dispatch":
+            store.enqueue(coordinator, "Finish the other review stage", {"goal_project_id": root, "wake": True})
+        mutate_goal(store, root, seed_stuck_state)
+    before = _snapshot(main, root)
+    goal_turn.recover()
+    after = _snapshot(main, root)
+    inbox = HomeInbox()
+    if condition != "stalled":
+        assert after == before and inbox.pending() == []
+    else:
+        assert after["status"] == "ready" and after["wake_id"]
+        [saved] = inbox.pending()
+        assert BLOCKED_CHILD_NEXT_STEP in saved[1]
+        goal_turn.recover()
+        assert inbox.pending() == [saved]
+    assert _snapshot(owner, child)["status"] == "blocked"
