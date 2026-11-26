@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -358,10 +359,30 @@ def _own_kubernetes_source(files, monkeypatch, *, strict):
         """Actual backend type/owner checks, with only its exec transport kept synthetic."""
         virtual_root = '/tmp/synthetic-reports'
 
+        def activate(self):
+            pass
+
+        def exec_prefix(self, *, interactive, require_current):
+            assert not interactive and require_current
+            return ['synthetic-kubectl']
+
         def execute(self, command, **kwargs):
-            return super().execute(command.replace(self.virtual_root, self.cwd), **kwargs)
+            pytest.fail('An attachment must not use the sandbox terminal shell')
 
     environment = KubernetesFiles(files.workspace)
+    original_run = subprocess.run
+
+    def run(argv, **kwargs):
+        if argv[0] != 'synthetic-kubectl':
+            return original_run(argv, **kwargs)
+        assert argv[1:5] == ['/usr/bin/python3', '-I', '-B', '-c']
+        assert kwargs['stdout'] == subprocess.PIPE and kwargs['stderr'] == subprocess.DEVNULL
+        remote_path = Path(argv[-4])
+        environment.calls.append(str(remote_path))
+        return original_run(
+            [sys.executable, *argv[2:-4], str(environment.root / remote_path.relative_to(environment.virtual_root)),
+             *argv[-3:]], **kwargs)
+
     environment.namespace, environment.pod, environment.container = 'own', 'own-sandbox', 'sandbox'
     config = {'env_type': 'kubernetes', 'kubernetes_namespace': 'own',
               'kubernetes_pod': 'own-sandbox', 'kubernetes_container': 'sandbox'}
@@ -370,6 +391,7 @@ def _own_kubernetes_source(files, monkeypatch, *, strict):
     monkeypatch.setattr(media_delivery, 'producing_environment', files.original_source)
     monkeypatch.setattr(media_policy, 'media_delivery_strict', lambda: strict)
     monkeypatch.setattr(hermes, 'managed_home', lambda: files.home)
+    monkeypatch.setattr(media_delivery.subprocess, 'run', run)
     return environment, config
 
 
@@ -384,7 +406,7 @@ def test_own_kubernetes_tmp_report_is_retained_without_manual_copy(files, monkey
         environment.virtual_root = str(files.home / 'cache/scratch')
     elif location == 'workspace':
         environment.virtual_root = '/workspace'
-    payload = b'synthetic owned sandbox temporary report'
+    payload = b'synthetic owned sandbox temporary report\x00\xff\n'
     name = 'report.docx' if location == 'workspace' else 'report.csv'
     source = files.workspace / name
     source.write_bytes(payload)
@@ -401,6 +423,7 @@ def test_own_kubernetes_tmp_report_is_retained_without_manual_copy(files, monkey
         assert retained is not None
         source.unlink()
         assert Path(retained).read_bytes() == payload
+    assert environment.calls == [remote]
 
 
 def test_kubernetes_scratch_collision_uses_only_producer_bytes(files, monkeypatch):

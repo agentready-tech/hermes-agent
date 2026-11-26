@@ -3,43 +3,72 @@ from contextlib import contextmanager
 import hashlib
 import os
 import json
+import logging
 from pathlib import Path, PurePosixPath
 import shlex
+import subprocess
 import tempfile
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 MAX_FILE = 10 * 1024 * 1024
 MAX_BATCH = 20 * 1024 * 1024
 MAX_FILES = 5
 
-# This probe runs inside the selected backend, before and after its existing fetch_file.
-# It emits identities/hashes only; paths or exception diagnostics never become chat output.
+# The producer verifies one regular file inside its backend. Exec backends with binary
+# transport can stream that same open file, without the interactive shell or its state.
 _PROBE = r'''
-import hashlib,json,os,pathlib,stat,sys
+import hashlib
+import json
+import os
+import pathlib
+import stat
+import sys
+
+
+def identity(info):
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+
+
 try:
- p=pathlib.Path(sys.argv[1]); root=pathlib.Path(sys.argv[2]); limit=int(sys.argv[3])
- if not p.is_absolute() or not root.is_absolute() or '..' in p.parts: raise ValueError()
- p.relative_to(root)
- denied={'.ssh','.gnupg','.config','.agentsee','browser-profile'}
- for part in p.parts:
-  low=part.lower()
-  if low in denied or low.startswith('.env') or low in {'.netrc','.pgpass','.npmrc','.pypirc','.git-credentials'}: raise ValueError()
- for parent in [*reversed(p.parents),p]:
-  if parent.is_symlink(): raise ValueError()
- fd=os.open(p,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0)|getattr(os,'O_NONBLOCK',0))
- with os.fdopen(fd,'rb') as f:
-  s=os.fstat(f.fileno())
-  if not stat.S_ISREG(s.st_mode) or s.st_nlink!=1 or not 0<s.st_size<=limit: raise ValueError()
-  h=hashlib.sha256(); count=0
-  while chunk:=f.read(1024*1024):
-   count+=len(chunk)
-   if count>limit: raise ValueError()
-   h.update(chunk)
-  t=os.fstat(f.fileno())
-  if (s.st_dev,s.st_ino,s.st_size,s.st_mtime_ns)!=(t.st_dev,t.st_ino,t.st_size,t.st_mtime_ns) or count!=s.st_size: raise ValueError()
-  print(json.dumps({'identity':[s.st_dev,s.st_ino,s.st_size,s.st_mtime_ns],'sha256':h.hexdigest(),'size':count}))
-except (OSError,ValueError):
- sys.exit(1)
+    path = pathlib.Path(sys.argv[1])
+    root = pathlib.Path(sys.argv[2])
+    limit = int(sys.argv[3])
+    stream_bytes = sys.argv[4:] == ['--stream']
+    if not path.is_absolute() or not root.is_absolute() or '..' in path.parts:
+        raise ValueError()
+    path.relative_to(root)
+    denied = {'.ssh', '.gnupg', '.config', '.agentsee', 'browser-profile',
+              '.netrc', '.pgpass', '.npmrc', '.pypirc', '.git-credentials'}
+    for part in path.parts:
+        if part.lower() in denied or part.lower().startswith('.env'):
+            raise ValueError()
+    if any(part.is_symlink() for part in [*reversed(path.parents), path]):
+        raise ValueError()
+    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+    with os.fdopen(fd, 'rb') as source:
+        before = os.fstat(source.fileno())
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or not 0 < before.st_size <= limit:
+            raise ValueError()
+        digest, size = hashlib.sha256(), 0
+        while chunk := source.read(1024 * 1024):
+            size += len(chunk)
+            if size > limit:
+                raise ValueError()
+            digest.update(chunk)
+            if stream_bytes:
+                sys.stdout.buffer.write(chunk)
+        if identity(os.fstat(source.fileno())) != identity(before) or size != before.st_size:
+            raise ValueError()
+        if stream_bytes:
+            if any(parent.is_symlink() for parent in path.parents) or identity(path.lstat()) != identity(before):
+                raise ValueError()
+            sys.stdout.buffer.write(digest.digest())
+        else:
+            print(json.dumps({'identity': identity(before), 'sha256': digest.hexdigest(), 'size': size}))
+except (OSError, ValueError):
+    sys.exit(1)
 '''
 
 
@@ -56,6 +85,28 @@ def _probe(environment, path, root, max_file):
         return value
     except (KeyError, TypeError, json.JSONDecodeError) as exc:
         raise ValueError('Attachment source unavailable') from exc
+
+
+def _fetch_kubernetes_file(environment, path, root, target, max_bytes):
+    # stdout carries file bytes. Discard kubectl diagnostics instead of mixing
+    # them with the payload or showing internal cluster identifiers to the agent.
+    environment.activate()
+    argv = environment.exec_prefix(interactive=False, require_current=True)
+    try:
+        result = subprocess.run(
+            [*argv, '/usr/bin/python3', '-I', '-B', '-c', _PROBE, str(path), str(root), str(max_bytes), '--stream'],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError('Attachment transfer unavailable') from exc
+    digest_size = hashlib.sha256().digest_size
+    if result.returncode or not 0 < len(result.stdout) - digest_size <= max_bytes:
+        logger.warning('Kubernetes attachment export refused (exit code %s)', result.returncode)
+        raise ValueError('Attachment source unavailable')
+    data, digest = result.stdout[:-digest_size], result.stdout[-digest_size:]
+    if hashlib.sha256(data).digest() != digest:
+        raise ValueError('Attachment transfer failed integrity check')
+    target.write_bytes(data)
 
 
 @contextmanager
@@ -108,6 +159,8 @@ def producing_environment(home, route, task_id=None):
 
 def extract_files(paths, destination, environment, root, *, max_file=MAX_FILE, max_batch=MAX_BATCH, max_files=MAX_FILES):
     """All files must verify before the batch can be advertised; no ambient filesystem lookup."""
+    from tools.environments.kubernetes import KubernetesEnvironment
+
     if not 1 <= len(paths) <= max_files:
         raise ValueError('Attachment limit exceeded')
     extracted, total = [], 0
@@ -117,18 +170,22 @@ def extract_files(paths, destination, environment, root, *, max_file=MAX_FILE, m
             path = PurePosixPath(root) / path
         if '..' in path.parts or not path.name or len(path.name) > 180 or any(ord(c) < 32 or c in '\\/' for c in path.name):
             raise ValueError('Invalid attachment')
-        before = _probe(environment, path, root, max_file)
-        total += before['size']
-        if total > max_batch:
+        limit = min(max_file, max_batch - total)
+        if limit <= 0:
             raise ValueError('Attachment limit exceeded')
         folder = destination / str(index)
         folder.mkdir()
         target = folder / path.name
-        environment.fetch_file(str(path), target, max_bytes=max_file)
-        # Hash the extracted bytes and recheck the producer's same file identity after transfer.
-        if (target.stat().st_size != before['size'] or hashlib.sha256(target.read_bytes()).hexdigest() != before['sha256']
-                or _probe(environment, path, root, max_file) != before):
-            raise ValueError('Attachment changed during transfer')
+        if isinstance(environment, KubernetesEnvironment):
+            _fetch_kubernetes_file(environment, path, root, target, limit)
+        else:
+            before = _probe(environment, path, root, limit)
+            environment.fetch_file(str(path), target, max_bytes=limit)
+            # Hash the extracted bytes and recheck the same file identity after transfer.
+            if (target.stat().st_size != before['size'] or hashlib.sha256(target.read_bytes()).hexdigest() != before['sha256']
+                    or _probe(environment, path, root, limit) != before):
+                raise ValueError('Attachment changed during transfer')
+        total += target.stat().st_size
         extracted.append(target)
     return extracted
 
