@@ -67,7 +67,8 @@ def child(mode, response='{"type":"final","answer":"Ответ ☃"}', prompt=""
         })
         os.write(1, init + step + result)
         os.close(1)
-        print("Upstream connection reset. Credential ya29.fixture-access-token", file=sys.stderr, flush=True)
+        print("Upstream connection reset. qa.fixture@example.test ya29.fixture-access-token",
+              file=sys.stderr, flush=True)
         return 42
     if mode == "repeat":
         result *= 2

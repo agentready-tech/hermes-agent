@@ -66,7 +66,8 @@ def test_provider_error_drains_terminal_result_and_stderr(tmp_path, monkeypatch,
     assert "deadline" not in str(failure.value) and "connection reset" not in str(failure.value)
     assert "result.error='Provider deadline exceeded" in caplog.text
     assert "stderr='Upstream connection reset" in caplog.text
-    assert "fixture-oauth-code" not in caplog.text and "fixture-access-token" not in caplog.text
+    for sensitive in ("fixture-oauth-code", "fixture-access-token", "qa.fixture@example.test"):
+        assert sensitive not in caplog.text
     proc, = authority.processes
     assert proc.returncode == 42 and proc.stdout.closed and proc.stderr.closed
 

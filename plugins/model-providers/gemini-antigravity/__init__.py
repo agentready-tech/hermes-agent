@@ -18,7 +18,7 @@ from .protocol import Stream, encode, prepare, validate_result
 logger = logging.getLogger(__name__)
 _PRIVATE_DIAGNOSTIC = re.compile(
     r"https?://[^\s\"'<>]+|(?:ya29\.|1//|4/0)[A-Za-z0-9._/~+-]+"
-    r"|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}",
+    r"|(?<![\w.+-])[\w.+-]{1,64}@[\w.-]{1,253}\.[A-Za-z]{2,63}",
     re.IGNORECASE,
 )
 
