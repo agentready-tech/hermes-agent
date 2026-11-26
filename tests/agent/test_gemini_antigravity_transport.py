@@ -1,5 +1,6 @@
 """Run the product Antigravity adapter against deterministic POSIX children only."""
 from importlib import import_module
+import signal
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -129,8 +130,10 @@ def test_supervisor_bounded_end_and_descriptor_cleanup(tmp_path):
     assert proc.returncode is not None and proc.stdout.closed and proc.stderr.closed
 
 
-@pytest.mark.parametrize("exit_race", [ProcessLookupError, PermissionError])
-def test_stop_reaps_leader_when_process_group_disappears(monkeypatch, exit_race):
+@pytest.mark.parametrize(("term_error", "exit_race"), [
+    (None, ProcessLookupError), (None, PermissionError), (PermissionError, ProcessLookupError),
+])
+def test_stop_reaps_leader_when_process_group_disappears(monkeypatch, term_error, exit_race):
     child = SimpleNamespace(pid=123, returncode=None)
     group_checks = iter((exit_race, ProcessLookupError))
 
@@ -139,6 +142,8 @@ def test_stop_reaps_leader_when_process_group_disappears(monkeypatch, exit_race)
 
     def signal_group(group, sig):
         assert group == child.pid
+        if sig == signal.SIGTERM and term_error is not None:
+            raise term_error
         if sig == 0:
             # The child exited after poll() but before the group check.
             raise next(group_checks)

@@ -22,6 +22,9 @@ def stop(child):
     except ProcessLookupError:
         child.wait(timeout=2)
         return
+    except PermissionError:
+        # Darwin can report EPERM for an exiting group. Reap and recheck below.
+        pass
     deadline = time.monotonic() + 1.5
     while time.monotonic() < deadline:
         child.poll()
