@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.26.2",
+  "defaultRuntimeVersion": "2026.11.26.3",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -5284,6 +5284,44 @@
         "releaseRegressionTestsPassed": 219
       },
       "description": "Route internal subagent mail to recipients, preserve in-flight Child Goal wakes, and retain blocked executors.",
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml"
+    },
+    "2026.11.26.3": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:8946dc247321be93fa5d52b27793ad02091c1a9c56d139df720158eddddc3f98",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.26.3",
+      "configDigest": "sha256:aae2830b31d67489a7b1d7e7bd254cf46a9b286266115e24c23054b20b225f90",
+      "platform": "linux/amd64",
+      "sourceRevision": "0a5c4ad050861666c018c3bfbe05e4137b0c17e4",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:8946dc247321be93fa5d52b27793ad02091c1a9c56d139df720158eddddc3f98",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.26.3",
+        "digest": "sha256:8946dc247321be93fa5d52b27793ad02091c1a9c56d139df720158eddddc3f98",
+        "configDigest": "sha256:aae2830b31d67489a7b1d7e7bd254cf46a9b286266115e24c23054b20b225f90",
+        "sourceRevision": "0a5c4ad050861666c018c3bfbe05e4137b0c17e4",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 45783034939,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": true,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:6698e9c94edd55f469b6634c797e1373f4216260d5a2e44ed7c1c5b0647f8881",
+        "deployRunId": 45784991325
+      },
+      "validation": {
+        "runtimeReady": true,
+        "futureDefaultConfigured": true,
+        "productionScenario": "Panel chat attachment creation and byte-for-byte DOCX download on a ready Kubernetes sandbox",
+        "documentCountVerified": 3
+      },
+      "description": "Deliver Panel attachments from the owning Kubernetes sandbox and expose sandbox paths.",
       "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
       "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml"
     }
