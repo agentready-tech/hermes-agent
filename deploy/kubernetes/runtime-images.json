@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.26.6",
+  "defaultRuntimeVersion": "2026.11.26.8",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -5360,6 +5360,44 @@
         "documentCountVerified": 3
       },
       "description": "Wait for cold sandbox image pulls and use mounted sandbox paths for chat attachments.",
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml"
+    },
+    "2026.11.26.8": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:62181030d4bbc560005dc628d88eca0d562e2b4976165265d527d4552a281acd",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.26.8",
+      "configDigest": "sha256:843fbbde8cfadb8a62e14ffda479a83b5893434ef67964461f423caec2e97a56",
+      "platform": "linux/amd64",
+      "sourceRevision": "3ac2955bbe5024867527285ee4fcbecb27d5448b",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:62181030d4bbc560005dc628d88eca0d562e2b4976165265d527d4552a281acd",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.26.8",
+        "digest": "sha256:62181030d4bbc560005dc628d88eca0d562e2b4976165265d527d4552a281acd",
+        "configDigest": "sha256:843fbbde8cfadb8a62e14ffda479a83b5893434ef67964461f423caec2e97a56",
+        "sourceRevision": "3ac2955bbe5024867527285ee4fcbecb27d5448b",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 45800824320,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": true,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:dc6dbde93a92501db910c4c6a0219e8a3ee5f6f7472686d993e8ca3037b24296",
+        "deployRunId": 45803064005
+      },
+      "validation": {
+        "runtimeReady": true,
+        "futureDefaultConfigured": true,
+        "productionScenario": "Disposable Kubernetes sandbox on the production worker with live Chrome. Repeated calls reused one Chrome target, produced a valid resized PNG, and respected Desktop takeover and release.",
+        "qaCandidateRunId": 45798599310
+      },
+      "description": "Run managed browser code inside the employee Kubernetes sandbox while retaining the attachment and cold-start fixes. Verified the live browser with the exact PR candidate on QA and the published image on the production worker.",
       "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
       "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml"
     }
