@@ -28,7 +28,11 @@ def stop(child):
         try:
             os.killpg(group, 0)
         except ProcessLookupError:
+            child.wait(timeout=0.5)  # Exit may race the poll above.
             return
+        except PermissionError:
+            # A signal-0 EPERM still means the group exists.
+            pass
         time.sleep(0.02)
     with suppress(ProcessLookupError):
         os.killpg(group, signal.SIGKILL)
@@ -38,16 +42,15 @@ def stop(child):
 def communicate(child, consume, *, timeout, cancelled, input_data=None):
     deadline = time.monotonic() + timeout
     diagnostics = bytearray()
+    prefix = getattr(child, "agy_request_frame", b"")
     try:
         with selectors.DefaultSelector() as selector:
             selector.register(child.stdout, selectors.EVENT_READ, consume)
             selector.register(child.stderr, selectors.EVENT_READ, diagnostics.extend)
-            if input_data is not None:
-                # A login is the only operation with an input pipe. The callback
-                # returns once; the original bytes are not retained after write.
+            if prefix or input_data is not None:
                 selector.register(child.stdin, selectors.EVENT_WRITE, None)
                 os.set_blocking(child.stdin.fileno(), False)
-            return _drain(child, selector, deadline, cancelled, diagnostics, input_data)
+            return _drain(child, selector, deadline, cancelled, diagnostics, input_data, prefix)
     except (OSError, subprocess.SubprocessError):
         raise AgyError("transport") from None
     finally:
@@ -61,8 +64,9 @@ def close_child(child):
     stop(child)
 
 
-def _drain(child, selector, deadline, cancelled, diagnostics, input_data):
-    remaining = b""
+def _drain(child, selector, deadline, cancelled, diagnostics, input_data, prefix):
+    remaining = prefix
+    sending_prefix = bool(prefix)
     while True:
         if cancelled():
             raise AgyError("cancelled")
@@ -86,8 +90,12 @@ def _drain(child, selector, deadline, cancelled, diagnostics, input_data):
                         continue
                 remaining = remaining[os.write(key.fd, remaining):]
                 if not remaining:
+                    if sending_prefix and input_data is not None:
+                        sending_prefix = False
+                        continue
                     selector.unregister(key.fileobj)
-                    key.fileobj.close()
+                    if not prefix:
+                        key.fileobj.close()
             else:
                 data = os.read(key.fd, 16 * 1024)
                 if not data:

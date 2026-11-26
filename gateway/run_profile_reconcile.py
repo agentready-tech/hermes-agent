@@ -526,11 +526,13 @@ def profile_scoped_chore(runner, chore):
 
 def profile_reconciliation_chores(runner):
     """Reconcile runtime services for each served profile from gateway housekeeping."""
+    from hermes_runtime.standalone.agy_pod_authority import stop_profile_agy_if_idle
     from tools.environments.kubernetes_lifecycle import stop_profile_sandbox_if_idle
 
     return (
         (1, "MCP config reconcile", _mcp_config_reconciler(runner)),
         (1, "Idle Kubernetes sandbox stop", profile_scoped_chore(runner, stop_profile_sandbox_if_idle)),
+        (1, "Idle Antigravity Pod stop", profile_scoped_chore(runner, stop_profile_agy_if_idle)),
     )
 
 

@@ -9,13 +9,12 @@ from providers.agy_policy import AgyError, BINARY, LOCAL_ENDPOINT, MODEL, PROVID
 
 
 def admit(home, operation):
-    """The shared-profile workload has no dedicated process/keyring boundary.
+    """Only an operator-provisioned profile Pod can launch Antigravity."""
+    from hermes_runtime.standalone.agy_pod_authority import authority_for
 
-    Its profile scope is not a sandbox: the workload carries the profile tree
-    and sandbox-control sockets. Do not fall back to a local subprocess, even
-    with fixed image-owned argv.
-    """
-    raise AgyError("unavailable")
+    if operation not in {"catalog", "login", "inference", "disconnect"}:
+        raise AgyError("unavailable")
+    return authority_for(home)
 
 
 def print_command(prompt):

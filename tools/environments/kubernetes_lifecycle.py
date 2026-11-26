@@ -20,10 +20,10 @@ _RETRY_INTERVAL = 0.25
 
 
 class SandboxLifecycle:
-    def __init__(self, home: Path, executable: str, namespace: str, idle_seconds: int):
+    def __init__(self, home: Path, executable: str, namespace: str, idle_seconds: int, *, workload="sandbox"):
         ident = re.fullmatch(r"env_([a-f0-9]{32})", home.name)
         owned_namespace = f"agentsee-a-{ident[1]}" if ident else "agentsee-mike" if home.name == "mike" else None
-        if namespace != owned_namespace:
+        if namespace != owned_namespace or workload not in {"sandbox", "agy-a", "agy-b"}:
             raise ValueError("On-demand Kubernetes sandbox must match the managed profile namespace")
         if idle_seconds < 0:
             raise ValueError("Kubernetes sandbox idle timeout must be non-negative")
@@ -31,9 +31,12 @@ class SandboxLifecycle:
         self.executable = executable
         self.namespace = namespace
         self.idle_seconds = idle_seconds
-        self.root = home / "kubernetes-sandbox"
+        self.workload = workload
+        self.pod = f"{workload}-0"
+        self.container = "sandbox" if workload == "sandbox" else "agy"
+        self.root = home / f"kubernetes-{workload}"
         self.activity = self.root / "activity"
-        self.scale_path = f"/apis/apps/v1/namespaces/{namespace}/statefulsets/sandbox/scale"
+        self.scale_path = f"/apis/apps/v1/namespaces/{namespace}/statefulsets/{workload}/scale"
 
     @contextmanager
     def _lock(self, name: str, flags: int):
@@ -74,7 +77,7 @@ class SandboxLifecycle:
 
     def _set_scale(self, replicas: int, version: str) -> None:
         spec = {"apiVersion": "autoscaling/v1", "kind": "Scale",
-                "metadata": {"name": "sandbox", "namespace": self.namespace, "resourceVersion": version},
+                "metadata": {"name": self.workload, "namespace": self.namespace, "resourceVersion": version},
                 "spec": {"replicas": replicas}}
         try:
             subprocess.run([self.executable, "replace", "--raw", self.scale_path, "-f", "-"],
@@ -85,7 +88,7 @@ class SandboxLifecycle:
     def _pod(self) -> dict:
         from tools.environments.kubernetes import read_pod
 
-        return read_pod(self.executable, self.namespace, "sandbox-0", missing_ok=True)
+        return read_pod(self.executable, self.namespace, self.pod, missing_ok=True)
 
     def identity(self) -> dict:
         """Verify that the current Pod can execute requests, without changing it."""
@@ -95,7 +98,7 @@ class SandboxLifecycle:
         if not any(condition.get("type") == "Ready" and condition.get("status") == "True"
                    for condition in pod.get("status", {}).get("conditions", ())):
             raise EnvironmentConnectionError("The Kubernetes sandbox is not ready")
-        return pod_identity(pod, self.namespace, "sandbox-0", "sandbox")
+        return pod_identity(pod, self.namespace, self.pod, self.container)
 
     def _wait_absent(self) -> None:
         deadline = time.monotonic() + _READY_TIMEOUT
@@ -108,7 +111,7 @@ class SandboxLifecycle:
         replicas, _ = self._scale()
         if replicas == 0:
             # A new request during downscale waits for the old Pod to disappear. Before then
-            # a stale Ready response or the stable sandbox-0 name cannot identify its replacement.
+            # a stale Ready response for the stable Pod name cannot identify its replacement.
             self._wait_absent()
             replicas, version = self._scale()
             if replicas == 0:
@@ -152,6 +155,10 @@ class SandboxLifecycle:
                 return False
             with self._lock("transition.lock", fcntl.LOCK_EX | fcntl.LOCK_NB):
                 with self._lock("active.lock", fcntl.LOCK_EX | fcntl.LOCK_NB):
+                    if self.workload != "sandbox":
+                        if time.time() - self.activity.stat().st_mtime >= self.idle_seconds:
+                            return self._stop_locked()
+                        return False
                     path = lease._path(str(self.home))
                     with lease._locked(path, blocking=False):
                         current = lease._read(path)
@@ -160,13 +167,16 @@ class SandboxLifecycle:
                             return False
                         if not self._expired(path):
                             return False
-                        replicas, version = self._scale()
-                        if replicas:
-                            self._set_scale(0, version)
-                        self.activity.unlink(missing_ok=True)
-                        return bool(replicas)
+                        return self._stop_locked()
         except (BlockingIOError, FileNotFoundError):
             return False
+
+    def _stop_locked(self) -> bool:
+        replicas, version = self._scale()
+        if replicas:
+            self._set_scale(0, version)
+        self.activity.unlink(missing_ok=True)
+        return bool(replicas)
 
     def _expired(self, lease_path: Path) -> bool:
         last_use = self.activity.stat().st_mtime

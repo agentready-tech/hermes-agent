@@ -1,10 +1,14 @@
 """Run the product Antigravity adapter against deterministic POSIX children only."""
 from importlib import import_module
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
 
 from hermes_runtime.standalone import agy_runtime
+from hermes_runtime.standalone.agy_pod_process import request_frame
+from providers import agy_process
 from providers.agy_policy import AgyError, BINARY, MODEL, PROVIDER, SETTINGS
 from providers.agy_process import communicate
 from tests.agent.agy_fixture import spawn
@@ -107,6 +111,43 @@ def test_supervisor_bounded_end_and_descriptor_cleanup(tmp_path):
         communicate(proc, lambda _: None, timeout=125, cancelled=lambda: True)
     assert cancel.value.code == "cancelled"
     assert proc.returncode is not None and proc.stdout.closed and proc.stderr.closed
+
+
+@pytest.mark.parametrize("exit_race", [ProcessLookupError, PermissionError])
+def test_stop_reaps_leader_when_process_group_disappears(monkeypatch, exit_race):
+    child = SimpleNamespace(pid=123, returncode=None)
+    group_checks = iter((exit_race, ProcessLookupError))
+
+    def reap(*, timeout):
+        child.returncode = 0
+
+    def signal_group(group, sig):
+        assert group == child.pid
+        if sig == 0:
+            # The child exited after poll() but before the group check.
+            raise next(group_checks)
+
+    child.poll = lambda: child.returncode
+    child.wait = reap
+    monkeypatch.setattr(agy_process.os, "killpg", signal_group)
+
+    agy_process.stop(child)
+    assert child.returncode == 0
+
+
+def test_framed_login_sends_one_code_while_the_remote_lease_stays_open():
+    remote = (
+        "import select, sys; pipe = sys.stdin.buffer; pipe.read(int(pipe.read(8))); "
+        "assert pipe.readline() == b'fixture-code\\n'; "
+        "assert not select.select([pipe], [], [], 0)[0]; print('code received', flush=True)"
+    )
+    child = subprocess.Popen([sys.executable, "-I", "-c", remote], start_new_session=True,
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    child.agy_request_frame = request_frame("login")
+    received = bytearray()
+    rc, diagnostics = communicate(child, received.extend, timeout=2, cancelled=lambda: False,
+                                  input_data=lambda: b"fixture-code\n")
+    assert rc == 0 and not diagnostics and received == b"code received\n"
 
 
 def test_production_not_discovered_and_exits_before_other_routes(tmp_path, monkeypatch):
