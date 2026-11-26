@@ -13,7 +13,7 @@ from agent.agy_turn import acp_scope
 from agent.redact import redact_for_egress
 from hermes_runtime.standalone import agy_runtime
 from providers.agy_acp_wire import Peer, encode as encode_wire
-from providers.agy_policy import AgyError, LOCAL_ENDPOINT, MODEL, PROVIDER
+from providers.agy_policy import AgyError, LOCAL_ENDPOINT, PROVIDER, require_model
 from providers.base import ProviderProfile
 
 from .protocol import Stream, _message, _tool_catalog, encode, prepare, validate_result
@@ -60,17 +60,19 @@ class Client:
         return self.closed.is_set() or self.cancelled()
 
     def create(self, *, model, messages, tools=None, stream=False, response_format=None, **kwargs):
-        if model != MODEL or response_format is not None or kwargs.get("modalities") not in (None, ["text"]):
+        acp = getattr(self.authority, "acp", False)
+        require_model(model, acp=acp)
+        if response_format is not None or kwargs.get("modalities") not in (None, ["text"]):
             raise AgyError("unsupported_input")
         if self._cancelled():
             raise AgyError("cancelled")
-        if getattr(self.authority, "acp", False):
-            result = self._request_acp(messages, tools)
+        if acp:
+            result = self._request_acp(model, messages, tools)
         else:
             prompt, validators = prepare(messages, tools)
             result = self._request(prompt, validators)
         self.require_current()
-        return _completion(result, stream)
+        return _completion(result, model, stream)
 
     def require_current(self):
         if self._cancelled():
@@ -99,20 +101,20 @@ class Client:
         except OSError:
             raise AgyError("transport") from None
 
-    def _request_acp(self, messages, tools):
+    def _request_acp(self, model, messages, tools):
         from hermes_cli.config import config_write_lock
 
         scope = acp_scope.get()
         if scope is None or not scope.lock.acquire(blocking=False):
             raise AgyError("unavailable")
         cancelled = lambda: self._cancelled() or scope.cancelled.is_set()
-        owner = (self.home, self.authority, self.generation, self.selection)
+        owner = (self.home, self.authority, self.generation, self.selection, model)
         try:
             if cancelled():
                 raise AgyError("cancelled")
             session = scope.session
             if session is None:
-                prompt, validators = prepare(messages, tools, acp=True)
+                prompt, validators = prepare(messages, tools, acp_model=model)
                 with config_write_lock(self.home / "config.yaml") if self.selection is not None else nullcontext():
                     self.require_current()
                     child = self.authority.spawn(self.home, self.generation, "inference", prompt)
@@ -180,7 +182,7 @@ class AcpTurn:
             row = self.peer.receive(lambda: deadline, cancelled)
             if row.get("type") == "error":
                 reason = row.get("reason")
-                if reason not in ("transport", "protocol", "auth_expired", "containment"):
+                if reason not in ("transport", "protocol", "auth_expired", "containment", "unsupported_model"):
                     reason = "protocol"
                 raise AgyError(reason)
             result = validate_result(row, validators)
@@ -225,7 +227,7 @@ def _log_text(value: object) -> str:
     return redact_for_egress(_PRIVATE_DIAGNOSTIC.sub("[redacted]", value)).strip()[:768]
 
 
-def _completion(row, stream):
+def _completion(row, model, stream):
     calls = None
     if row["type"] == "tool_call":
         calls = [{"type": "function", "index": 0, "id": row["id"], "function": {
@@ -234,9 +236,9 @@ def _completion(row, stream):
     reason = "tool_calls" if calls else "stop"
     if stream:
         from openai.types.chat import ChatCompletionChunk
-        chunk = ChatCompletionChunk(id="agy-step", created=0, object="chat.completion.chunk", model=MODEL,
+        chunk = ChatCompletionChunk(id="agy-step", created=0, object="chat.completion.chunk", model=model,
                                     choices=[{"index": 0, "finish_reason": reason, "delta": message}])
         return iter((chunk,))
     from openai.types.chat import ChatCompletion
-    return ChatCompletion(id="agy-step", created=0, object="chat.completion", model=MODEL,
+    return ChatCompletion(id="agy-step", created=0, object="chat.completion", model=model,
                           choices=[{"index": 0, "finish_reason": reason, "message": message}])

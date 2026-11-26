@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 from hermes_runtime.sessions import HOME_SESSION_ID
-from providers.agy_policy import AgyError, MODEL, PROVIDER, is_agy
+from providers.agy_policy import AgyError, PROVIDER, is_agy, require_model, valid_model_id
 
 
 def _identity(value):
@@ -38,6 +38,7 @@ class Selection:
             raise AgyError("unavailable")
         if self.provider == PROVIDER:
             authority = agy_runtime.admit(self.home, "inference")
+            require_model(self.model, acp=getattr(authority, "acp", False))
             if authority.active(self.home) != self.generation:
                 raise AgyError("auth_required")
 
@@ -129,7 +130,7 @@ def read_selection(home, config):
     if (not re.fullmatch(r"[a-f0-9]{32}", revision) or not isinstance(generation, str) or not generation
             or stamp.get("route") != _identity(model) or not isinstance(provider, str) or not isinstance(target, str)):
         return None
-    if is_agy(provider) and (provider != PROVIDER or target != MODEL):
+    if is_agy(provider) and (provider != PROVIDER or not valid_model_id(target)):
         raise AgyError("unavailable")
     return Selection(home.resolve(), revision, generation, stamp['route'], provider, target, model.get('base_url', ''))
 

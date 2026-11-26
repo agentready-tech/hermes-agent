@@ -170,12 +170,20 @@ class GeminiSubscriptions:
             raise AgyError("auth_required")
         return authority
 
+    def model_catalog(self):
+        authority = self.connected()
+        generation = authority.active(self.home)
+        if generation is None:
+            raise AgyError("auth_required")
+        catalog = authority.models(self.home, generation) if getattr(authority, "acp", False) else ((MODEL, MODEL),)
+        return authority, generation, catalog
+
     def handle(self, method, params, viewer):
         if not isinstance(viewer, str) or not VIEWER.fullmatch(viewer):
             raise AgyError("unavailable")
         if method == "subscriptions.models":
-            self.connected()
-            return {"models": [{"id": MODEL, "label": MODEL}]}
+            _, _, catalog = self.model_catalog()
+            return {"models": [{"id": name, "label": label} for name, label in catalog]}
         authority = agy_runtime.admit(self.home, "login")
         with self.lock:
             if method == "subscriptions.login.start":

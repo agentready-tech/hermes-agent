@@ -13,7 +13,7 @@ from hermes_runtime.standalone.agy_selection import read_selection, selection_co
 from urllib.parse import urlsplit
 
 from hermes_runtime.standalone.panel_agy_login import GeminiSubscriptions, VIEWER
-from providers.agy_policy import AgyError, MODEL as AGY_MODEL, PROVIDER as AGY_PROVIDER, is_agy
+from providers.agy_policy import AgyError, PROVIDER as AGY_PROVIDER, is_agy, valid_model_id
 
 CLAUDE = "claude-subscription-directsdk-experimental"
 PROVIDERS = {"claude": CLAUDE, "openai": "openai-codex", "gemini": AGY_PROVIDER}
@@ -56,9 +56,12 @@ class Subscriptions:
                     result = await self.handle(request.get("method"), request.get("params") or {}, viewer=viewer)
                     response = {"jsonrpc": "2.0", "id": request["id"], "result": result}
                 except AgyError as error:
-                    message = {"auth_required": "Сначала подключите выбранную подписку.",
-                               "auth_expired": "Подключите Gemini заново.",
-                               "protocol": "Проверьте данные подключения Gemini."}.get(error.code, "Gemini недоступен в этом окружении.")
+                    message = {
+                        "auth_required": "Сначала подключите выбранную подписку.",
+                        "auth_expired": "Подключите Gemini заново.",
+                        "protocol": "Проверьте данные подключения Gemini.",
+                        "unsupported_model": "Эта модель недоступна для подключённой подписки Gemini.",
+                    }.get(error.code, "Gemini недоступен в этом окружении.")
                     response = {"jsonrpc": "2.0", "id": request["id"], "error": {"code": 403, "message": message,
                                 "data": {"reason": error.code}}}
                 except SubscriptionError as error:
@@ -206,10 +209,13 @@ class Subscriptions:
     async def select(self, provider, model, managed_fallback):
         agy_authority = agy_generation = None
         if provider == "gemini":
-            if managed_fallback or model != AGY_MODEL:
+            if managed_fallback:
                 raise AgyError("unavailable")
-            agy_authority = self.gemini.connected()
-            agy_generation = agy_authority.active(self.home)
+            if not valid_model_id(model):
+                raise AgyError("unsupported_model")
+            agy_authority, agy_generation, catalog = await asyncio.to_thread(self.gemini.model_catalog)
+            if not any(name == model for name, _ in catalog):
+                raise AgyError("unsupported_model")
         status = await asyncio.to_thread(self.status) if provider not in {"managed", "gemini"} else None
         route, revision, ticket = await asyncio.to_thread(self._save_selection, provider, model, managed_fallback,
                                                            status, agy_authority, agy_generation)

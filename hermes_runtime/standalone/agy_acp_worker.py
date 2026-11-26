@@ -10,11 +10,10 @@ import time
 
 from hermes_runtime.standalone.agy_acp_mcp import Bridge, SERVER_NAME, TOOL_TIMEOUT, serve
 from providers.agy_acp_wire import Lines, Peer, decode, encode
-from providers.agy_policy import AgyError, BINARY, PROMPT_LIMIT, SETTINGS
+from providers.agy_policy import ACP_FLASH, AgyError, BINARY, MODEL, PROMPT_LIMIT, SETTINGS, require_model, valid_model_id
 
 ACP_COMMAND = (BINARY, "acp", "--process-per-session", "--include-default-customizations=false",
                "--sandbox", "--disable-telemetry", "--log-file", "/dev/null")
-ACP_MODEL = "gemini-3.8-flash"
 MODEL_TIMEOUT = 115
 INSTRUCTIONS = (
     "Act as Hermes for this request. Read the role-labeled Hermes transcript below. "
@@ -37,6 +36,21 @@ def acp_settings(home: Path):
 def emit(row):
     sys.stdout.buffer.write(encode(row))
     sys.stdout.buffer.flush()
+
+
+def model_catalog(options):
+    model = next((option for option in options if option.get("id") == "model"), {})
+    queue = list(reversed(model.get("options", [])))
+    result = {}
+    while queue:
+        entry = queue.pop()
+        name, label = entry.get("value"), entry.get("name")
+        if valid_model_id(name):
+            result[name] = label[:160] if isinstance(label, str) and label else name
+        queue.extend(reversed(entry.get("options", [])))
+    if not result:
+        raise AgyError("protocol")
+    return result
 
 
 class Session:
@@ -156,18 +170,33 @@ class Session:
             raise AgyError("protocol")
         return options
 
-    def prompt(self, messages, workdir, endpoint):
+    def open(self, workdir, endpoints):
         initialized = self.request("initialize", {"protocolVersion": 1, "clientCapabilities": {},
                                                    "clientInfo": {"name": "Hermes", "version": "1"}})
         caps = initialized.get("agentCapabilities", {}).get("mcpCapabilities", {})
         if initialized.get("protocolVersion") != 1 or caps.get("http") is not True:
             raise AgyError("protocol")
-        configured = self.request("session/new", {"cwd": str(workdir), "mcpServers": [endpoint]})
+        configured = self.request("session/new", {"cwd": str(workdir), "mcpServers": endpoints})
         self.session_id = configured.get("sessionId")
         if not isinstance(self.session_id, str) or not self.session_id:
             raise AgyError("protocol")
-        options = self.configure(configured.get("configOptions", []), "model", ACP_MODEL)
-        self.configure(options, "thought_level", "low")
+        return configured.get("configOptions", [])
+
+    def models(self, workdir):
+        models = model_catalog(self.open(workdir, []))
+        if ACP_FLASH in models:
+            models.setdefault(MODEL, f"{models[ACP_FLASH]} · Low")
+        return [{"id": name, "label": label} for name, label in list(models.items())[:200]]
+
+    def prompt(self, messages, model, workdir, endpoint):
+        require_model(model, acp=True)
+        options = self.open(workdir, [endpoint])
+        target = ACP_FLASH if model == MODEL else model
+        if target not in model_catalog(options):
+            raise AgyError("unsupported_model")
+        options = self.configure(options, "model", target)
+        if model == MODEL:
+            self.configure(options, "thought_level", "low")
         self.bridge.accepting.set()
         prompt = INSTRUCTIONS + "\n\n" + encode({"messages": messages}).decode()
         result = self.request("session/prompt",
@@ -185,13 +214,19 @@ def run(child, incoming, payload, workdir):
     session = None
     try:
         request = decode(payload.encode())
-        if len(payload.encode()) > PROMPT_LIMIT or set(request) != {"messages", "tools"}:
+        if len(payload.encode()) > PROMPT_LIMIT:
             raise AgyError("protocol")
-        bridge = Bridge(request["tools"])
-        session = Session(peer, incoming, bridge)
-        with serve(bridge) as endpoint:
-            answer = session.prompt(request["messages"], workdir, endpoint)
-        row = {"type": "final", "answer": answer}
+        if request == {"type": "models"}:
+            session = Session(peer, incoming, Bridge([]))
+            row = {"type": "models", "models": session.models(workdir)}
+        elif set(request) == {"messages", "tools", "model"}:
+            bridge = Bridge(request["tools"])
+            session = Session(peer, incoming, bridge)
+            with serve(bridge) as endpoint:
+                answer = session.prompt(request["messages"], request["model"], workdir, endpoint)
+            row = {"type": "final", "answer": answer}
+        else:
+            raise AgyError("protocol")
     except (OSError, AgyError, KeyError, ValueError, TypeError, AttributeError) as error:
         reason = error.code if isinstance(error, AgyError) else "protocol"
         if reason == "cancelled":
@@ -201,4 +236,4 @@ def run(child, incoming, payload, workdir):
     finally:
         peer.close()
     emit(row)
-    return 0 if row["type"] == "final" else 125
+    return 125 if row["type"] == "error" else 0

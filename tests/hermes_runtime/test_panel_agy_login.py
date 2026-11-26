@@ -184,6 +184,34 @@ def test_two_fixture_owners_login_same_pipe_then_probe_expire_and_disconnect(tmp
     assert "fixture-only" not in caplog.text and FIXTURE_URL not in caplog.text
 
 
+def test_panel_lists_and_saves_only_models_from_the_connected_acp_profile(tmp_path, monkeypatch):
+    from hermes_runtime.standalone.agy_selection import read_selection
+    from hermes_runtime.workspace.transport import profile_scope
+
+    a, b, store_a, store_b = setup(tmp_path, monkeypatch)
+    for store in (store_a, store_b):
+        store.acp = True
+        store.binding.write_text(json.dumps({"generation": f"{store.home.name}-fixture"}))
+
+    def model_catalog(home, generation):
+        assert (home, generation) == (a.home, "A-fixture")
+        return (("gemini-4-neon", "Gemini 4 Neon"), (MODEL, MODEL))
+
+    monkeypatch.setattr(store_a, "models", model_catalog, raising=False)
+    monkeypatch.setattr(store_b, "models", lambda *_: ((MODEL, MODEL),), raising=False)
+    assert rpc(a, "models")["models"] == [{"id": "gemini-4-neon", "label": "Gemini 4 Neon"},
+                                         {"id": MODEL, "label": MODEL}]
+    before = b._config()
+    with pytest.raises(AgyError) as unknown:
+        rpc(b, "select", model="gemini-4-neon", managedFallback=False)
+    assert unknown.value.code == "unsupported_model" and b._config() == before
+    assert rpc(a, "select", model="gemini-4-neon", managedFallback=False)["deferred"]
+    ticket = read_selection(a.home, a._config())
+    assert (ticket.model, ticket.provider, ticket.generation) == ("gemini-4-neon", PROVIDER, "A-fixture")
+    with profile_scope(a.home):
+        assert agy_runtime.runtime("gemini-4-neon")["model"] == ticket.model
+
+
 @pytest.mark.parametrize("failure", [
     "foreign-store", "error", "partial", "nonzero", "soft-deny", "wrong-permission-mode", "wrong-answer", "invalid-grant",
 ])

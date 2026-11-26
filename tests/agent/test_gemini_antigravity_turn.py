@@ -60,16 +60,18 @@ def native(tmp_path, monkeypatch):
             self.processes.append(child)
             return child
 
-    def start(*steps, active_db=db, acp=False):
+    def start(*steps, active_db=db, acp=False, model=MODEL):
         authority = NativeAuthority(home, steps)
         if acp:
             from hermes_runtime.standalone.agy_pod_process import request_frame
 
             def spawn_acp(owner, generation, operation, payload):
                 assert (owner, generation, operation) == (home, "fixture-generation", "inference")
+                assert json.loads(payload)["model"] == model
                 script = Path(__file__).with_name("agy_acp_fixture.py")
-                child = subprocess.Popen([sys.executable, "-I", str(script), str(tmp_path)], stdin=subprocess.PIPE,
-                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+                child = subprocess.Popen([sys.executable, "-I", str(script), str(tmp_path), model],
+                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                         start_new_session=True)
                 child.agy_request_frame = request_frame("acp", payload)
                 authority.processes.append(child)
                 return child
@@ -77,7 +79,7 @@ def native(tmp_path, monkeypatch):
             authority.acp = True
             authority.spawn = spawn_acp
         monkeypatch.setattr(agy_runtime, "admit", lambda *_: authority)
-        agent = AIAgent(provider=PROVIDER, model=MODEL, quiet_mode=True, session_id=session,
+        agent = AIAgent(provider=PROVIDER, model=model, quiet_mode=True, session_id=session,
                         session_db=active_db, skip_context_files=True, skip_memory=True,
                         max_iterations=4, enabled_toolsets=["fixture_echo"])
         agent.valid_tool_names = ["fixture_echo"]
@@ -94,9 +96,10 @@ def native(tmp_path, monkeypatch):
     db.close()
 
 
-def test_acp_keeps_one_worker_for_both_durable_tool_calls_and_steer(native):
+@pytest.mark.parametrize("model", [MODEL, "gemini-4-neon"])
+def test_acp_keeps_one_worker_for_both_durable_tool_calls_and_steer(native, model):
     start, calls, db, _, session = native
-    agent, authority = start(acp=True)
+    agent, authority = start(acp=True, model=model)
     try:
         result = agent.run_conversation("Use both fixture echoes")
         assert result["final_response"] == "Проверено ACP ☃", result.get("error")

@@ -300,13 +300,15 @@ def _message(row):
     return result
 
 
-def prepare(messages, tools, *, acp=False):
+def prepare(messages, tools, *, acp_model=None):
     catalog, validators = _tool_catalog(tools)
     try:
         history = [_message(row) for row in messages]
         request = {"messages": history, "tools": catalog}
-        if not acp:
+        if acp_model is None:
             request.update({"version": 1, "instructions": INSTRUCTIONS})
+        else:
+            request["model"] = acp_model
         packed = encode(request)
     except (KeyError, TypeError, ValueError, RecursionError):
         raise AgyError("unsupported_input") from None

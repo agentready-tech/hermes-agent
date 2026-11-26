@@ -9,12 +9,15 @@ import re
 import secrets
 import stat
 import subprocess
+from threading import Lock
+import time
 
 from hermes_constants import get_default_hermes_root, named_profile_is_live
 from hermes_platform.resolver import locate_command
 from hermes_runtime.standalone.agy_pod_process import GENERATION, request_frame
 from hermes_runtime.standalone.agy_runtime import LOGIN_COMMAND, StagedStore
-from providers.agy_policy import AgyError
+from providers.agy_acp_wire import Peer
+from providers.agy_policy import AgyError, valid_model_id
 from tools.environments.base import EnvironmentConnectionError
 from tools.environments.kubernetes_lifecycle import SandboxLifecycle
 from utils import atomic_json_write
@@ -109,6 +112,8 @@ class PodAuthority:
         self.slots = dict(zip(SLOTS, slots))
         self.root = home.parent.parent / "agy-bindings" / home.name
         self.binding = self.root / "binding.json"
+        self._catalog_lock = Lock()
+        self._catalog = None
 
     @contextmanager
     def locked(self, home):
@@ -211,9 +216,42 @@ class PodAuthority:
     def spawn(self, home, generation, operation, request):
         with self.locked(home) as state:
             row = self.current(state.get("active"))
-            if not row or operation != "inference" or row["generation"] != generation:
+            if not row or row["generation"] != generation:
                 raise AgyError("auth_required")
+            if operation != "inference" and not (self.acp and operation == "models"):
+                raise AgyError("unavailable")
             return self.launch(row, operation, request)
+
+    def models(self, home, generation):
+        """Reuse discovery briefly within one active profile credential generation."""
+        with self._catalog_lock:
+            if generation is None or self.active(home) != generation:
+                raise AgyError("auth_required")
+            cached = self._catalog
+            if cached is not None and cached[0] == generation and cached[1] > time.monotonic():
+                return cached[2]
+            child = self.spawn(home, generation, "models", None)
+            peer = Peer(child)
+            try:
+                peer.send(child.agy_request_frame)
+                deadline = time.monotonic() + 50
+                row = peer.receive(lambda: deadline, lambda: False)
+                models = row.get("models")
+                if row.get("type") != "models" or not isinstance(models, list) or not 0 < len(models) <= 200:
+                    raise AgyError("protocol")
+                catalog = []
+                for model in models:
+                    if (not isinstance(model, dict) or not valid_model_id(model.get("id"))
+                            or not isinstance(model.get("label"), str)):
+                        raise AgyError("protocol")
+                    catalog.append((model["id"], model["label"]))
+            finally:
+                peer.close()
+            if authority_for(home) is not self or self.active(home) != generation:
+                raise AgyError("auth_required")
+            result = tuple(catalog)
+            self._catalog = generation, time.monotonic() + 60, result
+            return result
 
     def lifecycle(self, slot):
         return SandboxLifecycle(self.home, self.kubectl, self.namespace, IDLE_SECONDS, workload=f"agy-{slot}")
@@ -232,6 +270,8 @@ class PodAuthority:
     def launch(self, row, operation, request):
         if operation == "login" and request == LOGIN_COMMAND:
             payload = request_frame("login")
+        elif operation == "models" and self.acp and request is None:
+            payload = request_frame("acp", '{"type":"models"}')
         elif operation in {"probe", "inference"} and isinstance(request, str):
             command = "acp" if operation == "inference" and self.acp else "print"
             payload = request_frame(command, request)

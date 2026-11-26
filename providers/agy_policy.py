@@ -1,7 +1,10 @@
 """Reserved route and public failure vocabulary; never reads profile settings."""
 
+import re
+
 PROVIDER = "gemini-antigravity"
 MODEL = "gemini-3.8-flash-low"
+ACP_FLASH = "gemini-3.8-flash"
 CAPABILITY = "gemini-antigravity-v1"
 BINARY = "/opt/hermes/inert/antigravity/agy"
 SETTINGS = "/opt/hermes/inert/antigravity/settings.json"
@@ -17,6 +20,7 @@ _MESSAGES = {
     "protocol": "Gemini Antigravity returned an invalid response.",
     "containment": "Gemini Antigravity violated the process policy; the route is closed.",
     "unsupported_input": "Gemini Antigravity accepts only text and canonical tool history.",
+    "unsupported_model": "The selected model is unavailable for this Gemini subscription.",
     "input_too_large": "Gemini Antigravity request exceeds the local size limit.",
     "duplicate_tool_call": "Gemini Antigravity repeated a tool call identifier.",
     "cancelled": "Gemini Antigravity request cancelled.",
@@ -31,3 +35,12 @@ class AgyError(ValueError):
 
 def is_agy(provider):
     return isinstance(provider, str) and provider.strip().lower() in (PROVIDER, f"custom:{PROVIDER}")
+
+
+def valid_model_id(value):
+    return isinstance(value, str) and re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,159}", value) is not None
+
+
+def require_model(value, *, acp):
+    if value != MODEL and (not acp or not valid_model_id(value)):
+        raise AgyError("unsupported_model")

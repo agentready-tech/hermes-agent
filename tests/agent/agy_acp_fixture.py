@@ -17,14 +17,30 @@ def receive(method):
     return request
 
 
-def agent():
+def agent(model):
     request = receive("initialize")
     send({"id": request["id"], "result": {"protocolVersion": 1,
           "agentCapabilities": {"mcpCapabilities": {"http": True}}}})
     request = receive("session/new")
-    endpoint, = request["params"]["mcpServers"]
-    options = [{"id": "model", "currentValue": "gemini-3.8-flash"}, {"id": "thought_level", "currentValue": "low"}]
+    options = [{"id": "model", "currentValue": "gemini-4-neon",
+                "options": [{"group": "Gemini", "options": [
+                    {"value": "gemini-4-neon", "name": "Gemini 4 Neon"},
+                    {"value": "gemini-3.8-flash", "name": "Gemini 3.8 Flash"},
+                ]}]}, {"id": "thought_level", "currentValue": "high"}]
     send({"id": request["id"], "result": {"sessionId": "fixture", "configOptions": options}})
+    endpoints = request["params"]["mcpServers"]
+    if not endpoints:
+        assert model == "models"
+        return
+    endpoint, = endpoints
+    if model == "gemini-3.8-flash-low":
+        for option, value in zip(options, ("gemini-3.8-flash", "low"), strict=True):
+            request = receive("session/set_config_option")
+            assert request["params"]["configId"] == option["id"] and request["params"]["value"] == value
+            option["currentValue"] = value
+            send({"id": request["id"], "result": {"configOptions": options}})
+    else:
+        assert model == "gemini-4-neon"
     prompt = receive("session/prompt")
 
     def mcp(method, request_id, params=None, *, stream=False):
@@ -64,17 +80,17 @@ def agent():
     send({"id": prompt["id"], "result": {"stopReason": "end_turn"}})
 
 
-def worker(workdir):
+def worker(workdir, model):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from hermes_runtime.standalone.agy_acp_worker import run
     from hermes_runtime.standalone.agy_pod_process import read_command
 
     incoming = sys.stdin.fileno()
     _, payload = read_command(incoming)
-    child = subprocess.Popen([sys.executable, "-I", __file__, "agent"], stdin=subprocess.PIPE,
+    child = subprocess.Popen([sys.executable, "-I", __file__, "agent", model], stdin=subprocess.PIPE,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     return run(child, incoming, payload, Path(workdir))
 
 
 if __name__ == "__main__":
-    raise SystemExit(agent() if sys.argv[1] == "agent" else worker(sys.argv[1]))
+    raise SystemExit(agent(sys.argv[2]) if sys.argv[1] == "agent" else worker(*sys.argv[1:]))

@@ -5,7 +5,7 @@ from importlib import import_module
 from pathlib import Path
 
 from hermes_constants import get_hermes_home
-from providers.agy_policy import AgyError, BINARY, LOCAL_ENDPOINT, MODEL, PRINT_DONE, PROVIDER, SETTINGS
+from providers.agy_policy import AgyError, BINARY, LOCAL_ENDPOINT, MODEL, PRINT_DONE, PROVIDER, SETTINGS, require_model
 
 
 def admit(home, operation):
@@ -104,9 +104,9 @@ def profile_for(home):
 
 
 def runtime(target_model):
-    profile_for(get_hermes_home())
-    if target_model and target_model != MODEL:
-        raise AgyError("unavailable")
-    return {"provider": PROVIDER, "requested_provider": PROVIDER, "model": MODEL,
+    profile = profile_for(get_hermes_home())
+    model = target_model or MODEL
+    require_model(model, acp=getattr(profile.authority, "acp", False))
+    return {"provider": PROVIDER, "requested_provider": PROVIDER, "model": model,
             "base_url": LOCAL_ENDPOINT, "api_mode": "chat_completions", "api_key": "local-process",
             "source": "external-process"}
