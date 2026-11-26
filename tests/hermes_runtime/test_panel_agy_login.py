@@ -19,6 +19,10 @@ pytestmark = pytest.mark.platforms("posix")
 VIEWER = "a" * 43
 FIXTURE_URL = ("https://accounts.google.com/o/oauth2/v2/auth?redirect_uri=https%3A%2F%2Fcodeassist.google.com%2Fauthcode"
                "&response_type=code&state=fixture-state&code_challenge=inert-challenge&code_challenge_method=S256")
+ANTIGRAVITY_FIXTURE_URL = (
+    "https://accounts.google.com/o/oauth2/auth?redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback"
+    "&response_type=code&state=fixture-state&code_challenge=inert-challenge&code_challenge_method=S256"
+)
 
 
 class FixtureAuthority:
@@ -218,10 +222,16 @@ def test_cancel_retire_and_production_denial(tmp_path, monkeypatch):
     assert GeminiSubscriptions(symlink).card() is None
 
 
-@pytest.mark.parametrize("url, expected", [(FIXTURE_URL, True),
+@pytest.mark.parametrize("url, expected", [
+    (FIXTURE_URL, True),
+    (ANTIGRAVITY_FIXTURE_URL, True),
     (FIXTURE_URL.replace("/v2/auth", "/auth"), False),
+    (ANTIGRAVITY_FIXTURE_URL.replace("/o/oauth2/auth", "/o/oauth2/v2/auth"), False),
     (FIXTURE_URL.replace("%2Fauthcode", "%2Ffixture-other"), False),
-    (FIXTURE_URL + "&state=duplicate", False)])
+    (ANTIGRAVITY_FIXTURE_URL.replace("accounts.google.com", "example.invalid"), False),
+    (ANTIGRAVITY_FIXTURE_URL.replace("method=S256", "method=plain"), False),
+    (FIXTURE_URL + "&state=duplicate", False),
+])
 def test_production_login_url_validation_on_synthetic_shape(url, expected):
     from hermes_runtime.standalone.panel_agy_login import login_url
     assert login_url(url) is expected

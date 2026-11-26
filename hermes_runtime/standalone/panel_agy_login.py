@@ -12,6 +12,10 @@ from providers.agy_process import communicate
 
 CODE = re.compile(r"[!-~]{1,4096}")
 VIEWER = re.compile(r"[A-Za-z0-9_-]{43}")
+LOGIN_CALLBACKS = {
+    "/o/oauth2/auth": "https://antigravity.google/oauth-callback",
+    "/o/oauth2/v2/auth": "https://codeassist.google.com/authcode",
+}
 
 
 def login_url(value):
@@ -22,10 +26,11 @@ def login_url(value):
         fields = parse_qs(url.query, max_num_fields=32, strict_parsing=True)
     except ValueError:
         return False
+    callback = LOGIN_CALLBACKS.get(url.path)
     return (url.scheme == "https" and url.netloc == "accounts.google.com"
-            and url.path == "/o/oauth2/v2/auth" and "#" not in value
+            and callback is not None and "#" not in value
             and all(len(v) == 1 for v in fields.values())
-            and fields.get("redirect_uri") == ["https://codeassist.google.com/authcode"]
+            and fields.get("redirect_uri") == [callback]
             and fields.get("response_type") == ["code"] and bool(fields.get("state"))
             and bool(fields.get("code_challenge")) and fields.get("code_challenge_method") == ["S256"])
 
