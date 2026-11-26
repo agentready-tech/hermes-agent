@@ -184,7 +184,9 @@ def test_two_fixture_owners_login_same_pipe_then_probe_expire_and_disconnect(tmp
     assert "fixture-only" not in caplog.text and FIXTURE_URL not in caplog.text
 
 
-@pytest.mark.parametrize("failure", ["foreign-store", "error", "partial", "nonzero", "soft-deny", "wrong-answer", "invalid-grant"])
+@pytest.mark.parametrize("failure", [
+    "foreign-store", "error", "partial", "nonzero", "soft-deny", "wrong-permission-mode", "wrong-answer", "invalid-grant",
+])
 def test_failed_staged_probe_or_invalid_grant_cannot_replace_binding(tmp_path, monkeypatch, caplog, failure):
     a, _, store, _ = setup(tmp_path, monkeypatch)
     assert submit(a, begin(a))["status"] == "approved"

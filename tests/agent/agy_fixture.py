@@ -51,11 +51,14 @@ def child(mode, response='{"type":"final","answer":"Ответ ☃"}', prompt=""
         assert rows[-1]["role"] == "tool" and rows[-1]["tool_call_id"] == response
         assert rows[-1]["content"] == f'{{"text": "{response}"}}'
         response = '{"type":"final","answer":"Проверено ☃"}'
-    init = frame("init", {"cwd": "/fixture", "tools": [], "permission_mode": "request-review"}, conversation_id="fixture")
+    permission_mode = "request-review" if mode == "wrong-permission-mode" else "strict"
+    init = frame("init", {"cwd": "/fixture", "tools": [], "permission_mode": permission_mode}, conversation_id="fixture")
     step = frame("step_update", {"step_type": "agent_response", "step_index": 1, "state": "DONE", "text_delta": "ignored ☃"})
     result = frame("result", {"status": "ERROR" if mode == "error" else "SUCCESS", "conversation_id": "wrong" if mode == "identity" else "fixture", "response": response, "num_turns": 12})
     if mode == "native":
         step = frame("step_update", {"step_type": "tool", "tool_info": {"kind": "inert-marker"}})
+    if mode == "error-message":
+        step = frame("step_update", {"step_type": "error_message", "step_index": 1, "state": "DONE"})
     if mode == "repeat":
         result *= 2
     if mode == "partial":

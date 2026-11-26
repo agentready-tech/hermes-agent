@@ -61,7 +61,7 @@ def test_one_complete_chunk_only_after_process_eof(tmp_path, monkeypatch):
 @pytest.mark.parametrize(("mode", "code"), [("repeat", "protocol"), ("partial", "protocol"), ("large", "protocol"),
     ("native", "containment"), ("error", "transport"), ("nonzero", "transport"), ("stderr", "transport"),
     ("out-of-order", "protocol"), ("outer-dupe", "protocol"), ("identity", "protocol"), ("no-final", "protocol"),
-    ("soft-deny", "containment")])
+    ("soft-deny", "containment"), ("wrong-permission-mode", "containment"), ("error-message", "transport")])
 def test_rejects_ambiguous_or_unsafe_subprocess(tmp_path, monkeypatch, mode, code):
     authority, provider = client(tmp_path, monkeypatch, (mode, '{"type":"final","answer":"unpublished"}'))
     with pytest.raises(AgyError) as failure:
@@ -72,6 +72,8 @@ def test_rejects_ambiguous_or_unsafe_subprocess(tmp_path, monkeypatch, mode, cod
         assert authority.withdrawals == [(tmp_path, "fixture-generation", code)]
         with pytest.raises(AgyError, match="Connect"):
             provider.create(model=MODEL, messages=MESSAGES)
+    else:
+        assert not authority.withdrawals
 
 
 @pytest.mark.parametrize("response", ['{"type":"final","answer":"x","answer":"y"}',

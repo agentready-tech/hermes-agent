@@ -157,7 +157,8 @@ class Stream:
                 or not all(isinstance(tool, str) for tool in init["tools"])
                 or init.get("model", MODEL) != MODEL or ("agent" in init and not isinstance(init["agent"], str))):
             raise AgyError("protocol")
-        if init.get("permission_mode") != "request-review":
+        # The shipped settings explicitly set toolPermission to strict.
+        if init.get("permission_mode") != "strict":
             raise AgyError("containment")
         self.identity = identity
 
@@ -166,7 +167,7 @@ class Stream:
         if set(row) != {"event", "step_update"} or not isinstance(step, dict):
             raise AgyError("protocol")
         kind = step.get("step_type")
-        if kind not in ("user_input", "agent_response", "checkpoint") or step.keys() - {
+        if kind not in ("user_input", "agent_response", "checkpoint", "error_message") or step.keys() - {
             "conversation_id", "step_index", "state", "step_type", "text_delta", "duration_seconds", "usage"
         }:
             raise AgyError("containment")
@@ -182,6 +183,8 @@ class Stream:
                     or (idx == previous_idx and (previous_state == "DONE" or previous_kind != kind))):
                 raise AgyError("protocol")
         _metric_fields(step)
+        if kind == "error_message":
+            raise AgyError("transport")
         self.last_step = idx, kind, state
 
     def _result(self, row):
