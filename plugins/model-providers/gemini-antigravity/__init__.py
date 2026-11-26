@@ -1,14 +1,26 @@
 """Explicitly admitted provider profile. Never auto-register on import."""
 
+import logging
+import re
+from collections.abc import Callable
+from subprocess import Popen
 from threading import Event
 from types import SimpleNamespace
 
+from agent.redact import redact_for_egress
 from hermes_runtime.standalone import agy_runtime
 from providers.agy_policy import AgyError, LOCAL_ENDPOINT, MODEL, PROVIDER
 from providers.agy_process import communicate
 from providers.base import ProviderProfile
 
 from .protocol import Stream, encode, prepare, validate_result
+
+logger = logging.getLogger(__name__)
+_PRIVATE_DIAGNOSTIC = re.compile(
+    r"https?://[^\s\"'<>]+|(?:ya29\.|1//|4/0)[A-Za-z0-9._/~+-]+"
+    r"|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}",
+    re.IGNORECASE,
+)
 
 
 class AgyProfile(ProviderProfile):
@@ -67,17 +79,11 @@ class Client:
         from hermes_cli.config import config_write_lock
 
         authority = self.authority
-        parser = Stream()
         try:
             with config_write_lock(self.home / "config.yaml") if self.selection is not None else nullcontext():
                 self.require_current()
                 child = authority.spawn(self.home, self.generation, "inference", agy_runtime.print_command(prompt))
-            rc, diagnostics = communicate(child, parser.feed, timeout=125, cancelled=self._cancelled)
-            row = parser.finish(rc)
-            if diagnostics:
-                # Nothing on this channel is a qualified auth or success signal.
-                # A soft refusal may come with SUCCESS; refuse publication either way.
-                raise AgyError("containment")
+            row = _read_response(child, cancelled=self._cancelled)
             return validate_result(row, validators)
         except AgyError as error:
             if error.code in {"auth_expired", "containment"}:
@@ -85,6 +91,34 @@ class Client:
             raise
         except OSError:
             raise AgyError("transport") from None
+
+
+def _read_response(child: Popen[bytes], *, cancelled: Callable[[], bool]) -> dict[str, object]:
+    parser = Stream()
+    stderr = bytearray()
+    try:
+        status, _ = communicate(child, parser.feed, timeout=125, cancelled=cancelled, diagnostics=stderr)
+        row = parser.finish(status)
+        # A soft refusal may write only to stderr and still report SUCCESS.
+        if stderr:
+            raise AgyError("containment")
+        return row
+    except AgyError as error:
+        if error.code != "cancelled":
+            detail = parser.result.get("error") if parser.result is not None else None
+            logger.warning(
+                "Gemini Antigravity request failed (reason=%s, exit_code=%s, result.error=%r, stderr=%r)",
+                error.code, child.returncode, _log_text(detail), _log_text(stderr.decode("utf-8", errors="replace")),
+            )
+        raise
+
+
+def _log_text(value: object) -> str:
+    if isinstance(value, dict):
+        value = value.get("message")
+    if not isinstance(value, str):
+        return ""
+    return redact_for_egress(_PRIVATE_DIAGNOSTIC.sub("[redacted]", value)).strip()[:768]
 
 
 def _completion(row, stream):

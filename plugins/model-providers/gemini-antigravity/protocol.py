@@ -113,6 +113,7 @@ class Stream:
         self.pending = bytearray()
         self.bytes = self.lines = 0
         self.identity = self.result = self.last_step = None
+        self.failed = False
 
     def feed(self, data):
         self.bytes += len(data)
@@ -184,16 +185,21 @@ class Stream:
                 raise AgyError("protocol")
         _metric_fields(step)
         if kind == "error_message":
-            raise AgyError("transport")
+            # The step signals failure. The terminal result may still carry its cause.
+            self.failed = True
         self.last_step = idx, kind, state
 
     def _result(self, row):
         result = row.get("result")
         if set(row) != {"event", "result"} or not isinstance(result, dict):
             raise AgyError("protocol")
+        if self.identity is not None and result.get("conversation_id", self.identity) != self.identity:
+            raise AgyError("protocol")
         if result.get("status") != "SUCCESS":
-            raise AgyError("transport")
-        if (self.identity is None or result.get("conversation_id", self.identity) != self.identity
+            self.failed = True
+            self.result = result
+            return
+        if (self.identity is None
                 or result.keys() - {"conversation_id", "status", "response", "duration_seconds", "num_turns", "usage"}
                 or ("num_turns" in result and not _unsigned(result["num_turns"]))):
             raise AgyError("protocol")
@@ -201,14 +207,14 @@ class Stream:
         response = result.get("response")
         if not isinstance(response, str) or len(response.encode("utf-8")) > RESPONSE_LIMIT:
             raise AgyError("protocol")
-        self.result = response
+        self.result = result
 
     def finish(self, status):
-        if status != 0:
+        if status != 0 or self.failed:
             raise AgyError("transport")
         if self.pending or self.result is None or (self.last_step is not None and self.last_step[2] != "DONE"):
             raise AgyError("protocol")
-        return strict_object(self.result)
+        return strict_object(self.result["response"])
 
 
 def _lf_segments(data):

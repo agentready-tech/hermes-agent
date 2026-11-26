@@ -58,6 +58,19 @@ def test_one_complete_chunk_only_after_process_eof(tmp_path, monkeypatch):
     assert proc.returncode == 0 and proc.stdout.closed and proc.stderr.closed
 
 
+def test_provider_error_drains_terminal_result_and_stderr(tmp_path, monkeypatch, caplog):
+    authority, provider = client(tmp_path, monkeypatch, ("error-diagnostics", ""))
+    with pytest.raises(AgyError) as failure:
+        provider.create(model=MODEL, messages=MESSAGES)
+    assert failure.value.code == "transport" and not authority.withdrawals
+    assert "deadline" not in str(failure.value) and "connection reset" not in str(failure.value)
+    assert "result.error='Provider deadline exceeded" in caplog.text
+    assert "stderr='Upstream connection reset" in caplog.text
+    assert "fixture-oauth-code" not in caplog.text and "fixture-access-token" not in caplog.text
+    proc, = authority.processes
+    assert proc.returncode == 42 and proc.stdout.closed and proc.stderr.closed
+
+
 @pytest.mark.parametrize(("mode", "code"), [("repeat", "protocol"), ("partial", "protocol"), ("large", "protocol"),
     ("native", "containment"), ("error", "transport"), ("nonzero", "transport"), ("stderr", "transport"),
     ("out-of-order", "protocol"), ("outer-dupe", "protocol"), ("identity", "protocol"), ("no-final", "protocol"),

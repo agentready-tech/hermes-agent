@@ -39,9 +39,11 @@ def stop(child):
     child.wait(timeout=0.5)
 
 
-def communicate(child, consume, *, timeout, cancelled, input_data=None):
+def communicate(child, consume, *, timeout, cancelled, input_data=None, diagnostics: bytearray | None = None):
+    """Drain both pipes. A caller-owned buffer retains stderr even when the drain raises."""
     deadline = time.monotonic() + timeout
-    diagnostics = bytearray()
+    if diagnostics is None:
+        diagnostics = bytearray()
     prefix = getattr(child, "agy_request_frame", b"")
     try:
         with selectors.DefaultSelector() as selector:

@@ -57,8 +57,18 @@ def child(mode, response='{"type":"final","answer":"Ответ ☃"}', prompt=""
     result = frame("result", {"status": "ERROR" if mode == "error" else "SUCCESS", "conversation_id": "wrong" if mode == "identity" else "fixture", "response": response, "num_turns": 12})
     if mode == "native":
         step = frame("step_update", {"step_type": "tool", "tool_info": {"kind": "inert-marker"}})
-    if mode == "error-message":
+    if mode in {"error-message", "error-diagnostics"}:
         step = frame("step_update", {"step_type": "error_message", "step_index": 1, "state": "DONE"})
+    if mode == "error-diagnostics":
+        result = frame("result", {
+            "status": "ERROR",
+            "conversation_id": "fixture",
+            "error": {"message": "Provider deadline exceeded. https://fixture.invalid/?code=fixture-oauth-code"},
+        })
+        os.write(1, init + step + result)
+        os.close(1)
+        print("Upstream connection reset. Credential ya29.fixture-access-token", file=sys.stderr, flush=True)
+        return 42
     if mode == "repeat":
         result *= 2
     if mode == "partial":
