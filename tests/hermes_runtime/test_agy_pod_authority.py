@@ -2,10 +2,12 @@
 
 from ctypes import sizeof
 from importlib.util import find_spec
+import os
 from pathlib import Path
 import runpy
 import subprocess
 import sys
+from types import SimpleNamespace
 import warnings
 
 import pytest
@@ -75,6 +77,38 @@ def test_approved_image_update_keeps_the_same_profile_login(tmp_path, monkeypatc
         replaced.spawn(home, store.generation, "inference", "fixture")
     with pytest.raises(AgyError):
         updated.spawn(home.parent / "foreign", store.generation, "inference", "fixture")
+
+
+def test_local_launch_passes_only_the_bound_profile_slot(monkeypatch, tmp_path):
+    from hermes_runtime.standalone import agy_local_authority as local
+
+    home = tmp_path / "profiles" / ("env_" + "a" * 32)
+    storage = tmp_path / "store"
+    for profile in (home.name, "env_" + "b" * 32):
+        parent = storage / profile
+        parent.mkdir(parents=True, mode=0o700)
+        (parent / "a").mkdir(mode=0o700)
+        (parent / "a" / "owner").write_text(profile)
+    monkeypatch.setattr(local, "LOCAL_STORE", storage)
+    monkeypatch.setattr(local, "SLOT_UID", os.geteuid())
+    if os.getegid() != os.geteuid():
+        monkeypatch.setattr(local.os, "fstat", lambda fd, lookup=os.fstat: SimpleNamespace(
+            st_mode=lookup(fd).st_mode, st_uid=os.geteuid(), st_gid=os.geteuid()))
+    seen = []
+
+    def launch(command, *, pass_fds, **_kwargs):
+        descriptor, = pass_fds
+        assert command[-5:-2] == ["start", "launch", "a" * 32]
+        with os.fdopen(os.open("owner", os.O_RDONLY, dir_fd=descriptor), "r") as stream:
+            seen.append(stream.read())
+        return SimpleNamespace()
+
+    monkeypatch.setattr(local.subprocess, "Popen", launch)
+    image = "fixture.invalid/runtime@sha256:" + "0" * 64
+    owner = local.LocalAuthority(home, "fixture", "fixture", (("uid-a", image), ("uid-b", image)), acp=True)
+    row = {"slot": "a", "generation": "a" * 32}
+    assert owner.launch(row, "models", None).agy_request_frame == request_frame("acp", '{"type":"models"}')
+    assert seen == [home.name]
 
 
 def test_acp_catalog_uses_bound_store_and_refreshes_for_new_login(tmp_path, monkeypatch):

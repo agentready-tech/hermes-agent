@@ -84,13 +84,19 @@ def authority_for(home):
         profile, namespace, job = owned_profile(home)
         executable, *_ = locate_command("kubectl").command
         prefix = [executable, "--namespace", namespace]
-        return pod_authority(profile, namespace, executable, read_slots(prefix, stage, job), acp=stage == "test")
+        local = Path("/run/agentsee/agy").is_dir()
+        return pod_authority(profile, namespace, executable, read_slots(prefix, stage, job),
+                             acp=stage == "test", local=local)
     except (OSError, TypeError, ValueError, KeyError):
         raise AgyError("unavailable") from None
 
 
 @lru_cache(maxsize=128)
-def pod_authority(home, namespace, kubectl, slots, *, acp=False):
+def pod_authority(home, namespace, kubectl, slots, *, acp=False, local=False):
+    if local:
+        from hermes_runtime.standalone.agy_local_authority import LocalAuthority
+
+        return LocalAuthority(home, namespace, kubectl, slots, acp=acp)
     return PodAuthority(home, namespace, kubectl, slots, acp=acp)
 
 
@@ -270,16 +276,18 @@ class PodAuthority:
         except EnvironmentConnectionError:
             raise AgyError("unavailable") from None
 
-    def launch(self, row, operation, request):
+    def payload(self, operation, request):
         if operation == "login" and request == LOGIN_COMMAND:
-            payload = request_frame("login")
-        elif operation == "models" and self.acp and request is None:
-            payload = request_frame("acp", '{"type":"models"}')
-        elif operation in {"probe", "inference"} and isinstance(request, str):
+            return request_frame("login")
+        if operation == "models" and self.acp and request is None:
+            return request_frame("acp", '{"type":"models"}')
+        if operation in {"probe", "inference"} and isinstance(request, str):
             command = "acp" if operation == "inference" and self.acp else "print"
-            payload = request_frame(command, request)
-        else:
-            raise AgyError("unavailable")
+            return request_frame(command, request)
+        raise AgyError("unavailable")
+
+    def launch(self, row, operation, request):
+        payload = self.payload(operation, request)
         slot = row["slot"]
         try:
             with self.lifecycle(slot).active() as (_, fd):

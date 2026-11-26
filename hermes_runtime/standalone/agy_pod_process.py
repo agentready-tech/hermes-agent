@@ -121,7 +121,7 @@ def supervise(child, incoming, *, timeout, print_input=None):
         close_child(child)
 
 
-def run(store, scratch, incoming):
+def run(store, scratch, incoming, *, launcher=None):
     argv, print_input = read_command(incoming)
     home = scratch / "home"
     workdir = scratch / "work"
@@ -140,25 +140,27 @@ def run(store, scratch, incoming):
     os.set_blocking(incoming, False)
     with private_keyring(store, scratch) as address:
         environment["DBUS_SESSION_BUS_ADDRESS"] = address
-        child = subprocess.Popen([sys.executable, "-I", "-c", invocation, str(source),
-                                  str(home), str(workdir), *argv],
-                                 cwd=workdir, env=environment, start_new_session=True,
+        if launcher is None:
+            command = [sys.executable, "-I", "-c", invocation, str(source), str(home), str(workdir), *argv]
+        else:
+            command, environment = launcher(home, workdir, address, argv, environment)
+        child = subprocess.Popen(command, cwd=workdir, env=environment, start_new_session=True,
                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE if acp else None,
                                  stderr=subprocess.PIPE if acp else None)
         if acp:
-            return agy_acp_worker.run(child, incoming, print_input, workdir)
+            return agy_acp_worker.run(child, incoming, print_input, Path("/work") if launcher else workdir)
         os.set_blocking(child.stdin.fileno(), False)
         return supervise(child, incoming, timeout=900 if print_input is None else 120, print_input=print_input)
 
 
-def operate(action, generation):
+def operate(action, generation, *, auth=AUTH, launcher=None):
     import fcntl
 
     if not GENERATION.fullmatch(generation):
         raise AgyError("unavailable")
-    marker = AUTH / "generation"
-    home = AUTH / "home"
-    with (AUTH / "worker.lock").open("a") as lock:
+    marker = auth / "generation"
+    home = auth / "home"
+    with (auth / "worker.lock").open("a") as lock:
         # Isolate processes within the same slot as well as the two Pod mounts.
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if action == "prepare":
@@ -177,7 +179,7 @@ def operate(action, generation):
         if action != "launch":
             raise AgyError("unavailable")
         with TemporaryDirectory(prefix="agy-", dir="/tmp") as scratch:
-            return run(home, Path(scratch), sys.stdin.fileno())
+            return run(home, Path(scratch), sys.stdin.fileno(), launcher=launcher)
 
 
 def main():
