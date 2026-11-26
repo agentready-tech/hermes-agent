@@ -19,8 +19,8 @@ HINT = (
     '## Panel file delivery\n'
     'This AgentReady main supports chat-files-v1. To send a generated file, include '
     'MEDIA:/absolute/path/to/file in your final reply, outside code/quotes. A bare path does not '
-    'send a file. The system stages explicitly requested files from your own native artifact '
-    'namespace or producing backend; these filesystems are distinct. Only verified retained files '
+    'send a file. Use the absolute path as seen by the tool that created the file. In a Kubernetes '
+    'sandbox, save generated files in /workspace and use MEDIA:/workspace/<filename>. Only verified retained files '
     'become downloadable cards. Panel limits: 5 files, 10 MiB each, 20 MiB total. Never export credentials, '
     'browser profiles or private runtime files; report a delivery error honestly.'
 )

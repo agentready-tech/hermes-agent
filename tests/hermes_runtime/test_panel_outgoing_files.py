@@ -375,16 +375,20 @@ def _own_kubernetes_source(files, monkeypatch, *, strict):
 
 @pytest.mark.parametrize('strict', [False, True])
 @pytest.mark.parametrize('channel', ['panel', 'native-media'])
-@pytest.mark.parametrize('location', ['tmp', 'scratch'])
+@pytest.mark.parametrize('location', ['tmp', 'scratch', 'workspace'])
 def test_own_kubernetes_tmp_report_is_retained_without_manual_copy(files, monkeypatch, strict, channel, location):
     from gateway.media_delivery import prepare_requested_media
     from hermes_runtime.standalone.main_files import download, retain_row
     environment, _config = _own_kubernetes_source(files, monkeypatch, strict=strict)
     if location == 'scratch':
         environment.virtual_root = str(files.home / 'cache/scratch')
+    elif location == 'workspace':
+        environment.virtual_root = '/workspace'
     payload = b'synthetic owned sandbox temporary report'
-    source = files.workspace / 'report.csv'; source.write_bytes(payload)
-    remote = environment.virtual_root + '/report.csv'
+    name = 'report.docx' if location == 'workspace' else 'report.csv'
+    source = files.workspace / name
+    source.write_bytes(payload)
+    remote = environment.virtual_root + '/' + name
     if channel == 'panel':
         rid = files.db.append_message('own-main', 'assistant', 'Synthetic report\nMEDIA:' + remote)
         marker = retain_row(files.db, 'own-main', rid, files.home, 'own-producing-route')
