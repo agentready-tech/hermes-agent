@@ -39,11 +39,16 @@ def agent():
 
     send({"id": 100, "method": "fs/read_text_file", "params": {"sessionId": "fixture", "path": "/fixture"}})
     assert json.loads(sys.stdin.readline())["error"]["code"] == -32601
+    send({"id": 101, "method": "session/request_permission", "params": {
+        "sessionId": "fixture", "toolCall": {"name": "read_file", "title": "Run mcp_hermes_fixture_echo"},
+        "options": [{"kind": "allow_once", "optionId": "fixture-allow"}],
+    }})
+    assert json.loads(sys.stdin.readline())["result"]["outcome"]["outcome"] == "cancelled"
     assert mcp("tools/list", 1)["result"]["tools"][0]["name"] == "fixture_echo"
     first = "first"
     for request_id, value in ((2, first), (3, "second")):
         send({"id": 100 + request_id, "method": "session/request_permission", "params": {
-            "sessionId": "fixture", "toolCall": {"title": "Run mcp_hermes_fixture_echo"},
+            "sessionId": "fixture", "toolCall": {"name": "mcp_hermes_fixture_echo", "title": "Run mcp_hermes_fixture_echo"},
             "options": [{"kind": "allow_once", "optionId": "fixture-allow"}],
         }})
         assert json.loads(sys.stdin.readline())["result"]["outcome"]["optionId"] == "fixture-allow"

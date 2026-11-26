@@ -134,9 +134,10 @@ class Session:
 
     def permission(self, params):
         tool = params.get("toolCall", {})
-        titles = {f"Run mcp_{SERVER_NAME}_{name}" for name in self.bridge.tools}
+        names = {f"mcp_{SERVER_NAME}_{name}" for name in self.bridge.tools}
+        name = tool.get("name")
         if (self.stage == "session/prompt" and params.get("sessionId") == self.session_id
-                and tool.get("title") in titles):
+                and isinstance(name, str) and name in names and tool.get("title") == f"Run {name}"):
             for option in params.get("options", ()):
                 if option.get("kind") == "allow_once":
                     return {"outcome": "selected", "optionId": option["optionId"]}

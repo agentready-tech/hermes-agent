@@ -12,7 +12,7 @@ from providers.agy_acp_wire import decode, encode
 from providers.agy_policy import AgyError
 
 SERVER_NAME = "hermes"
-TOOL_TIMEOUT = 600
+TOOL_TIMEOUT = 1860  # browser_exec can wait 1800 seconds for one tool result.
 MCP_REQUEST_LIMIT = 64 * 1024
 
 
