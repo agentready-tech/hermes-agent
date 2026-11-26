@@ -158,35 +158,6 @@ def test_native_stream_failure_is_terminal_and_redacted(native, monkeypatch, cap
         agent.close()
 
 
-@pytest.mark.parametrize("fits_after_compaction", [True, False])
-def test_large_chat_compacts_before_the_first_antigravity_request(native, monkeypatch, fits_after_compaction):
-    start, _, _, _, _ = native
-    agent, authority = start(("ok", '{"type":"final","answer":"Still here"}'))
-    history = [
-        {"role": "user", "content": "history from a previous task " * 4_000},
-        {"role": "assistant", "content": "Acknowledged."},
-    ]
-    compactions = []
-
-    def compact(messages, system_message, *, trigger, **_kwargs):
-        assert not authority.processes
-        compactions.append(trigger)
-        return (messages[-1:] if fits_after_compaction else messages), agent._cached_system_prompt
-
-    monkeypatch.setattr(agent, "_compress_context", compact)
-    try:
-        result = agent.run_conversation("Are you still here?", conversation_history=history)
-        assert compactions == ["pre_api"]
-        if fits_after_compaction:
-            assert result["final_response"] == "Still here"
-            assert len(authority.processes) == 1
-        else:
-            assert result["failure_reason"] == "input_too_large"
-            assert not authority.processes
-    finally:
-        agent.close()
-
-
 def test_duplicate_in_compression_parent_is_not_replayed_after_adoption(native):
     from types import SimpleNamespace
     from agent.conversation_compression import _publish_rotated_compaction

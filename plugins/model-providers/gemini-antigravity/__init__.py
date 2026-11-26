@@ -13,7 +13,7 @@ from providers.agy_policy import AgyError, LOCAL_ENDPOINT, MODEL, PROVIDER
 from providers.agy_process import communicate
 from providers.base import ProviderProfile
 
-from .protocol import PROMPT_LIMIT, Stream, encode, pack_prompt, prepare, validate_result
+from .protocol import Stream, encode, prepare, validate_result
 
 logger = logging.getLogger(__name__)
 _PRIVATE_DIAGNOSTIC = re.compile(
@@ -53,14 +53,6 @@ class Client:
 
     def _cancelled(self):
         return self.closed.is_set() or self.cancelled()
-
-    def preflight_input_size(self, messages, tools) -> tuple[int, int] | None:
-        try:
-            packed, _ = pack_prompt(messages, tools)
-        except AgyError:
-            # Leave malformed input to create(), which reports its normal failure.
-            return None
-        return len(packed), PROMPT_LIMIT
 
     def create(self, *, model, messages, tools=None, stream=False, response_format=None, **kwargs):
         if model != MODEL or response_format is not None or kwargs.get("modalities") not in (None, ["text"]):
