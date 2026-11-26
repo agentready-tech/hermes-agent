@@ -95,7 +95,8 @@ def test_rejects_ambiguous_or_unsafe_subprocess(tmp_path, monkeypatch, mode, cod
     '{"type":"tool_call","id":"step","name":"fixture_echo","arguments":{"text":5}}',
     '{"type":"tool_call","id":"step","name":"fixture_echo","arguments":{"text":1e999}}',
     '{"type":"tool_call","id":"step","name":"fixture_echo","arguments":{"text":"x","extra":true}}',
-    '{"type":"tool_call","id":"call_1","name":"fixture_echo","arguments":{"text":"x"}}'])
+    '{"type":"tool_call","id":"call_","name":"fixture_echo","arguments":{"text":"x"}}',
+    '{"type":"tool_call","id":"fc_1","name":"fixture_echo","arguments":{"text":"x"}}'])
 def test_response_shape_and_same_catalog_schema(tmp_path, monkeypatch, response):
     _, provider = client(tmp_path, monkeypatch, ("ok", response))
     with pytest.raises(AgyError) as failure:

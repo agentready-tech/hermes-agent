@@ -68,13 +68,16 @@ def native(tmp_path, monkeypatch):
     db.close()
 
 
-def test_two_echoes_replayed_in_three_children_and_reopened_history(native):
+@pytest.mark.parametrize(("source_prefix", "stored_prefix"), [("echo-", "echo-"), ("call_", "agy-")])
+def test_two_echoes_replayed_in_three_children_and_reopened_history(native, source_prefix, stored_prefix):
     start, calls, db, path, session = native
-    agent, auth = start(proposal("echo-1"), proposal("echo-2"), ("canonical-followup", "echo-2"))
+    first, second = f"{stored_prefix}1", f"{stored_prefix}2"
+    agent, auth = start(proposal(f"{source_prefix}1", first), proposal(f"{source_prefix}2", second),
+                        ("canonical-followup", second))
     try:
         result = agent.run_conversation("Echo two inert values")
         assert result["final_response"] == "Проверено ☃", result.get("error")
-        assert calls == ["echo-1", "echo-2"]
+        assert calls == [first, second]
         assert len({child.pid for child in auth.processes}) == 3
     finally:
         agent.close()
@@ -86,14 +89,19 @@ def test_two_echoes_replayed_in_three_children_and_reopened_history(native):
         assert rows[-1]["role"] == "assistant" and rows[-1]["content"] == "Проверено ☃"
 
 
-@pytest.mark.parametrize("text", ["echo-1", "changed"])
-def test_duplicate_id_is_not_renamed_or_dispatched(native, text):
+@pytest.mark.parametrize(("source", "duplicate", "stored", "text"), [
+    ("echo-1", "echo-1", "echo-1", "echo-1"),
+    ("echo-1", "echo-1", "echo-1", "changed"),
+    ("call_1", "call_1", "agy-1", "agy-1"),
+    ("call_1", "agy-1", "agy-1", "changed"),
+])
+def test_duplicate_id_is_not_renamed_or_dispatched(native, source, duplicate, stored, text):
     start, calls, db, _, session = native
-    agent, auth = start(proposal("echo-1"), proposal("echo-1", text))
+    agent, auth = start(proposal(source, stored), proposal(duplicate, text))
     try:
         result = agent.run_conversation("Repeat only through the fixture")
         assert result.get("failure_reason") == "duplicate_tool_call", result
-        assert calls == ["echo-1"] and len(auth.processes) == 2
+        assert calls == [stored] and len(auth.processes) == 2
         assert sum(bool(row.get("tool_calls")) for row in db.get_messages(session)) == 1
     finally:
         agent.close()
