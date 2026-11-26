@@ -1,5 +1,6 @@
 """Protected owner-bound Antigravity login. No credential exchange in Hermes."""
 
+import logging
 import re
 import secrets
 from threading import Event, RLock
@@ -10,6 +11,7 @@ from hermes_runtime.standalone import agy_runtime
 from providers.agy_policy import AgyError, CAPABILITY, MODEL
 from providers.agy_process import communicate
 
+logger = logging.getLogger(__name__)
 CODE = re.compile(r"[!-~]{1,4096}")
 VIEWER = re.compile(r"[A-Za-z0-9_-]{43}")
 LOGIN_CALLBACKS = {
@@ -51,15 +53,18 @@ class Attempt:
 
     def _run(self):
         buffer = bytearray()
+        phase = "exchange"
         try:
             rc, diagnostics = communicate(self.child, lambda data: self._collect(buffer, data), timeout=self.timeout,
                                            cancelled=self.cancelled.is_set, input_data=self._take_code)
             if rc or buffer or not self.submitted or not self.url:
                 status = "error_invalid_code" if self.submitted and b"invalid_grant" in diagnostics else "error"
-                self._finish(status)
+                self._fail(phase, "invalid_grant" if status == "error_invalid_code" else "invalid_result", status)
                 return
+            phase = "probe"
             self._finish("verifying")
             agy_runtime.verify_staged(self.authority, self.home, self.stage, self.child.pid, self.cancelled.is_set)
+            phase = "activate"
             with self.lock:
                 if self.cancelled.is_set():
                     raise AgyError("cancelled")
@@ -67,9 +72,12 @@ class Attempt:
                 if self.authority.promote(self.home, self.stage):
                     self.status = "approved"
                     return
-            self._finish("error")
-        except (AgyError, OSError, ValueError):
-            self._finish("cancelled" if self.cancelled.is_set() else "error")
+            self._fail(phase, "stale_binding")
+        except (OSError, ValueError) as error:
+            if self.cancelled.is_set():
+                self._finish("cancelled")
+            else:
+                self._fail(phase, error.code if isinstance(error, AgyError) else "internal")
         finally:
             try:
                 if self.status != "approved":
@@ -81,6 +89,11 @@ class Attempt:
     def _finish(self, status):
         with self.lock:
             self.status, self.url, self.code = status, None, None
+
+    def _fail(self, phase, reason, status="error"):
+        # Child output can contain account information and OAuth material.
+        logger.warning("Gemini sign-in failed (phase=%s, reason=%s)", phase, reason)
+        self._finish(status)
 
     def _collect(self, buffer, data):
         self.bytes += len(data)

@@ -185,7 +185,7 @@ def test_two_fixture_owners_login_same_pipe_then_probe_expire_and_disconnect(tmp
 
 
 @pytest.mark.parametrize("failure", ["foreign-store", "error", "partial", "nonzero", "soft-deny", "wrong-answer", "invalid-grant"])
-def test_failed_staged_probe_or_invalid_grant_cannot_replace_binding(tmp_path, monkeypatch, failure):
+def test_failed_staged_probe_or_invalid_grant_cannot_replace_binding(tmp_path, monkeypatch, caplog, failure):
     a, _, store, _ = setup(tmp_path, monkeypatch)
     assert submit(a, begin(a))["status"] == "approved"
     previous = store.binding.read_bytes()
@@ -201,6 +201,10 @@ def test_failed_staged_probe_or_invalid_grant_cannot_replace_binding(tmp_path, m
     expected = ["login"] if failure in {"foreign-store", "invalid-grant"} else ["login", "probe"]
     assert [op for op, _, _ in store.children[2:]] == expected
     assert all(child.returncode is not None for _, _, child in store.children)
+    phase = "exchange" if failure == "invalid-grant" else "probe"
+    assert f"Gemini sign-in failed (phase={phase}," in caplog.text
+    assert "fixture-only" not in caplog.text and FIXTURE_URL not in caplog.text
+    assert "fixture diagnostic" not in caplog.text and "fixture permission denied" not in caplog.text
 
 
 def test_cancel_retire_and_production_denial(tmp_path, monkeypatch):

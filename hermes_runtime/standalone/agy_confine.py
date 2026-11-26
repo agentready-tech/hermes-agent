@@ -14,6 +14,8 @@ _READ = _READ_FILE | _READ_DIR
 
 
 class PathBeneath(ctypes.Structure):
+    # ctypes uses this layout for packed structures. Linux expects 12 bytes here.
+    _layout_ = "ms"
     _pack_ = 1
     _fields_ = [("allowed_access", ctypes.c_uint64), ("parent_fd", ctypes.c_int32)]
 

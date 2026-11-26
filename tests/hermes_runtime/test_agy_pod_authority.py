@@ -1,6 +1,10 @@
 """Exercise the two provisioned credential mounts without Google credentials."""
 
+from ctypes import sizeof
+from importlib.util import find_spec
 from pathlib import Path
+import runpy
+import warnings
 
 import pytest
 
@@ -9,6 +13,14 @@ from hermes_runtime.standalone.agy_runtime import LOGIN_COMMAND
 from providers.agy_policy import AgyError
 
 pytestmark = pytest.mark.platforms("posix")
+
+
+def test_landlock_path_rule_loads_silently_with_kernel_layout():
+    module = find_spec("hermes_runtime.standalone.agy_confine")
+    with warnings.catch_warnings(action="error", category=DeprecationWarning):
+        structure = runpy.run_path(module.origin)["PathBeneath"]
+    assert sizeof(structure) == 12
+    assert structure.parent_fd.offset == 8
 
 
 def test_staged_cancel_cannot_change_the_active_or_foreign_profile(tmp_path, monkeypatch):
