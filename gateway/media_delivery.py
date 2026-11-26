@@ -224,14 +224,16 @@ def _protected_source_identity(path):
 
 
 def _remote_source_is_denied(path, home, environment):
-    """Only the already owner-bound Kubernetes scratch loses its host /root prefix."""
+    """Permit the owner's explicit sandbox mounts under /root without opening its home."""
     from gateway.media_fetch import remote_path_is_denied
     from tools.environments.kubernetes import KubernetesEnvironment
-    scratch = Path(home) / 'cache' / 'scratch'
-    if isinstance(environment, KubernetesEnvironment) and (path == scratch or scratch in path.parents):
-        # Keep the conservative credential-component policy; do not trust an ambient remote HOME.
-        candidate = '/' + path.relative_to(home).as_posix()
-        return _protected_source_identity(path) or remote_path_is_denied(candidate, None)
+    if isinstance(environment, KubernetesEnvironment):
+        sandbox_home = Path('/root/.hermes')
+        for base, subdir in ((Path(home), 'cache/scratch'), (sandbox_home, 'cache/scratch'),
+                             (sandbox_home, 'workspace')):
+            if path.is_relative_to(base / subdir):
+                candidate = '/' + path.relative_to(base).as_posix()
+                return _protected_source_identity(path) or remote_path_is_denied(candidate, None)
     return remote_path_is_denied(str(path), getattr(environment, '_remote_home', None))
 
 

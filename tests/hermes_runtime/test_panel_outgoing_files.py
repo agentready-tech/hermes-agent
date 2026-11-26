@@ -397,7 +397,7 @@ def _own_kubernetes_source(files, monkeypatch, *, strict):
 
 @pytest.mark.parametrize('strict', [False, True])
 @pytest.mark.parametrize('channel', ['panel', 'native-media'])
-@pytest.mark.parametrize('location', ['tmp', 'scratch', 'workspace'])
+@pytest.mark.parametrize('location', ['tmp', 'scratch', 'workspace', 'shared-workspace'])
 def test_own_kubernetes_tmp_report_is_retained_without_manual_copy(files, monkeypatch, strict, channel, location):
     from gateway.media_delivery import prepare_requested_media
     from hermes_runtime.standalone.main_files import download, retain_row
@@ -406,6 +406,8 @@ def test_own_kubernetes_tmp_report_is_retained_without_manual_copy(files, monkey
         environment.virtual_root = str(files.home / 'cache/scratch')
     elif location == 'workspace':
         environment.virtual_root = '/workspace'
+    elif location == 'shared-workspace':
+        environment.virtual_root = '/root/.hermes/workspace'
     payload = b'synthetic owned sandbox temporary report\x00\xff\n'
     name = 'report.docx' if location == 'workspace' else 'report.csv'
     source = files.workspace / name
@@ -497,17 +499,19 @@ def test_legacy_attachment_error_stays_visible_without_manual_copy_advice(files)
     ('/root/.hermes/cache/scratch/.aws/credentials', True),
     ('/root/.hermes/cache/scratch/auth.json', True),
     ('/root/.hermes/cache/scratch/state.db-wal', True),
+    ('/root/.hermes/workspace/report.docx', False),
+    ('/root/.hermes/workspace/.ssh/identity', True),
     ('/root/.hermes/config.yaml', True),
     ('/root/.hermes/profiles/foreign/cache/scratch/report.csv', True),
     ('/proc/self/environ', True),
     ('/root/private.csv', True),
     ('/tmp/report.csv', False),
 ])
-def test_production_root_namespace_authorizes_only_owned_scratch(files, monkeypatch, source, denied):
+def test_production_root_namespace_authorizes_only_owned_sandbox_mounts(files, monkeypatch, source, denied):
     from gateway.media_delivery import _remote_source_is_denied
     from gateway.media_fetch import remote_path_is_denied
     environment, _config = _own_kubernetes_source(files, monkeypatch, strict=True)
-    # The generic unknown-home gate remains closed; only the own scratch edge qualifies it.
+    # The generic unknown-home gate remains closed even for the scoped mount aliases.
     assert remote_path_is_denied('/root/.hermes/cache/scratch/report.csv', None)
     assert _remote_source_is_denied(Path(source), Path('/root/.hermes'), environment) is denied
 
