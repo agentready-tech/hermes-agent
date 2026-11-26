@@ -13,13 +13,11 @@ import logging
 import os
 from pathlib import Path
 
-from tools.bot_desktop import lease
-
-
 class TabResources:
-    def __init__(self, home: str, endpoint: str, task: str, driver_name: str = ""):
+    def __init__(self, home: str, endpoint: str, task: str, driver_name: str = "", *, lease_reader=None):
         self.home, self.task = home, task
-        self.admission_epoch = lease.get(home).epoch
+        self._lease_reader = lease_reader
+        self.admission_epoch = self.current_lease().epoch
         self.retained_unowned = False
         key = hashlib.sha256(endpoint.encode()).hexdigest()
         self.path = Path(home) / "cache" / "browser-tabs" / (key + ".json")
@@ -29,6 +27,13 @@ class TabResources:
         self.tabs: dict[str, dict] = {}
         self.borrowed_tabs: dict[str, bool] = {}
         self.protected_borrowed: set[str] = set()
+
+    def current_lease(self):
+        if self._lease_reader is not None:
+            return self._lease_reader()
+        from tools.bot_desktop.lease import get
+
+        return get(self.home)
 
     @contextlib.contextmanager
     def locked(self):
@@ -82,7 +87,7 @@ class TabResources:
 
     def created(self, target: str, *, epoch=None, keep=False):
         self.tabs[target] = {"task": self.task, "keep": keep,
-                             "epoch": lease.get(self.home).epoch if epoch is None else epoch}
+                             "epoch": self.current_lease().epoch if epoch is None else epoch}
         self.save()  # durable even if the exec later times out
 
     def keep(self, target: str):
@@ -93,8 +98,8 @@ class TabResources:
 
     def may_close(self, target: str, *, close_unowned=False) -> bool:
         row = self.tabs.get(target)
-        current = lease.get(self.home)
-        if current.holder != lease.AGENT or current.epoch != self.admission_epoch:
+        current = self.current_lease()
+        if current.holder != "agent" or current.epoch != self.admission_epoch:
             return False
         if row is None:
             return close_unowned and target not in self.protected_borrowed

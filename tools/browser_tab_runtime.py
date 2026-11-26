@@ -36,12 +36,13 @@ def _close_idle_user_tabs(home, task):
     return True
 
 
-def prepare_native_tabs(code: str, task: str, cmd: list, env: dict, *, generation: str = '') -> str:
+def prepare_native_tabs(code: str, task: str, cmd: list, env: dict, *, generation: str = '', sandbox=None) -> str:
     from tools.browser_use_cli import configure_harness_runtime
     home = str(get_hermes_home())
     endpoint = env.get("BU_CDP_WS") or env.get("BU_CDP_URL") or ""
     if not endpoint or (not task and not generation):
-        configure_harness_runtime(env)
+        if sandbox is None:
+            configure_harness_runtime(env)
         return code
     # Keep credentials in this process only; the durable ledger receives a hash.
     identity = endpoint + '\0' + generation if generation else endpoint
@@ -50,20 +51,30 @@ def prepare_native_tabs(code: str, task: str, cmd: list, env: dict, *, generatio
     # profile and task so a sibling cannot switch its attachment mid-operation.
     name = "hermes-" + hashlib.sha256((home + "\0" + task + "\0" + env.get("BU_NAME", "default") + "\0" + browser).encode()).hexdigest()[:32]
     env["BU_NAME"] = name
-    configure_harness_runtime(env)
+    if sandbox is None:
+        configure_harness_runtime(env)
     if not task:
         return code
     from tools.bot_desktop import lease
+    key = home, task
     with _lock:
-        _completed_tasks.discard((home, task))
-        contexts = _contexts.setdefault((home, task), {})
+        initial = _contexts.get(key, {}).get(name)
+    # A fresh sandbox process inventory involves a round trip. Other employees
+    # must be able to admit browser work while it is in flight.
+    if initial is None:
+        snapshot = sandbox.driver_processes if sandbox is not None else _driver_process_snapshot
+        initial = (cmd, env, browser, lease.get(home).epoch, snapshot(), sandbox)
+    with _lock:
+        _completed_tasks.discard(key)
+        contexts = _contexts.setdefault(key, {})
         previous = contexts.get(name)
         # A later call after human takeover must not re-own the driver's startup tab.
-        epoch, driver_before = previous[3:] if previous else (lease.get(home).epoch, _driver_process_snapshot())
-        contexts[name] = (list(cmd), dict(env), browser, epoch, driver_before)
-    return wrap_code(code, home=home, endpoint=browser, task=task,
+        epoch, driver_before = (previous or initial)[3:5]
+        contexts[name] = (list(cmd), dict(env), browser, epoch, driver_before, sandbox)
+    return wrap_code(code, home=sandbox.state if sandbox is not None else home, endpoint=browser,
+                     task=sandbox.workspace.rsplit("/", 1)[-1] if sandbox is not None else task,
                      driver_epoch=epoch if previous is None else None,
-                     driver_before=driver_before if previous is None else None)
+                     driver_before=driver_before if previous is None else None, sandbox=sandbox is not None)
 
 
 def finish_native_tabs(agent, task: str, *, completed: bool, interrupted: bool, failed: bool) -> None:
@@ -85,11 +96,14 @@ def finish_native_tabs(agent, task: str, *, completed: bool, interrupted: bool, 
     if not contexts:
         return
     close_user_tabs = _close_idle_user_tabs(home, task)
-    for name, (cmd, env, browser, epoch, driver_before) in contexts.items():
-        code = wrap_code("pass", home=home, endpoint=browser, task=task, cleanup=True,
-                         driver_epoch=epoch, driver_before=driver_before, close_user_tabs=close_user_tabs)
+    for name, (cmd, env, browser, epoch, driver_before, sandbox) in contexts.items():
+        code = wrap_code("pass", home=sandbox.state if sandbox is not None else home, endpoint=browser,
+                         task=sandbox.workspace.rsplit("/", 1)[-1] if sandbox is not None else task,
+                         cleanup=True, driver_epoch=epoch, driver_before=driver_before,
+                         close_user_tabs=close_user_tabs, sandbox=sandbox is not None)
+        run = sandbox.run if sandbox is not None else _run_cli_killing_process_group
         result = run_fenced({"features": {"local": True}},
-                            lambda: _run_cli_killing_process_group(cmd, code, env, 15))
+                            lambda: run(cmd, code, env, 15))
         if getattr(result, "returncode", None) == 0:
             with _lock:
                 _contexts.get(key, {}).pop(name, None)

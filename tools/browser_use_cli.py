@@ -39,6 +39,7 @@ _PRIVATE_BROWSER_SENTINEL = "_HERMES_BU_PRIVATE_BROWSER"
 # the same human-control lease fence as the built-in browser tools. Popped before launching the CLI.
 _BOT_DESKTOP_BROWSER_SENTINEL = "_HERMES_BU_BOT_DESKTOP_BROWSER"
 _NATIVE_BROWSER_GENERATION = "_HERMES_BU_NATIVE_BROWSER_GENERATION"
+_SANDBOX_CDP = "_HERMES_BU_SANDBOX_CDP"
 # The note when the consented real profile could not load (the route fell back). Popped before launch.
 _REAL_PROFILE_FALLBACK_SENTINEL = "_HERMES_BU_REAL_PROFILE_FALLBACK"
 # local=True whose real profile could not load: run on the local sidecar browser. Popped before launch.
@@ -402,7 +403,8 @@ def _native_screenshot_result(result: dict[str, Any], path: str) -> Optional[dic
                                             max_dimension=_EMBED_MAX_DIMENSION, force_jpeg=True)
         text = json.dumps(result, ensure_ascii=False)
         attached = text + "\n\nThe screenshot from this call is attached — inspect it with your native vision."
-        return {"_multimodal": True, "text_summary": text, "meta": {"screenshot_path": path, "native_vision": True},
+        return {"_multimodal": True, "text_summary": text, "meta": {
+                    "screenshot_path": result.get("screenshot_path", path), "native_vision": True},
                 "content": [{"type": "text", "text": attached}, {"type": "image_url", "image_url": {"url": data_url}}]}
     except Exception as e:
         logger.debug("Native screenshot attach failed (falling back to text): %s", e)
@@ -516,6 +518,8 @@ def _resolve_managed_chromium_cdp(env: dict, task_id: Optional[str], session_nam
             return res['error']
         return (f"The local browser could not be started: {(res or {}).get('error') or 'agent-browser returned no CDP endpoint'} "
                 "Run `hermes tools` → Browser Automation to (re)install Chromium, or switch backends.")
+    if _managed_kubernetes_browser():
+        env[_SANDBOX_CDP] = cdp
     cdp = _reach_sandbox_cdp(cdp)
     _set_cdp_env(env, cdp)
     env[_PRIVATE_BROWSER_SENTINEL] = "1"  # one Chromium per cache key: nothing to share a tab with
@@ -804,6 +808,30 @@ def _take_real_profile_note(route_key: str) -> dict:
     return {"real_profile_unavailable": _real_profile_fallback[route_key]}
 
 
+def _managed_kubernetes_browser() -> bool:
+    from hermes_runtime.adapters.hermes import enabled
+    from tools.terminal_scope import terminal_env
+
+    return enabled() and terminal_env("TERMINAL_ENV") == "kubernetes"
+
+
+def _sandbox_browser_screenshot(stdout: str, workspace: str, task_id: Optional[str]):
+    from gateway.media_delivery import prepare_files
+    from gateway.session_context import get_session_env
+
+    for value in reversed(_IMAGE_PATH_RE.findall(stdout or "")):
+        path = Path(value)
+        if not path.is_relative_to(workspace) or ".." in path.parts:
+            continue
+        try:
+            result = prepare_files([str(path)], get_hermes_home(), get_session_env("HERMES_SESSION_KEY"),
+                                   task_id=task_id, max_files=1)
+            return str(path), result[0]["reference"]["path"]
+        except (OSError, ValueError, RuntimeError):
+            return None
+    return None
+
+
 def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT_S,
                  task_id: Optional[str] = None, local: bool = False):
     """Run Python code through the browser-use CLI, and return its output"""
@@ -841,6 +869,12 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
     _exec_route_is_sidecar[route_key] = local_sidecar
     bot_desktop_browser = bool(env.pop(_BOT_DESKTOP_BROWSER_SENTINEL, None))
     generation = env.pop(_NATIVE_BROWSER_GENERATION, '')
+    sandbox_cdp = env.pop(_SANDBOX_CDP, '')
+    managed_kubernetes = _managed_kubernetes_browser()
+    if not bot_desktop_browser:
+        sandbox_cdp = env.get("BU_CDP_WS") or env.get("BU_CDP_URL") or ''
+    if managed_kubernetes and not sandbox_cdp:
+        return tool_error("The employee's sandbox browser is unavailable.")
 
     # SHARED browser (/browser connect CDP override): pin each named session to its own tab (see
     # _OWN_TAB_PREAMBLE). Private per-name browsers skip this — nothing to collide with.
@@ -848,7 +882,7 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
     if session and not private_browser and not bot_desktop_browser:
         code = _OWN_TAB_PREAMBLE + code
 
-    workspace = _workspace_dir(task_id)
+    workspace = None if managed_kubernetes else _workspace_dir(task_id)
     if workspace:
         env["BH_AGENT_WORKSPACE"] = workspace
 
@@ -861,22 +895,41 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
     started = time.time()
 
     def dispatch() -> dict[str, Any]:
-        nonlocal code
+        nonlocal code, workspace
+        sandbox = None
+        if managed_kubernetes:
+            from tools.bot_desktop import lease, runtime
+            from tools.browser_kubernetes_exec import BrowserKubernetesExec
+
+            try:
+                if bot_desktop_browser:
+                    lease.prepare_browser_sandbox_lease(get_hermes_home())
+                    environment = runtime._owned_sandbox_env(passive=True)
+                else:
+                    from tools.terminal_tool import ensure_task_env
+
+                    environment = ensure_task_env(task_id)
+                sandbox = BrowserKubernetesExec(environment, sandbox_cdp, str(task_id or "default"))
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+                return {"error_result": tool_error("The browser CLI is unavailable in the employee sandbox.")}
+            workspace = sandbox.workspace
         try:
             if bot_desktop_browser:
                 from tools.browser_tab_runtime import prepare_native_tabs
-                code = prepare_native_tabs(code, str(task_id or ""), cmd, env, generation=generation)
-            else:
+                code = prepare_native_tabs(code, str(task_id or ""), cmd, env, generation=generation, sandbox=sandbox)
+            elif sandbox is None:
                 configure_harness_runtime(env)
-        except OSError:
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
             return {"error_result": tool_error("The browser harness needs a private runtime directory.")}
         if not bot_desktop_browser:
             _attach_vault_supervisor(env, task_id)
-        with _driven_daemons_lock:
-            route = tuple((key, env[key]) for key in _DAEMON_ROUTE_KEYS if key in env)
-            _driven_daemons.add((hermes_home_key(), route))
+        if sandbox is None:
+            with _driven_daemons_lock:
+                route = tuple((key, env[key]) for key in _DAEMON_ROUTE_KEYS if key in env)
+                _driven_daemons.add((hermes_home_key(), route))
+        run = sandbox.run if sandbox is not None else _run_cli_killing_process_group
         try:
-            proc = _run_cli_killing_process_group(cmd, code, env, timeout)
+            proc = run(cmd, code, env, timeout)
         except subprocess.TimeoutExpired:
             return {"error_result": tool_error(
                 f"browser-use exec timed out after {timeout}s. The daemon may still be working; retry "
@@ -918,10 +971,14 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
         stderr = stderr[:_STDERR_CAP_CHARS] + "\n… (stderr truncated)"
     if stderr:
         result["stderr"] = stderr
-    screenshot = _find_screenshot(proc.stdout, started)
+    if managed_kubernetes:
+        screenshot = _sandbox_browser_screenshot(proc.stdout, workspace, task_id)
+    else:
+        path = _find_screenshot(proc.stdout, started)
+        screenshot = (path, path) if path else None
     if screenshot:
-        result["screenshot_path"] = screenshot
-        native = _native_screenshot_result(result, screenshot)
+        result["screenshot_path"], retained = screenshot
+        native = _native_screenshot_result(result, retained)
         if native is not None:
             return native
     return tool_result(result)

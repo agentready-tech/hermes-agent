@@ -7,6 +7,7 @@ import pytest
 
 from tools import browser_tab_runtime as runtime
 from tools.bot_desktop import lease
+from tools.browser_sandbox_lease import BrowserLeaseView, VIEW
 from tools.browser_tab_harness import managed_tabs, wrap_code
 from tools.browser_tab_resources import TabResources, close_finished_tabs
 
@@ -102,6 +103,27 @@ def test_existing_unowned_blank_is_not_reused_or_focused(tmp_path, browser):
         assert b.visible != "human"
 
     assert "human" in b.tabs
+
+
+def test_sandbox_browser_control_view_is_public_and_follows_takeover(tmp_path):
+    lease.prepare_browser_sandbox_lease(tmp_path)
+    path = tmp_path / VIEW
+    assert json.loads(path.read_text()) == {"holder": "agent", "epoch": 0}
+    current = lease.acquire("fixture-viewer-secret", profile_key=str(tmp_path))
+    assert json.loads(path.read_text()) == {"holder": "human", "epoch": current.epoch}
+    released = lease.release("fixture-viewer-secret", profile_key=str(tmp_path))
+    assert json.loads(path.read_text()) == {"holder": "agent", "epoch": released.epoch}
+
+
+def test_sandbox_browser_does_not_dispatch_after_human_control_changes(tmp_path, browser):
+    b, _ = browser
+    current = BrowserLeaseView("agent", 0)
+    ns = {}
+    with managed_tabs(ns, str(tmp_path), "browser", "task", lease_reader=lambda: current):
+        current = BrowserLeaseView("human", 1)
+        with pytest.raises(RuntimeError, match="under human control"):
+            ns["cdp"]("Target.closeTarget", targetId=b.current)
+    assert not b.closed
 
 
 def test_explicit_human_tab_survives_calls_and_cleanup_without_becoming_owned(tmp_path, browser):

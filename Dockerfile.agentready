@@ -9,6 +9,10 @@ ARG AGENTSEE_RUNTIME_CAPABILITIES=auxiliary-gateway-v1,workspace-inbox-v1,subscr
 USER root
 WORKDIR /opt/hermes
 RUN /opt/hermes/.venv/bin/python deploy/kubernetes/release_source.py verify /opt/hermes
+RUN /opt/hermes/.venv/bin/python deploy/kubernetes/build_sandbox_browser.py \
+      /usr/local/share/agentsee/sandbox-browser.tar.gz \
+      "$(/opt/hermes/.venv/bin/python -c 'from pm import installed_package; print(installed_package("uv").binary)')" \
+      /usr/bin/python3
 COPY --from=kubectl /bin/kubectl /usr/local/bin/kubectl
 COPY --from=init /usr/local/bin/docker-init /usr/local/bin/agentsee-init
 ADD --checksum=sha256:79b8aa8594ca03b44569646cca6a7bd36b22616224d8ad7e6f28d75ad43e3659 https://codeload.github.com/NousResearch/hermes-official-plugins/tar.gz/2da429264671788748f69bca7d5a2216c1885b92 /opt/claude-provider.tar.gz

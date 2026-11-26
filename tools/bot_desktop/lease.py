@@ -123,7 +123,36 @@ def _write(path: Path, lease: Lease) -> None:
     tmp = path.with_suffix(".json.tmp")
     with open(tmp, "w", encoding="utf-8", opener=_open_private) as fh:
         fh.write(json.dumps(lease.as_dict()))
+    if lease.holder == HUMAN:
+        _publish_browser_sandbox_lease(path.parent.parent, lease)
     os.replace(tmp, path)
+    if lease.holder == AGENT:
+        _publish_browser_sandbox_lease(path.parent.parent, lease)
+
+
+def _publish_browser_sandbox_lease(home: Path, current: Lease) -> None:
+    from tools.browser_sandbox_lease import BrowserLeaseView, VIEW, publish
+
+    view = home / VIEW
+    if not view.parent.is_dir():
+        return
+    try:
+        publish(home, BrowserLeaseView(current.holder, current.epoch))
+    except OSError:
+        view.unlink(missing_ok=True)
+        logger.warning("Could not publish the browser sandbox control view")
+
+
+def prepare_browser_sandbox_lease(home: Path) -> None:
+    from tools.browser_sandbox_lease import BrowserLeaseView, VIEW, publish
+
+    path = _path(str(home))
+    # Reconcile an expired human grant before reading under the writer lock.
+    get(str(home))
+    with _locked(path):
+        (home / VIEW).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        current = _read(path)
+        publish(home, BrowserLeaseView(current.holder, current.epoch))
 
 
 class _locked:
