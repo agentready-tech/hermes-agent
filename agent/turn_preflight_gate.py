@@ -19,6 +19,7 @@ logger = logging.getLogger("agent.conversation_loop")
 
 def run_preflight_gate(
     agent: Any, *, request_pressure_tokens: Any, _moa_prepared_request: Any,
+    api_messages: Any, tools_for_api: Any,
     pending_moa_prepared_request: Any, messages: Any, system_message: Any, user_message: Any,
     active_system_prompt: Any, conversation_history: Any, api_call_count: Any,
     compression_attempts: Any, max_compression_attempts: Any, effective_task_id: Any,
@@ -62,6 +63,10 @@ def run_preflight_gate(
     # failure cooldown, then should_compress().
     _compressor = agent.context_compressor
     _preflight_threshold = int(getattr(_compressor, "threshold_tokens", 0) or 0)
+    client = getattr(agent, "client", None)
+    measure = getattr(type(client), "preflight_input_size", None)
+    input_size = measure(client, api_messages, tools_for_api) if measure is not None else None
+    exceeds_byte_limit = input_size is not None and input_size[0] > input_size[1]
     _provider_overflow_preflight = _provider_overflow_recovery_pending and (
         _preflight_threshold <= 0 or request_pressure_tokens >= _preflight_threshold
     )
@@ -71,24 +76,24 @@ def run_preflight_gate(
         v._provider_overflow_recovery_pending = False
     # Compare fully assembled requests, not raw ``messages`` (which omit
     # api_content, plugin injections, prefills, MoA context, ephemeral system text).
+    progress = input_size[0] if input_size is not None else request_pressure_tokens
     if (
         _last_preflight_pressure is not None
-        and request_pressure_tokens >= _preflight_threshold
+        and (exceeds_byte_limit or request_pressure_tokens >= _preflight_threshold)
         and not _compression_warrants_another_preflight_pass(
-            _last_preflight_pressure, request_pressure_tokens, _preflight_threshold
+            _last_preflight_pressure, progress, 0 if input_size is not None else _preflight_threshold,
         )
     ):
         # Stop proactive retries this turn without consuming the shared overflow-
         # recovery budget; the provider's error handler may still compact.
         v._preflight_compression_blocked = True
         logger.warning(
-            "Pre-API compression made insufficient progress: ~%s -> "
-            "~%s request tokens; skipping additional preflight passes",
-            f"{_last_preflight_pressure:,}",
-            f"{request_pressure_tokens:,}",
+            "Pre-API compression made insufficient progress: %s -> %s request %s; skipping additional preflight passes",
+            f"{_last_preflight_pressure:,}", f"{progress:,}", "bytes" if input_size is not None else "tokens",
         )
     return run_preflight_compression(
         agent, v, compressor=_compressor, request_pressure_tokens=request_pressure_tokens,
+        input_size=input_size,
         provider_overflow_preflight=_provider_overflow_preflight,
         # An anchored figure is real usage + delta: never deferred. Only a whole-context rough
         # estimate waits for the provider's count.

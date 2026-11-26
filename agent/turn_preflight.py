@@ -54,10 +54,34 @@ class PreflightGateVerdict:
     result: Optional[dict[str, Any]] = None
 
 
+def _announce_token_pressure(agent, compressor, tokens, attempt, max_attempts) -> None:
+    threshold = int(getattr(compressor, "threshold_tokens", 0) or 0)
+    context_length = int(getattr(compressor, "context_length", 0) or 0)
+    logger.info(
+        "Pre-API compression: ~%s request tokens >= %s threshold (context=%s, attempt=%s/%s)",
+        f"{tokens:,}", f"{threshold:,}", f"{context_length:,}" if context_length else "unknown",
+        attempt, max_attempts,
+    )
+    status = automatic_compaction_status_message(
+        compressor,
+        phase="pre_api",
+        default_message=PRE_API_COMPRESSION_STATUS_TEMPLATE.format(tokens=tokens),
+        approx_tokens=tokens,
+        threshold_tokens=threshold,
+        context_length=context_length,
+        model=agent.model,
+        attempt=attempt,
+        max_attempts=max_attempts,
+    )
+    if status:
+        agent._emit_status(status)
+
+
 def run_preflight_compression(
     agent: Any, v: PreflightGateVerdict, *, compressor: Any, request_pressure_tokens: int,
     provider_overflow_preflight: bool, defer_preflight: Any, moa_prepared_request: Any,
     system_message: Any, user_message: Any, max_compression_attempts: int, effective_task_id: Any,
+    input_size: tuple[int, int] | None = None,
 ) -> PreflightGateVerdict:
     """Mirror of the turn-prologue guard chain (defer on noisy estimate → skip in failure
     cooldown → ``should_compress``), rebinding the loop locals on ``v`` and setting
@@ -93,13 +117,18 @@ def run_preflight_compression(
     if _eligible:
         # Aux clamp must land before the first compaction fires on the main-window threshold (#114707).
         ensure_compression_feasibility_checked(agent, request_pressure_tokens)
+    exceeds_byte_limit = input_size is not None and input_size[0] > input_size[1]
+    trigger_tokens = request_pressure_tokens
+    if exceeds_byte_limit:
+        # Exact byte overflow is actionable even when the model's token window has room.
+        trigger_tokens = max(trigger_tokens, compressor.threshold_tokens)
     if (
         _eligible
         and not _review_fork_first_request_pending(agent)
         and (not v._preflight_compression_blocked or provider_overflow_preflight)
-        and (not defer_preflight(request_pressure_tokens) or provider_overflow_preflight)
+        and (exceeds_byte_limit or not defer_preflight(request_pressure_tokens) or provider_overflow_preflight)
         and not _compression_cooldown
-        and compressor.should_compress(request_pressure_tokens)
+        and compressor.should_compress(trigger_tokens)
     ):
         # Managed local runtime: grow the context window before compressing (last
         # resort). Only for a llamacpp provider at the supervised base_url.
@@ -116,33 +145,16 @@ def run_preflight_compression(
         # Compression is running: reset the blocked-overflow warning dedup so a
         # later blocked turn warns again.
         _clear_overflow_warn(agent)
-        _threshold = int(getattr(compressor, "threshold_tokens", 0) or 0)
-        _context_length = int(getattr(compressor, "context_length", 0) or 0)
-        logger.info(
-            "Pre-API compression: ~%s request tokens >= %s threshold "
-            "(context=%s, attempt=%s/%s)",
-            f"{request_pressure_tokens:,}",
-            f"{_threshold:,}",
-            f"{_context_length:,}" if getattr(compressor, "context_length", 0) else "unknown",
-            v.compression_attempts,
-            max_compression_attempts,
-        )
-        _pre_api_status = automatic_compaction_status_message(
-            compressor,
-            phase="pre_api",
-            default_message=PRE_API_COMPRESSION_STATUS_TEMPLATE.format(
-                tokens=request_pressure_tokens
-            ),
-            approx_tokens=request_pressure_tokens,
-            threshold_tokens=_threshold,
-            context_length=_context_length,
-            model=agent.model,
-            attempt=v.compression_attempts,
-            max_attempts=max_compression_attempts,
-        )
-        if _pre_api_status:
-            agent._emit_status(_pre_api_status)
-        v._last_preflight_pressure = request_pressure_tokens
+        if exceeds_byte_limit:
+            logger.info(
+                "Pre-API compression: request of %s bytes exceeds the %s-byte transport limit (attempt=%s/%s)",
+                *input_size, v.compression_attempts, max_compression_attempts,
+            )
+        else:
+            _announce_token_pressure(
+                agent, compressor, request_pressure_tokens, v.compression_attempts, max_compression_attempts,
+            )
+        v._last_preflight_pressure = input_size[0] if input_size is not None else request_pressure_tokens
         _pre_api_input = v.messages
         v.messages, v.active_system_prompt = agent._compress_context(
             v.messages, system_message, approx_tokens=request_pressure_tokens,
