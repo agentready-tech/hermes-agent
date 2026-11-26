@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 from threading import Barrier, Event
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -89,6 +90,28 @@ def test_request_waits_for_old_ready_pod_to_disappear(sandbox, monkeypatch):
     assert state["scales"] == []
     with lifecycle.active() as (identity, _):
         assert identity["uid"] == "generation-2"
+    assert state["scales"] == [1]
+
+
+def test_cold_start_allows_time_to_pull_the_sandbox_image(sandbox, monkeypatch):
+    lifecycle, state, _ = sandbox
+    elapsed = 0.0
+
+    def sleep(seconds):
+        nonlocal elapsed
+        elapsed += seconds
+
+    def read_pod():
+        if state["replicas"] and elapsed < 38:
+            return {"status": {"phase": "Pending"}}
+        return state["pod"]
+
+    monkeypatch.setattr("tools.environments.kubernetes_lifecycle.time",
+                        SimpleNamespace(monotonic=lambda: elapsed, sleep=sleep))
+    monkeypatch.setattr(lifecycle, "_pod", read_pod)
+
+    with lifecycle.active() as (identity, _):
+        assert identity["uid"] == "generation-1"
     assert state["scales"] == [1]
 
 
