@@ -1,5 +1,6 @@
-"""Hosted Antigravity admission boundary. This release has no live launcher."""
+"""Hosted Antigravity admission and fixed launch operations."""
 
+from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 
@@ -8,10 +9,11 @@ from providers.agy_policy import AgyError, BINARY, LOCAL_ENDPOINT, MODEL, PROVID
 
 
 def admit(home, operation):
-    """Return a scoped authority only after G1/G2; no user configuration can do this.
+    """The shared-profile workload has no dedicated process/keyring boundary.
 
-    The offline suite substitutes this function in its isolated interpreter.
-    Presence of the immutable binary, credentials or model config is not admission.
+    Its profile scope is not a sandbox: the workload carries the profile tree
+    and sandbox-control sockets. Do not fall back to a local subprocess, even
+    with fixed image-owned argv.
     """
     raise AgyError("unavailable")
 
@@ -32,6 +34,49 @@ def child_environment(scratch):
 
 # Any qualified launcher must isolate the CLI's own auth diagnostics in scratch.
 LOGIN_COMMAND = (BINARY, "acp", "--login")
+_PROBE_ANSWER = "AGE11_READY"
+_PROBE_PROMPT = f'Reply with exactly this JSON: {{"type":"final","answer":"{_PROBE_ANSWER}"}}'
+
+
+@dataclass(frozen=True)
+class StagedStore:
+    """Opaque non-credential binding minted by the host for one staged generation."""
+
+    generation: str
+    namespace: str
+    policy: str
+
+
+def require_authority(authority, home, operation):
+    if admit(home, operation) is not authority:
+        raise AgyError("unavailable")
+    return authority
+
+
+def start_login(authority, home, stage):
+    # spawn_staged must reject stale/foreign bindings before exec and bind the
+    # full lease to the same private store for both operations.
+    return require_authority(authority, home, "login").spawn_staged(home, stage, "login", LOGIN_COMMAND)
+
+
+def verify_staged(authority, home, stage, login_pid, cancelled):
+    """A fixed print on the staged store proves usability, not an account claim."""
+    from providers.agy_process import close_child, communicate
+
+    if cancelled():
+        raise AgyError("cancelled")
+    parser = import_module("plugins.model-providers.gemini-antigravity.protocol").Stream()
+    owner = require_authority(authority, home, "login")
+    child = owner.spawn_staged(home, stage, "probe", print_command(_PROBE_PROMPT))
+    if child.pid <= 0 or child.pid == login_pid:
+        close_child(child)
+        raise AgyError("unavailable")
+    status, diagnostics = communicate(child, parser.feed, timeout=125, cancelled=cancelled)
+    result = parser.finish(status)
+    if diagnostics:
+        raise AgyError("containment")
+    if result != {"type": "final", "answer": _PROBE_ANSWER}:
+        raise AgyError("protocol")
 
 
 def profile_for(home):

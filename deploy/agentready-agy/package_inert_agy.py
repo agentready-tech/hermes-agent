@@ -34,6 +34,11 @@ def install(archive, output, pin):
 
 def main():
     archive, provenance = map(Path, sys.argv[1:])
+    data = json.loads(provenance.read_text())
+    # This same capability list is also stamped as an OCI label by the overlay.
+    # Reject a live label at build time instead of only scrubbing the JSON copy.
+    if any(name.strip() == "gemini-antigravity-v1" for name in data["capabilities"]):
+        raise ValueError("An inert Antigravity image cannot advertise live Gemini")
     pin = json.loads(PIN.read_text())
     install(archive, DESTINATION, pin)
     settings = PIN.with_name("agy_offline_settings.json").read_bytes()
@@ -42,9 +47,7 @@ def main():
     policy.chmod(0o444)
     DESTINATION.parent.chmod(0o555)
     DESTINATION.parent.parent.chmod(0o555)
-    data = json.loads(provenance.read_text())
     data["inert_payloads"] = {"antigravity": {**pin, "path": str(DESTINATION), "settingsSha256": hashlib.sha256(settings).hexdigest(), "live": False}}
-    data["capabilities"] = [name for name in data["capabilities"] if name != "gemini-antigravity-v1"]
     provenance.write_text(json.dumps(data) + "\n")
     provenance.chmod(0o444)
 

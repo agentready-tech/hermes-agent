@@ -1,6 +1,5 @@
 """Protected owner-bound Antigravity login. No credential exchange in Hermes."""
 
-from dataclasses import dataclass
 import re
 import secrets
 from threading import Event, RLock
@@ -31,15 +30,6 @@ def login_url(value):
             and bool(fields.get("code_challenge")) and fields.get("code_challenge_method") == ["S256"])
 
 
-@dataclass(frozen=True)
-class Readback:
-    generation: str
-    namespace: str
-    policy: str
-    subject: str
-    pid: int
-
-
 class Attempt:
     def __init__(self, authority, home, stage, viewer, *, validate_url=login_url, timeout=900):
         self.id = secrets.token_urlsafe(24)
@@ -50,7 +40,7 @@ class Attempt:
         self.lock, self.done, self.cancelled = RLock(), Event(), Event()
         self.home, self.authority, self.validate_url = home, authority, validate_url
         self.timeout = timeout
-        self.child = authority.spawn(home, stage.generation, "login", agy_runtime.LOGIN_COMMAND)
+        self.child = agy_runtime.start_login(authority, home, stage)
         self.worker = spawn_context_thread(self._run, name="protected-agy-login")
         self.worker.start()
 
@@ -64,13 +54,14 @@ class Attempt:
                 self._finish(status)
                 return
             self._finish("verifying")
-            proof = self.authority.verify(self.home, self.stage, self.cancelled.is_set)
-            if self._matches(proof):
-                with self.lock:
-                    if (not self.cancelled.is_set() and agy_runtime.admit(self.home, "login") is self.authority
-                            and self.authority.promote(self.home, self.stage)):
-                        self.status = "approved"
-                        return
+            agy_runtime.verify_staged(self.authority, self.home, self.stage, self.child.pid, self.cancelled.is_set)
+            with self.lock:
+                if self.cancelled.is_set():
+                    raise AgyError("cancelled")
+                agy_runtime.require_authority(self.authority, self.home, "login")
+                if self.authority.promote(self.home, self.stage):
+                    self.status = "approved"
+                    return
             self._finish("error")
         except (AgyError, OSError, ValueError):
             self._finish("cancelled" if self.cancelled.is_set() else "error")
@@ -81,11 +72,6 @@ class Attempt:
             finally:
                 self._finish(self.status if self.status not in {"pending", "verifying"} else "error")
                 self.done.set()
-
-    def _matches(self, proof):
-        return (isinstance(proof, Readback) and proof.pid > 0 and proof.pid != self.child.pid
-                and (proof.generation, proof.namespace, proof.policy, proof.subject) == (
-                    self.stage.generation, self.stage.namespace, self.stage.policy, self.stage.subject))
 
     def _finish(self, status):
         with self.lock:
@@ -109,6 +95,10 @@ class Attempt:
     def _take_code(self):
         with self.lock:
             value, self.code = self.code, None
+            if value is not None:
+                if self.cancelled.is_set():
+                    raise AgyError("cancelled")
+                agy_runtime.require_authority(self.authority, self.home, "login")
             return value
 
     def submit(self, code):

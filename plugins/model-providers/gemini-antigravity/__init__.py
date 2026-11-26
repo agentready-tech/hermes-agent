@@ -3,7 +3,7 @@
 from threading import Event
 from types import SimpleNamespace
 
-from hermes_runtime.standalone.agy_runtime import print_command
+from hermes_runtime.standalone import agy_runtime
 from providers.agy_policy import AgyError, LOCAL_ENDPOINT, MODEL, PROVIDER
 from providers.agy_process import communicate
 from providers.base import ProviderProfile
@@ -55,9 +55,8 @@ class Client:
     def require_current(self):
         if self._cancelled():
             raise AgyError("cancelled")
-        from hermes_runtime.standalone import agy_runtime
-        authority = agy_runtime.admit(self.home, "inference")
-        if authority is not self.authority or authority.active(self.home) != self.generation:
+        authority = agy_runtime.require_authority(self.authority, self.home, "inference")
+        if authority.active(self.home) != self.generation:
             raise AgyError("auth_required")
         if self.selection is not None:
             self.selection.require_saved()
@@ -72,7 +71,7 @@ class Client:
         try:
             with config_write_lock(self.home / "config.yaml") if self.selection is not None else nullcontext():
                 self.require_current()
-                child = authority.spawn(self.home, self.generation, "inference", print_command(prompt))
+                child = authority.spawn(self.home, self.generation, "inference", agy_runtime.print_command(prompt))
             rc, diagnostics = communicate(child, parser.feed, timeout=125, cancelled=self._cancelled)
             row = parser.finish(rc)
             if diagnostics:

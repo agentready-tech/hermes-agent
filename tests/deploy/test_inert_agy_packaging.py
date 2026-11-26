@@ -56,6 +56,10 @@ def test_pin_and_inert_package_verifier(tmp_path, monkeypatch):
     monkeypatch.setattr(packaging, "PIN", fixture_pin)
     monkeypatch.setattr(packaging, "DESTINATION", output)
     monkeypatch.setattr("sys.argv", ["package_inert_agy.py", str(archive), str(provenance)])
+    with pytest.raises(ValueError, match="cannot advertise live Gemini"):
+        packaging.main()
+    assert not output.exists()
+    provenance.write_text(json.dumps({"revision": "fixture-source", "capabilities": ["subscriptions-v1"]}))
     packaging.main()
     installed = json.loads(provenance.read_text())
     assert installed["revision"] == "fixture-source" and installed["capabilities"] == ["subscriptions-v1"]

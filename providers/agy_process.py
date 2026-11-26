@@ -15,6 +15,8 @@ STDERR_LIMIT = 64 * 1024
 def stop(child):
     """Stop the group, not just the leader: a descendant may hold the pipes."""
     group = child.pid
+    if group <= 0:
+        raise AgyError("transport")  # Never signal the caller's group (0) or a wildcard PID.
     try:
         os.killpg(group, signal.SIGTERM)
     except ProcessLookupError:
@@ -49,10 +51,14 @@ def communicate(child, consume, *, timeout, cancelled, input_data=None):
     except (OSError, subprocess.SubprocessError):
         raise AgyError("transport") from None
     finally:
-        for pipe in (child.stdin, child.stdout, child.stderr):
-            if pipe is not None:
-                pipe.close()
-        stop(child)
+        close_child(child)
+
+
+def close_child(child):
+    for pipe in (child.stdin, child.stdout, child.stderr):
+        if pipe is not None:
+            pipe.close()
+    stop(child)
 
 
 def _drain(child, selector, deadline, cancelled, diagnostics, input_data):

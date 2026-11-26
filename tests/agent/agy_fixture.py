@@ -20,13 +20,20 @@ def spawn(cwd, mode, *args, login=False):
 
 
 def child(mode, response='{"type":"final","answer":"Ответ ☃"}', prompt=""):
-    if mode in {"login", "invalid-grant"}:
+    marker = Path("fixture-store-ready")
+    if mode.startswith("store-probe:"):
+        if not marker.is_file() or marker.read_text() != "synthetic only":
+            return 6
+        mode = mode.removeprefix("store-probe:")
+    if mode in {"login", "store-login", "invalid-grant"}:
         print(response, flush=True)
         if sys.stdin.buffer.read() != b"fixture-only\n":
             return 5
         if mode == "invalid-grant":
             print("invalid_grant fixture diagnostic", file=sys.stderr)
             return 3
+        if mode == "store-login":
+            marker.write_text("synthetic only")
         return 0
     if mode == "tree":
         subprocess.Popen([sys.executable, "-I", "-c", "import signal; signal.pause()"])
