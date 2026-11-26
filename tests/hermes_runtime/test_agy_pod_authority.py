@@ -51,6 +51,32 @@ def test_staged_cancel_cannot_change_the_active_or_foreign_profile(tmp_path, mon
                       ("b", "clear", next_login.generation)]
 
 
+def test_approved_image_update_keeps_the_same_profile_login(tmp_path, monkeypatch):
+    home = tmp_path / "profiles" / ("env_" + "a" * 32)
+    home.mkdir(parents=True)
+    first_image = "fixture.invalid/runtime@sha256:" + "0" * 64
+    next_image = "fixture.invalid/runtime@sha256:" + "1" * 64
+    namespace = "agentsee-a-" + "a" * 32
+    before = PodAuthority(home, namespace, "fixture", (("uid-a", first_image), ("uid-b", first_image)))
+    monkeypatch.setattr(before, "control", lambda *_: None)
+    store = before.stage(home)
+    assert before.promote(home, store)
+    persisted = before.binding.read_bytes()
+
+    updated = PodAuthority(home, namespace, "fixture", (("uid-a", next_image), ("uid-b", next_image)))
+    monkeypatch.setattr(updated, "launch", lambda row, op, payload: (row["slot"], row["generation"], op, payload))
+    assert updated.active(home) == before.active(home) == store.generation
+    assert updated.spawn(home, store.generation, "inference", "fixture") == ("a", store.generation, "inference", "fixture")
+    assert updated.binding.read_bytes() == persisted
+
+    replaced = PodAuthority(home, namespace, "fixture", (("new-uid-a", next_image), ("uid-b", next_image)))
+    assert replaced.active(home) is None
+    with pytest.raises(AgyError, match="Connect"):
+        replaced.spawn(home, store.generation, "inference", "fixture")
+    with pytest.raises(AgyError):
+        updated.spawn(home.parent / "foreign", store.generation, "inference", "fixture")
+
+
 def test_acp_catalog_uses_bound_store_and_refreshes_for_new_login(tmp_path, monkeypatch):
     image = "fixture.invalid/runtime@sha256:" + "0" * 64
     owner = PodAuthority(tmp_path, "fixture", "fixture", (("uid-a", image), ("uid-b", image)), acp=True)

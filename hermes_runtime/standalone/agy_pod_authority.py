@@ -155,6 +155,7 @@ class PodAuthority:
             generation = secrets.token_hex(16)
             uid, image = self.slots[slot]
             self.control(slot, "prepare", generation)
+            # Older runtimes need the image field when rolling back.
             state["staged"] = {"slot": slot, "generation": generation, "uid": uid, "image": image}
             self.save(state)
             return StagedStore(generation, f"{self.namespace}/agy-{slot}", uid)
@@ -163,8 +164,10 @@ class PodAuthority:
         if not isinstance(entry, dict):
             return None
         slot, generation = entry.get("slot"), entry.get("generation")
+        # The credential belongs to the profile's slot. Image changes are
+        # controlled by provisioning and rollout, and do not change its store.
         if (slot not in self.slots or not isinstance(generation, str) or not GENERATION.fullmatch(generation)
-                or (entry.get("uid"), entry.get("image")) != self.slots[slot]):
+                or entry.get("uid") != self.slots[slot][0]):
             return None
         return entry
 
