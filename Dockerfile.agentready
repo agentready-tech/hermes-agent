@@ -12,6 +12,9 @@ ARG AGENTSEE_RUNTIME_CAPABILITIES=auxiliary-gateway-v1,workspace-inbox-v1,subscr
 USER root
 WORKDIR /opt/hermes
 RUN /opt/hermes/.venv/bin/python deploy/kubernetes/release_source.py verify /opt/hermes
+RUN uv="$(/opt/hermes/.venv/bin/python -c 'from pm import uv_launcher; path = uv_launcher("uv"); assert path, "PM uv is unavailable"; print(path)')" \
+    && /opt/hermes/.venv/bin/python deploy/kubernetes/build_sandbox_browser.py \
+       /usr/local/share/agentsee/sandbox-browser.tar.gz "$uv" /usr/bin/python3
 COPY --from=kubectl /bin/kubectl /usr/local/bin/kubectl
 COPY --from=init /usr/local/bin/docker-init /usr/local/bin/agentsee-init
 RUN apt-get -o Acquire::Retries=3 update \

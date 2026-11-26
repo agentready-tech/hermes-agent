@@ -143,6 +143,14 @@ class MailStore(ProjectStore):
         digest = hashlib.sha256(content.encode()).hexdigest()
         origin = self.routing_origin(target) if wake else {"wake": False}
         goal_id = None
+        if wake and target in self.nodes and not origin.get("wake"):
+            from hermes_runtime.adapters.hermes import enabled
+            from hermes_runtime.adapters.state import main_gateway_origin, resolve_home
+
+            if enabled() and resolve_home(self.root_id):
+                route = main_gateway_origin()
+                if route:
+                    origin = {**origin, **route, "wake": True}
         if child_event:
             from hermes_runtime.adapters.state import main_gateway_origin
 
@@ -229,8 +237,12 @@ class MailStore(ProjectStore):
                              [(delivery_id, row["message_id"]) for row in batch])
         text = "\n\n".join(mail_header(row['message_id'], row['sender_session_id'], row['kind']) + row['content'] for row in batch)
         text += MAIL_INSTRUCTIONS
+        metadata = {"agent_message_ids": [row["message_id"] for row in batch]}
+        project_input = request_id or getattr(self.actor, "_delegation_id", None)
+        if isinstance(project_input, str) and project_input.startswith("project-msg-"):
+            metadata["project_input_id"] = project_input
         return {"role": "user", "content": text, "message_id": delivery_id, "display_kind": "agent_message",
-                "display_metadata": {"agent_message_ids": [row["message_id"] for row in batch]}}
+                "display_metadata": metadata}
 
 
 def _delivery_batch(pending, start, delivery_id):

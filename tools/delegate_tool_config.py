@@ -6,6 +6,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 from utils import base_url_hostname, is_truthy_value
+from hermes_cli.config_defaults import DEFAULT_CONFIG
 from hermes_cli.fallback_config import scoped_fallback_chain
 
 logger = logging.getLogger("tools.delegate_tool")  # log-record parity with the origin module
@@ -18,7 +19,7 @@ _DEFAULT_MAX_CONCURRENT_CHILDREN = 10
 # One-shot guard: _get_max_concurrent_children() runs on every get_definitions()
 # schema rebuild, so the >10 cost advisory would otherwise log on every turn.
 _HIGH_CONCURRENCY_WARNED = False
-MAX_DEPTH = 1  # flat by default: parent (0) -> child (1); deeper needs max_spawn_depth
+MAX_DEPTH = DEFAULT_CONFIG["delegation"]["max_spawn_depth"]
 _MIN_SPAWN_DEPTH = 1  # floor for the configurable cap; MAX_DEPTH stays the default
 _LEGACY_MAX_ASYNC_WARNED = False
 # No default wall-clock cap on children: legitimate heavy work (deep reviews, research fan-outs, slow reasoning
@@ -150,7 +151,7 @@ def _get_child_timeout() -> Optional[float]:
 
 def _get_max_spawn_depth() -> int:
     """delegation.max_spawn_depth floored at 1 (no ceiling). Depth 0 is the parent; agents at depths 0..N-1 may spawn,
-    depth N is the leaf floor. Default 1 is flat. Each extra level multiplies API cost."""
+    depth N is the leaf floor. Each extra level multiplies API cost."""
     def _floored(v):
         ival = int(v)
         if ival < _MIN_SPAWN_DEPTH:

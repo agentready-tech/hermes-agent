@@ -190,14 +190,14 @@ def _prune_durable_records() -> None:
     cutoff = time.time() - _DURABLE_RETENTION_SECONDS
     with _DB_LOCK, _transaction() as conn:
         conn.execute(
-            "DELETE FROM async_delegations WHERE delivery_state='delivered' AND updated_at < ?", (cutoff,))
+            "DELETE FROM async_delegations WHERE delivery_state IN ('delivered','suppressed') AND updated_at < ?", (cutoff,))
         terminal_count = conn.execute(
             "SELECT COUNT(*) FROM async_delegations WHERE state NOT IN ('running','finalizing')").fetchone()[0]
         if terminal_count > _MAX_RETAINED_COMPLETED:
             conn.execute("""DELETE FROM async_delegations WHERE delegation_id IN (
                      SELECT delegation_id FROM async_delegations
                      WHERE state NOT IN ('running','finalizing')
-                     ORDER BY CASE delivery_state WHEN 'delivered' THEN 0 ELSE 1 END,
+                     ORDER BY CASE WHEN delivery_state IN ('delivered','suppressed') THEN 0 ELSE 1 END,
                               updated_at ASC LIMIT ?
                    )""", (terminal_count - _MAX_RETAINED_COMPLETED,))
         pending_count = conn.execute("""SELECT COUNT(*) FROM async_delegations
@@ -214,12 +214,15 @@ def _persist_completion(event: dict[str, Any], result: dict[str, Any]) -> None:
     if remote := worker_ledger():
         return remote.complete(event, result)
     now = time.time()
+    # A report from a still-running orchestration belongs in its saved transcript.
+    continuing = result.get("goal_continuing") is True
     with _DB_LOCK, _transaction() as conn:
         conn.execute("""UPDATE async_delegations SET state=?, completed_at=?, updated_at=?,
-               event_json=?, result_json=?, delivery_state='pending'
+               event_json=?, result_json=?, delivery_state=?
                WHERE delegation_id=?""",
             (event.get("status", "completed"), event.get("completed_at", now), now,
-             json.dumps(event), json.dumps(result), event["delegation_id"]))
+             None if continuing else json.dumps(event), json.dumps(result),
+             "suppressed" if continuing else "pending", event["delegation_id"]))
         conn.execute("UPDATE delegated_project_messages SET published=1 WHERE message_id=?", (event["delegation_id"],))
 
 
@@ -1032,6 +1035,8 @@ def _push_completion_event(record: dict[str, Any], result: dict[str, Any], statu
     except Exception as exc:
         logger.error(f"Async delegation{label} %s: durable completion write failed; delivering in-memory "
                      "only (a restart may report this unit as unknown): %s", record.get("delegation_id"), exc)
+    if result.get("goal_continuing") is True:
+        return
     try:
         process_registry.completion_queue.put(evt)
     except Exception as exc:  # pragma: no cover

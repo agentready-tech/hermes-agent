@@ -1,11 +1,43 @@
 """Panel chat transports the existing native RPC and home events without a second chat backend."""
 
 import asyncio
+import base64
 import json
 import pytest
 
 from hermes_runtime.standalone.panel import bridge
 from hermes_runtime.standalone.panel_auth import NativeScreenAuth
+
+
+def test_panel_upload_returns_path_visible_in_its_kubernetes_sandbox(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from hermes_runtime.adapters import hermes
+    from hermes_runtime.sessions import HOME_SESSION_ID
+    from hermes_runtime.standalone.panel_chat import MainChat
+
+    home = tmp_path / "profiles" / "env_fixture"
+    home.mkdir(parents=True)
+    (home / "config.yaml").write_text("terminal:\n  backend: kubernetes\n", encoding="utf-8")
+    monkeypatch.setattr(hermes, "managed_home", lambda: home)
+    payload = b"synthetic upload"
+
+    async def upload():
+        rpc = AsyncMock(return_value={"session_id": HOME_SESSION_ID, "execution_generation": 1, "messages": []})
+        chat = MainChat(SimpleNamespace(rpc=rpc))
+        await chat.dispatch({"method": "session.resume"})
+        return await chat.dispatch({"method": "file.attach", "params": {
+            "session_id": HOME_SESSION_ID,
+            "name": "report.docx",
+            "data_url": "data:application/octet-stream;base64," + base64.b64encode(payload).decode(),
+        }})
+
+    result = asyncio.run(upload())
+
+    assert (home / "attachments" / "report.docx").read_bytes() == payload
+    assert result["path"] == "/root/.hermes/attachments/report.docx"
+    assert result["ref_text"] == "@file:/root/.hermes/attachments/report.docx"
 
 
 def test_chat_reverse_channel_preserves_native_rpc_and_observer_feed():

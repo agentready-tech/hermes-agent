@@ -163,8 +163,10 @@ ORCHESTRATOR_GOAL_INSTRUCTIONS = (
     "Use reply_probe for an existing declared GET that returns the exact thread ID per message. A polled reply resumes the same worker "
     "and carries the original reply_ref; evaluate the actual reply criterion before closing the wait. "
     "The timer resumes that same worker and the result returns here. Yield while work is waiting. "
-    "Report the overall verified outcome to main. To request main's action, block the exact child Goal "
-    "with the specific blocker and unblock condition and set notify=true. Routine checks stay internal."
+    "End your turn with the verified outcome or the concrete reason work stopped. Hermes returns "
+    "this as a delegation result to main. To request main's action, block the exact child Goal "
+    "with the specific blocker and unblock condition and set notify=true. Use coordination messages "
+    "for work within this assignment. Routine checks stay internal."
 )
 
 

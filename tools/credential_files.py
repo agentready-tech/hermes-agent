@@ -340,8 +340,8 @@ def map_cache_path_to_container(host_path: str, container_base: str = "/root/.he
 
 
 def from_agent_visible_cache_path(container_path: str, container_base: str = "/root/.hermes") -> str:
-    """Inverse of :func:`to_agent_visible_cache_path`; unchanged unless Docker + cache dir."""
-    if _terminal_backend() != "docker":
+    """Resolve a bind-mounted cache alias back to the owning profile's source file."""
+    if _terminal_backend() not in ("docker", "kubernetes"):
         return container_path
     mapped = _remap_cache_path(container_path, container_base, "container_path", "host_path", lambda root, rel: str(Path(root) / rel))
     return mapped if mapped is not None else container_path
@@ -367,7 +367,7 @@ def to_agent_visible_cache_path(host_path: str, container_base: str = "/root/.he
     ``cache_path_base`` (None = host paths stay correct); local/singularity/unknown unchanged
     (Apptainer auto-binds the host home, so translation would dangle).
 
-    * docker / modal — bind-mounted (docker) or per-file-synced (modal) at ``/root/.hermes`` (the
+    * docker / kubernetes / modal — mounted or per-file-synced at ``/root/.hermes`` (the
     *container_base* default). * ssh / daytona / vercel_sandbox — file-synced under the remote user's home;
     ``~/.hermes`` is shell-expanded by the remote shell, so tool commands resolve it regardless of the
     actual remote home. Previously these backends synced the bytes but still rendered the dangling host path
@@ -376,7 +376,7 @@ def to_agent_visible_cache_path(host_path: str, container_base: str = "/root/.he
     backend = _terminal_backend()
     if backend in _HOME_RELATIVE_BACKENDS:
         container_base = "~/.hermes"
-    elif backend not in ("docker", "modal"):
+    elif backend not in ("docker", "kubernetes", "modal"):
         try:
             from agent.terminal_env_registry import provider_flag
             plugin_base = provider_flag(backend, "cache_path_base", None)

@@ -15,7 +15,9 @@ import time
 from tools.environments.base import EnvironmentConnectionError
 from tools.environments.remote_common import run_capture
 
-_READY_TIMEOUT = 30.0
+# A cold sandbox may need to download and unpack its image before it is ready.
+_START_TIMEOUT = 120.0
+_STOP_TIMEOUT = 30.0
 _RETRY_INTERVAL = 0.25
 
 
@@ -101,7 +103,7 @@ class SandboxLifecycle:
         return pod_identity(pod, self.namespace, self.pod, self.container)
 
     def _wait_absent(self) -> None:
-        deadline = time.monotonic() + _READY_TIMEOUT
+        deadline = time.monotonic() + _STOP_TIMEOUT
         while self._pod():
             if time.monotonic() >= deadline:
                 raise EnvironmentConnectionError("The previous Kubernetes sandbox is still stopping")
@@ -116,7 +118,7 @@ class SandboxLifecycle:
             replicas, version = self._scale()
             if replicas == 0:
                 self._set_scale(1, version)
-        deadline = time.monotonic() + _READY_TIMEOUT
+        deadline = time.monotonic() + _START_TIMEOUT
         while True:
             try:
                 return self.identity()

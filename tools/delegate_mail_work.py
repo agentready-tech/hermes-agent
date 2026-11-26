@@ -29,13 +29,13 @@ def _below(store, target, ancestor):
     return False
 
 
-def ensure_mail_input(parent, projects, project):
+def ensure_mail_input(parent, projects, project, *, mail_id=None):
     if project["archived"] or project["paused"]:
         return
     with MailStore(parent) as mail:
         mail.acknowledge_recorded()
         with _transaction() as conn:
-            rows = pending_mail_rows(conn)
+            rows = pending_mail_rows(conn, message_ids=(mail_id,) if mail_id else None)
             active = conn.execute("SELECT * FROM delegated_project_messages WHERE subagent_id=? AND state IN ('pending','running')",
                                   (project["subagent_id"],)).fetchall()
             if any(_blocks_mail(conn, row) for row in active):
@@ -56,7 +56,11 @@ def ensure_mail_input(parent, projects, project):
         from tools.delegate_projects import _origin
 
         # A synchronous first dispatch can still have a later, explicitly routed continuation.
-        if child_mail and not nested_owner and receipt_origin.get("wake"):
+        mail_origin = getattr(parent, "_project_mail_origin", None)
+        direct = mail_origin and not scope
+        if direct:
+            origin = {**mail_origin, "wake": False}
+        elif child_mail and not nested_owner and receipt_origin.get("wake"):
             origin = receipt_origin.copy()
         else:
             origin = json.loads(previous[0]) if previous else _origin()
@@ -76,9 +80,9 @@ def ensure_mail_input(parent, projects, project):
             origin['child_goal_event'] = event
         if nested_owner:
             origin = {**origin, "wake": False}
-        if not origin.get("wake"):
+        if not origin.get("wake") and not direct:
             origin["mail_results"] = True
-        projects.enqueue(project, "Continue your existing task and handle pending agent messages. "
+        return projects.enqueue(project, "Continue your existing task and handle pending agent messages. "
                          "Their contents will enter your conversation at a safe boundary.", origin,
                          'mail-wake:' + first['message_id'], options)
 
@@ -92,7 +96,8 @@ def _blocks_mail(conn, row):
 
 
 def result_mail(parent, project, message, result):
-    if not json.loads(message["origin_json"]).get("mail_results") or result.get("child_goal_id"):
+    if (not json.loads(message["origin_json"]).get("mail_results")
+            or result.get("child_goal_id") or result.get("goal_continuing")):
         return
     actor = SimpleNamespace(session_id=result.get("session_id") or project["session_id"], _session_db=parent._session_db)
     with MailStore(actor) as mail:
@@ -107,6 +112,7 @@ def recover_result_mail(parent, store, project):
         rows = conn.execute("SELECT message_id,result_json FROM delegated_project_messages WHERE subagent_id=? "
             "AND state NOT IN ('pending','running') AND json_extract(origin_json,'$.mail_results')=1 "
             "AND json_extract(result_json,'$.child_goal_id') IS NULL "
+            "AND COALESCE(json_extract(result_json,'$.goal_continuing'),0)=0 "
             "AND NOT EXISTS(SELECT 1 FROM delegation_mail WHERE event_key='result:' || delegated_project_messages.message_id)",
             (project["subagent_id"],)).fetchall()
     for identity, raw in rows:

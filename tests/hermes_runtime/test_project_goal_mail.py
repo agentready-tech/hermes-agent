@@ -1,5 +1,6 @@
-"""Native coordination mail respects the lifecycle of its exact Project Goal."""
+"""Native coordination mail and worker reports respect their Project Goal's lifecycle."""
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -7,16 +8,20 @@ from unittest.mock import Mock
 import pytest
 
 from hermes_runtime.adapters import goal_turn
+from hermes_runtime.sessions import HOME_SESSION_ID
+from tests.hermes_runtime.test_child_goals import _child_actor
+from tests.hermes_runtime.test_main_cron_wake import owner as gateway_owner
 from tests.hermes_runtime.test_panel_assignments import _call_panel, _dispatch, _worker
 from tests.hermes_runtime.test_panel_main_bootstrap import resume, runtime
-from tests.hermes_runtime.test_project_goal import _actor, _open
+from tests.hermes_runtime.test_project_goal import _actor, _agent, _consume, _goal, _models, _open, _snapshot, _wake
+from tests.tools.test_delegate_mail_live import _response
 from tools.delegate_mail import mail_action, publish_pending_mail
 from tools.delegate_mail_store import MailStore
 from tools.delegate_mail_work import MailboxDeferred, ensure_mail_input, stage_mail_input
 from tools.delegate_project_goal import read_goal
 from tools.delegate_project_store import ProjectStore, project_input_goal_id
 
-pytest_plugins = ['tests.hermes_runtime.test_main_schedule_tools']
+pytest_plugins = ['tests.hermes_runtime.test_main_schedule_tools', 'tests.hermes_runtime.test_shared_profile_host']
 
 
 def _mail_row(db, identity):
@@ -229,3 +234,221 @@ def test_mail_recovery_keeps_admitted_stage_and_pending_descendant(main_home):
             mail.acknowledge_recorded()
         projects.release(wake)
         assert projects.claim(leaf)['message_id'] == wake['message_id']
+
+
+BLOCKED_CHILD_NEXT_STEP = "Review the saved report and record the outstanding approval separately."
+
+
+@pytest.fixture
+def blocked_child_assignment(main_home):
+    return _assignment_with_child(main_home[1])
+
+
+def _assignment_with_child(db):
+    main = _actor(db)
+    root = _open(main, "Review the finished work and collect its approval")
+    with ProjectStore(main) as store:
+        coordinator = store.create("coordinator", "Coordinate the review", "")
+    owner = _child_actor(db, coordinator, root)
+    db.create_session(owner.session_id, source="delegate", parent_session_id=HOME_SESSION_ID)
+    child = _open(owner, "Confirm the external approval")
+    return main, root, coordinator, owner, child
+
+
+def _block(owner, child):
+    return _goal(owner, "block", project_id=child, blocker="Awaiting the user's authorization",
+                 unblock="The user grants access", notify=True)
+
+
+def _archive_executor_with_saved_wake(owner, child):
+    from tools.delegate_project_goal import mutate_goal
+    from tools.delegate_project_store import _transaction
+
+    def schedule(goal):
+        goal.update(status="ready", wake_id=f"{child}:1", wake_step="Verify the saved spec")
+        return goal
+
+    with ProjectStore(owner) as store:
+        worker = store.create("spec", "Write the spec", "")
+        store.enqueue(worker, "Write the spec", {"goal_project_id": child})
+        assert store.settle(worker, store.claim(worker), {"status": "completed", "summary": "Spec written."})
+        mutate_goal(store, child, schedule)
+        # Replay an orphaned wake written by versions that allowed this archive.
+        with _transaction() as conn:
+            conn.execute("UPDATE delegated_projects SET archived=1,paused=1 WHERE subagent_id=?",
+                         (worker["subagent_id"],))
+
+
+def _save_running_step(main, root, *, stale=False):
+    from tools.delegate_project_goal import add_evidence, mutate_goal
+
+    def save(goal):
+        add_evidence(goal, "project-msg-saved", "worker report", "Review evidence saved before recovery.")
+        goal.update(status="running", checked_revision=goal["revision"], next_step=BLOCKED_CHILD_NEXT_STEP,
+                    step_revision=0 if stale else goal["revision"])
+        return goal
+
+    with ProjectStore(main) as store:
+        mutate_goal(store, root, save)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["explicit", "stranded", "archived_executor", "active_sibling"])
+async def test_native_report_wakes_parent_once(
+    main_home, blocked_child_assignment, monkeypatch, case,
+):
+    from hermes_runtime.adapters.state import main_gateway_origin
+    from tools.delegate_projects import _publish_completed
+
+    home, db = main_home
+    main, root, coordinator, owner, child = blocked_child_assignment
+    monkeypatch.setattr("agent.prompt_builder._probe_remote_backend", lambda *_: "Linux Docker fixture")
+    monkeypatch.setenv("HERMES_GATEWAY_SESSION", "1")
+    runner, authority = await gateway_owner(home, db, monkeypatch, "blocked-child-report")
+    explicit_block = case in {"explicit", "active_sibling"}
+    if case == "archived_executor":
+        _archive_executor_with_saved_wake(owner, child)
+    if case == "active_sibling":
+        stage = _open(owner, "Complete the independent review", slot=2)
+        with ProjectStore(owner) as store:
+            worker = store.create("reviewer", "Review the separate change", "")
+            store.enqueue(worker, "Review the separate change", {"goal_project_id": stage})
+    with ProjectStore(main) as store:
+        message_id = store.enqueue(coordinator, "Return the review findings",
+                                   {**main_gateway_origin(), "goal_project_id": root, "wake": True})
+        message = store.claim(coordinator)
+        owner._project_goal_segment.input_id = message_id
+        if explicit_block:
+            _block(owner, child)
+        receipt = {"status": "completed", "summary": "QA has started. Approval is outstanding."}
+        assert store.settle(coordinator, message, receipt)
+        assert not receipt.get("goal_continuing")
+        _publish_completed(store, coordinator, store.message(message_id), receipt)
+
+    def verify(goals):
+        report = goals[root]["evidence"][message_id]
+        assert report["kind"] == "worker report"
+        assert "Approval is outstanding" in report["value"]
+        if explicit_block:
+            assert "Awaiting the user's authorization" in report["value"]
+            assert "The user grants access" in report["value"]
+        return {root: goal_turn._GoalJudgment(missing_evidence="The approval receipt", next_step=BLOCKED_CHILD_NEXT_STEP)}
+
+    response = "Approval is still needed. I’ll check the recorded decision."
+    model = Mock(return_value=_response(response))
+    _models(monkeypatch, model, verify)
+    outputs = []
+
+    async def execute(event, *_args):
+        agent = _agent(db)
+        try:
+            result = await asyncio.to_thread(agent.run_conversation, event.text)
+            outputs.append(result["final_response"])
+            return result["final_response"]
+        finally:
+            agent.close()
+
+    monkeypatch.setattr(runner, "_handle_message_with_agent", execute)
+    await _consume(runner, authority, home, _wake(db, message_id))
+    saved = _snapshot(main, root)
+    assert saved["next_step"] == BLOCKED_CHILD_NEXT_STEP and message_id in saved["evidence"]
+    if case == "active_sibling":
+        assert saved["status"] == "running" and saved["wake_id"] is None
+        assert outputs == [response]
+    else:
+        assert saved["status"] == "ready" and saved["wake_id"]
+        await _consume(runner, authority, home, _wake(db, "main-goal-"))
+        assert outputs == [response, ""]
+        assert _snapshot(main, root)["status"] == "pending"
+    goal_turn.recover()
+    assert db._read_one(
+        "SELECT 1 FROM delegation_mail WHERE json_extract(origin_json,'$.child_goal_event.project_id')=?",
+        (child,),
+    ) is None
+    expected_status = {"explicit": "blocked", "active_sibling": "blocked",
+                       "stranded": "pending", "archived_executor": "ready"}
+    assert _snapshot(owner, child)["status"] == expected_status[case]
+
+
+@pytest.mark.parametrize("condition", [
+    "stalled", "archived executor", "active child", "paused child", "queued dispatch", "stale step",
+])
+def test_recovery_uses_only_a_verified_parent_step(blocked_child_assignment, monkeypatch, condition):
+    from hermes_runtime.adapters.inbox import HomeInbox
+
+    main, root, coordinator, owner, child = blocked_child_assignment
+    if condition == "archived executor":
+        _archive_executor_with_saved_wake(owner, child)
+    else:
+        _block(owner, child)
+    if condition == "active child":
+        active = _open(owner, "Complete the other review stage", slot=2)
+        with ProjectStore(owner) as store:
+            worker = store.create("reviewer", "Complete the other review stage", "")
+            store.enqueue(worker, "Review the changes", {"goal_project_id": active})
+    if condition == "paused child":
+        paused = _open(owner, "Wait for the separate stage to be resumed", slot=2)
+        _goal(owner, "pause", project_id=paused)
+    monkeypatch.setattr("hermes_runtime.adapters.state.main_gateway_origin", dict)
+
+    if condition == "queued dispatch":
+        with ProjectStore(main) as store:
+            store.enqueue(coordinator, "Finish the other review stage", {"goal_project_id": root, "wake": True})
+    _save_running_step(main, root, stale=condition == "stale step")
+    before = _snapshot(main, root)
+    goal_turn.recover()
+    after = _snapshot(main, root)
+    inbox = HomeInbox()
+    if condition != "stalled":
+        assert after == before and inbox.pending() == []
+    else:
+        assert after["status"] == "ready" and after["wake_id"]
+        [saved] = inbox.pending()
+        assert BLOCKED_CHILD_NEXT_STEP in saved[1]
+        goal_turn.recover()
+        assert inbox.pending() == [saved]
+    assert _snapshot(owner, child)["status"] == ("ready" if condition == "archived executor" else "blocked")
+
+
+@pytest.mark.asyncio
+async def test_shared_gateway_replays_stalled_goal_without_a_viewer(shared_homes, monkeypatch):
+    from queue import Queue
+
+    import hermes_state
+    from gateway.config import GatewayConfig
+    from gateway.run import GatewayRunner
+    from gateway.run_runtime import _build_profile_authority
+    from gateway.session_authorities import SessionAuthorities, owner_scope
+    from tools.process_registry import process_registry
+
+    root, homes = shared_homes
+    monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", hermes_state._IMPORT_DEFAULT_DB_PATH)
+    monkeypatch.setattr(process_registry, "completion_queue", Queue())
+    runner = GatewayRunner(GatewayConfig(multiplex_profiles=True, sessions_dir=root / "sessions"))
+    runner._primary_profile_name = "default"
+    runner._served_profile_homes = homes
+    runner.session_authorities = SessionAuthorities(root, multiplexed=True)
+    runner.session_runtime_descriptor = {"instance_id": "shared-goal-recovery"}
+    try:
+        alpha = await _build_profile_authority(runner, "alpha", homes["alpha"], register=False)
+        bravo = await _build_profile_authority(runner, "bravo", homes["bravo"], register=False)
+        with owner_scope(alpha):
+            main, assignment, _, owner, child = _assignment_with_child(alpha.db)
+            _block(owner, child)
+            _save_running_step(main, assignment)
+
+        await asyncio.to_thread(runner._sweep_orphaned_completion_ledgers)
+        with owner_scope(alpha):
+            saved = _snapshot(main, assignment)
+            assert saved["status"] == "ready" and saved["wake_id"]
+            assert _snapshot(owner, child)["status"] == "blocked"
+        wake = _wake(alpha.db, "main-goal-")
+        assert wake["goal_project_id"] == assignment and wake["session_key"] == "agent:alpha:agentready:home"
+        assert f"Saved next step: {BLOCKED_CHILD_NEXT_STEP}" in wake["summary"]
+        assert not bravo.db._read_all("SELECT 1 FROM async_delegations")
+
+        await asyncio.to_thread(runner._sweep_orphaned_completion_ledgers)
+        assert _wake(alpha.db, "main-goal-") == wake
+        assert sum(e["delegation_id"] == wake["delegation_id"] for e in process_registry.completion_queue.queue) == 1
+    finally:
+        runner.session_store.close_all_db_handles()

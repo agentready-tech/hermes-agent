@@ -144,6 +144,9 @@ class MainChat:
         # The native file stager is reused; a managed main route has no frozen local-session
         # policy. Its existing main workspace is the authorized staging context.
         from hermes_runtime.adapters.hermes import managed_home
+        from hermes_runtime.standalone.main_files import own_home
+        from tools.credential_files import map_cache_path_to_container
+        from tools.terminal_scope import install_and_reset_profile_terminal_scope, terminal_env
         from tui_gateway import server
         if set(params) - {'session_id', 'name', 'data_url'}:
             raise ValueError('Invalid attachment')
@@ -151,8 +154,16 @@ class MainChat:
         session = {'cwd': str(home / 'workspace'), 'profile_home': str(home)}
         stored, uploaded = server._stage_session_file_attachment(session, raw_path='',
             data_url=params.get('data_url', ''), name=params.get('name', ''))
-        ref = server._attachment_ref_path(session, stored)
-        return {'attached': True, 'path': str(stored), 'name': stored.name, 'uploaded': uploaded,
+        with own_home(home), install_and_reset_profile_terminal_scope(home):
+            if terminal_env('TERMINAL_ENV') == 'kubernetes':
+                path = map_cache_path_to_container(str(stored))
+                if path is None:
+                    raise ValueError('Attachment is unavailable in the sandbox')
+                ref = path
+            else:
+                path = str(stored)
+                ref = server._attachment_ref_path(session, stored)
+        return {'attached': True, 'path': path, 'name': stored.name, 'uploaded': uploaded,
                 'ref_text': f'@file:{server._format_ref_value(ref)}'}
 
     async def answer(self, frame):

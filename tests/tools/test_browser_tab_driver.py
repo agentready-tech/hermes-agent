@@ -37,7 +37,8 @@ def native_drivers(monkeypatch, tmp_path):
     server.on("Target.attachToTarget", lambda p, s: {"sessionId": "session-" + p["targetId"]})
     server.on("Target.getTargetInfo", lambda p, s: {"targetInfo": tabs[p["targetId"]]})
     server.on("Runtime.evaluate", lambda p, s: {"result": {"type": "boolean", "value": True}})
-    for method in ("Page.enable", "DOM.enable", "Runtime.enable", "Network.enable", "Target.detachFromTarget"):
+    for method in ("Page.enable", "DOM.enable", "Runtime.enable", "Network.enable",
+                   "Target.activateTarget", "Target.detachFromTarget"):
         server.on(method, lambda p, s: {})
     endpoint = server.start()
     command = [sys.executable, "-c", "from browser_harness import run; run.print_update_banner = lambda: None; run.main()"]
@@ -76,27 +77,29 @@ def test_actual_named_driver_shutdown_removes_its_startup_tab_and_preserves_sibl
     from hermes_cli import config
     monkeypatch.setattr(config, 'read_raw_config', lambda: {'browser': {'close_idle_user_tabs': close_user_tabs}})
     tabs = native_drivers
-    for task in ("parent", "child"):
-        result = json.loads(cli.browser_exec("pass", task_id=task))
-        assert result["success"], result
-    assert len(tabs) == 5, "Each real driver has a startup tab plus its tracked task tab"
+    result = json.loads(cli.browser_exec("pass", task_id="parent"))
+    assert result["success"], result
+    parent_tabs = set(tabs)
+    assert len(parent_tabs) == 2
+    result = json.loads(cli.browser_exec("pass", task_id="child"))
+    assert result["success"], result
+    child_targets = set(tabs) - parent_tabs
+    assert len(child_targets) == 1, "Each driver reuses its own startup tab"
     if runtime_restarted:
         # The gateway lost its in-memory admission; the existing driver may have
         # been handed to a human before this new runtime started.
         runtime._contexts.pop((str(runtime.get_hermes_home()), "parent"))
         assert json.loads(cli.browser_exec("pass", task_id="parent"))["success"]
-    before = set(tabs)
+        assert set(tabs) == parent_tabs | child_targets
     runtime.finish_native_tabs(object(), "parent", completed=True, interrupted=False, failed=False)
-    wait_until(lambda: len(tabs) == (4 if runtime_restarted else 3), what="parent driver's native shutdown")
-    child_tabs = set(tabs)
-    assert "human" in child_tabs and child_tabs < before
+    child_tabs = child_targets | {"human"}
+    wait_until(lambda: set(tabs) == child_tabs, what="parent driver's native shutdown")
     result = json.loads(cli.browser_exec("pass", task_id="child"))
     assert result["success"], result
     assert set(tabs) == child_tabs, "The child's live driver and tab remain usable"
     runtime.finish_native_tabs(object(), "child", completed=True, interrupted=False, failed=False)
-    remaining = 0 if close_user_tabs else (2 if runtime_restarted else 1)
-    wait_until(lambda: len(tabs) == remaining, what="child driver's native shutdown")
-    assert ('human' in tabs) is not close_user_tabs
+    remaining = set() if close_user_tabs else {"human"}
+    wait_until(lambda: set(tabs) == remaining, what="child driver's native shutdown")
 
 
 @pytest.mark.platforms("posix")
@@ -109,6 +112,6 @@ def test_completed_driver_cleanup_does_not_depend_on_wall_clock(native_drivers, 
     monkeypatch.setattr(time, 'time', lambda: original_time() + 1)
     result = json.loads(cli.browser_exec('pass', task_id='clock-offset'))
     assert result['success'], result
-    assert len(native_drivers) == 3
+    assert len(native_drivers) == 2
     runtime.finish_native_tabs(object(), 'clock-offset', completed=True, interrupted=False, failed=False)
     wait_until(lambda: set(native_drivers) == {'human'}, what='completed driver startup tab removal')

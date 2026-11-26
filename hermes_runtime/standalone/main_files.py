@@ -3,13 +3,17 @@ import base64
 from contextlib import contextmanager
 import hashlib
 import json
+import logging
 import mimetypes
 from pathlib import Path
 import re
 import secrets
 import sqlite3
+import traceback
 
 from gateway.media_delivery import MAX_BATCH, MAX_FILE, MAX_FILES
+
+logger = logging.getLogger(__name__)
 
 CAPABILITY = 'chat-files-v1'
 KEY = 'panel_files_v1'
@@ -19,8 +23,8 @@ HINT = (
     '## Panel file delivery\n'
     'This AgentReady main supports chat-files-v1. To send a generated file, include '
     'MEDIA:/absolute/path/to/file in your final reply, outside code/quotes. A bare path does not '
-    'send a file. The system stages explicitly requested files from your own native artifact '
-    'namespace or producing backend; these filesystems are distinct. Only verified retained files '
+    'send a file. Use the absolute path as seen by the tool that created the file. In a Kubernetes '
+    'sandbox, save generated files in /workspace and use MEDIA:/workspace/<filename>. Only verified retained files '
     'become downloadable cards. Panel limits: 5 files, 10 MiB each, 20 MiB total. Never export credentials, '
     'browser profiles or private runtime files; report a delivery error honestly.'
 )
@@ -103,7 +107,10 @@ def retain_row(db, target, row_id, home, route, delivery_text=None):
         marker['files'] = [dict(id='att-' + secrets.token_hex(16), row_id=row_id, name=item['name'],
             mime=mimetypes.guess_type(item['name'])[0] or 'application/octet-stream', size=item['reference']['size'],
             sha256=item['reference']['sha256'], reference=item['reference'], origin=item['origin']) for item in prepared]
-    except (OSError, ValueError, RuntimeError):
+    except (OSError, ValueError, RuntimeError) as exc:
+        source = traceback.extract_tb(exc.__traceback__)[-1]
+        logger.warning('Panel attachment export failed for row %d (%s, %s:%d)',
+                       row_id, type(exc).__name__, source.name, source.lineno)
         marker['error'] = ERROR
     # Re-read and merge under the existing store writer: preserve reactions and idempotent receipts.
     def save(conn):

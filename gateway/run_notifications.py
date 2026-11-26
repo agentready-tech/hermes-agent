@@ -1172,6 +1172,12 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
             claim = await self._preflight_completion_delivery(evt)
             if not claim.proceed:
                 return claim.early_result
+            from hermes_runtime.adapters.project_mail import dispatch_project_mail, is_project_mail
+            if is_project_mail(evt):
+                routed = await dispatch_project_mail(self, evt, claim.owner_session_id or evt.get("parent_session_id"))
+                if routed is not None:
+                    accepted, refused = routed, not routed
+                    return routed
             if getattr(self, 'session_authority', None) is not None:
                 from gateway.session_automation import completion_admission
                 if completion_admission(self, evt) is not None:
@@ -1398,9 +1404,10 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
     async def _deliver_async_delegation_group_scoped(self, group: list[dict]) -> Optional[bool]:
         from gateway.run import _format_gateway_process_notification
         from tools.process_registry import process_registry as _pr
-        # API delivery does not start a model turn, so there is nothing to coalesce.
-        # Keep each unit's stable identity with its row across partial delivery/retry.
-        if group and group[0].get("origin_session_id"):
+        from hermes_runtime.adapters.project_mail import is_project_mail
+        # Each addressed mailbox receipt must keep its own routing and durable disposition.
+        # API delivery likewise keeps individual identities across partial delivery/retry.
+        if group and (group[0].get("origin_session_id") or any(is_project_mail(event) for event in group)):
             outcomes = []
             for evt in group:
                 text = _format_gateway_process_notification(evt)
@@ -1482,9 +1489,15 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
         """Offer completions whose owner process died while this gateway runs (#97202): the launch
         ledger in the launch scope, each served secondary under its own. Startup replay only covers
         owners that were already gone when the gateway started."""
+        from hermes_runtime.adapters.goal_turn import recover as recover_project_goals
         from tools.async_delegation import sweep_orphaned_completions
         from tools.process_registry import process_registry as _pr
-        sweep = lambda: sweep_orphaned_completions(_pr.completion_queue)
+
+        def sweep():
+            with _log_suppressed(logging.DEBUG, "Saved Project Goal recovery deferred: %s"):
+                recover_project_goals()
+            return sweep_orphaned_completions(_pr.completion_queue)
+
         with _log_suppressed(logging.DEBUG, "Orphaned async completion sweep failed: %s"):
             if count := sweep():
                 logger.info("Re-offered %d orphaned async completion(s)", count)

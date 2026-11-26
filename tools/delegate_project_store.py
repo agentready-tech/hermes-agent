@@ -22,6 +22,18 @@ def write_workspace(conn, subagent_id, workspace, change):
 
 
 def set_project_paused(conn, subagent_id, paused, archive):
+    if archive:
+        stage = conn.execute(
+            """SELECT subagent_id, json_extract(workspace_json,'$.goal_state.status') AS status
+               FROM delegated_projects WHERE archived=0
+                 AND json_extract(workspace_json,'$.goal_state.executor_id')=?
+                 AND json_extract(workspace_json,'$.goal_state.status') NOT IN ('done','cancelled')
+               ORDER BY rowid LIMIT 1""",
+            (subagent_id,),
+        ).fetchone()
+        if stage:
+            raise ValueError(f"Cannot archive the executor while Child Goal {stage[0]} is {stage[1]}. "
+                             "Complete or cancel the stage first.")
     conn.execute("UPDATE delegated_projects SET paused=?,archived=MAX(archived,?),updated_at=? WHERE subagent_id=?",
                  (int(paused), int(archive), time.time(), subagent_id))
     if archive:
@@ -232,12 +244,16 @@ class ProjectStore:
         return self.get(subagent_id)
 
     def enqueue(self, project, content, origin, event_key=None, options=None):
-        if project["archived"]:
-            raise ValueError("Project is archived")
         if not isinstance(content, str) or not content.strip():
             raise ValueError("A nonempty project message is required")
         message_id = "project-msg-" + uuid.uuid4().hex
         with _transaction() as conn:
+            saved = conn.execute("SELECT archived FROM delegated_projects WHERE subagent_id=?",
+                                 (project["subagent_id"],)).fetchone()
+            if not saved:
+                raise ValueError("Unknown project subagent")
+            if saved[0]:
+                raise ValueError("Project is archived")
             goal_id = origin.get("goal_project_id")
             if event_key is not None and goal_id:
                 old = conn.execute(
@@ -291,7 +307,7 @@ class ProjectStore:
             return None
 
     def settle(self, project, message, result):
-        from tools.delegate_child_goals import record_worker_evidence, unfinished_orchestration
+        from tools.delegate_child_goals import record_orchestration_result, record_worker_evidence
 
         canonical = result.get("status") == "completed" and self.committed_result(project, message) is not None
         with _transaction() as conn:
@@ -299,8 +315,7 @@ class ProjectStore:
             if goal_id and conn.execute("SELECT 1 FROM delegated_project_messages WHERE message_id=? AND claim_token=?",
                                         (message["message_id"], message["claim_token"])).fetchone():
                 record_worker_evidence(conn, project, message, result, goal_id)
-                if unfinished_orchestration(conn, project, message, goal_id):
-                    result["goal_continuing"] = True
+                record_orchestration_result(conn, project, message, result, goal_id)
             changed = conn.execute("UPDATE delegated_project_messages SET state=?,result_json=?,completed_at=?,owner_pid=NULL,claim_token=NULL,published=?,content=CASE WHEN ? THEN '' ELSE content END,options_json=CASE WHEN ? THEN '{}' ELSE options_json END WHERE message_id=? AND claim_token=?",
                 (result.get("status", "failed"), json.dumps(result, ensure_ascii=False), time.time(),
                  int(not json.loads(message["origin_json"]).get("wake")), canonical, canonical, message["message_id"], message["claim_token"])).rowcount

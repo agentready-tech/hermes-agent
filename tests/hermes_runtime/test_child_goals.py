@@ -30,6 +30,12 @@ APPOINTMENT = "Confirm the appointment"
 UNAVAILABLE = "No suitable slots are available."
 
 
+def _offline_delegation_config(home):
+    config = home / "config.yaml"
+    config.write_text(config.read_text() + "delegation:\n  worktree_isolation: false\n"
+                      "model:\n  default: gpt-4.1\n  provider: custom\n  base_url: http://127.0.0.1:9/v1\n  api_key: inert\n"
+                      "platform_toolsets:\n  agentready: [delegation, cronjob]\n")
+
 def _report_values(evidence):
     return {identity: json.loads(item["value"])["summary"]
             for identity, item in evidence.items() if item["kind"] == "worker report"}
@@ -75,6 +81,7 @@ async def test_role_goals_resume_the_same_worker_after_restart(main_home, monkey
     from gateway.session_contract import SessionRef
     from gateway.session_controls import AuthorityConnection
     from hermes_runtime.adapters.goal_turn import recover
+    from hermes_state_runtime import list_session_admissions
     from hermes_runtime.adapters.state import main_gateway_origin
     from hermes_runtime.standalone.events import admit_cron
     from tools.approval_context import reset_current_session_key, set_current_session_key
@@ -82,8 +89,7 @@ async def test_role_goals_resume_the_same_worker_after_restart(main_home, monkey
     from tools.delegate_project_recovery import publish_recovery_wakeups
 
     home, db = main_home
-    config = home / "config.yaml"
-    config.write_text(config.read_text() + "delegation:\n  max_spawn_depth: 2\n  worktree_isolation: false\n")
+    _offline_delegation_config(home)
     monkeypatch.setattr("agent.prompt_builder._probe_remote_backend", lambda *_: "Linux Docker fixture")
     monkeypatch.setenv("HERMES_GATEWAY_SESSION", "1")
     runner, authority = await gateway_owner(home, db, monkeypatch, "child-goals")
@@ -215,9 +221,19 @@ async def test_role_goals_resume_the_same_worker_after_restart(main_home, monkey
 
     async def consume(match):
         event = await async_wait_until(lambda: _pending_event(db, match), what=match)
+        before = list_session_admissions(db, session_id=HOME_SESSION_ID, pending_only=False)
         await _consume(runner, authority, home, event)
+        if event.get("agent_message") or event.get("mail_project_message_id"):
+            assert list_session_admissions(db, session_id=HOME_SESSION_ID, pending_only=False) == before
 
-    await consume(ids["first_input"])
+    await async_wait_until(
+        lambda: db._read_one(
+            "SELECT 1 FROM async_delegations WHERE delegation_id=? AND delivery_state='suppressed'",
+            (ids["first_input"],),
+        ),
+        what="the waiting orchestrator's intermediate receipt settles without main admission",
+    )
+    assert _pending_event(db, ids["first_input"]) is None
     await async_wait_until(lambda: ids.get("timer"), what="native coordinator handoffs through confirmation")
     with ProjectStore(_actor(db)) as store:
         child_owner = _child_actor(db, store.get(ids["coordinator"]), ids["main"])
@@ -245,6 +261,9 @@ async def test_role_goals_resume_the_same_worker_after_restart(main_home, monkey
     first_event = f"{job_id}:{first}"
     await consume(first_event)
     await async_wait_until(lambda: len(checks) == 2, what="the saved worker handles the timer")
+    await async_wait_until(lambda: not db._read_one(
+        "SELECT 1 FROM delegated_project_messages WHERE subagent_id=? AND state IN ('pending','running')",
+        (ids["coordinator"],)), what="the orchestrator reconciles the completed check")
     assert admit_cron(get_job(job_id), execution_id=first)[0]
     assert checks == [ids["executor_session"]] * 2
     assert calls == ["open", "spawn", "ack"]
@@ -280,6 +299,93 @@ async def test_role_goals_resume_the_same_worker_after_restart(main_home, monkey
         assert list(_report_values(state["evidence"]).values()).count(reports[stage]) == 1
 
 
+@pytest.mark.asyncio
+async def test_peer_mail_wakes_only_idle_recipient_and_returns_to_running_worker(main_home, monkeypatch):
+    from threading import Event
+
+    from gateway.run import _format_gateway_process_notification
+    from hermes_state_runtime import list_session_admissions
+    from tools.delegate_projects import recover_projects
+
+    home, db = main_home
+    _offline_delegation_config(home)
+    monkeypatch.setattr("agent.prompt_builder._probe_remote_backend", lambda *_: "Linux Docker fixture")
+    runner, authority = await gateway_owner(home, db, monkeypatch, "peer-mail")
+    main = _actor(db)
+    with ProjectStore(main) as store:
+        coordinator = store.create("coordinator", "Coordinate the work", "")
+        store.enqueue(coordinator, "This orchestrator is busy on a different step", {})
+        busy = store.claim(coordinator)
+    db.create_session(coordinator["session_id"], source="subagent", parent_session_id=HOME_SESSION_ID,
+                      model_config={"_delegate_from": HOME_SESSION_ID})
+    owner = SimpleNamespace(session_id=coordinator["session_id"], _session_db=db, _delegate_depth=1,
+                            _subagent_id=coordinator["subagent_id"], model="gpt-4.1", provider="custom",
+                            api_key="inert", base_url="http://127.0.0.1:9/v1", api_mode="chat_completions",
+                            enabled_toolsets=["delegation"])
+    with ProjectStore(owner) as store:
+        worker_a = store.create("sender", "Collect a detail from your peer", "")
+        worker_b = store.create("receiver", "Return the missing detail", "")
+        for worker in (worker_a, worker_b):
+            db.create_session(worker["session_id"], source="subagent", parent_session_id=owner.session_id,
+                              model_config={"_delegate_from": owner.session_id})
+        sent = store.enqueue(worker_a, "Ask your peer a question", {})
+    calls = []
+    reply_sent = Event()
+
+    def offline_model(agent, payload, *_args, **_kwargs):
+        calls.append(agent.session_id)
+        messages = payload["messages"]
+        if agent.session_id == worker_a["session_id"]:
+            if messages[-1]["role"] == "tool":
+                assert reply_sent.wait(timeout=8), "Idle peer did not resume independently of the busy orchestrator"
+            if "The saved reference is 42" in messages[-1]["content"]:
+                return _response("Reference received.")
+            if messages[-1]["role"] == "tool":
+                return _response(args={"action": "wait", "timeout_seconds": 0})
+            return _response(args={"action": "message", "subagent_id": worker_b["subagent_id"],
+                                  "message": "Which saved reference should I use?", "event_id": "question"})
+        assert agent.session_id == worker_b["session_id"]
+        if messages[-1]["role"] == "tool":
+            assert json.loads(messages[-1]["content"])["status"] == "queued"
+            reply_sent.set()
+            return _response("Reference sent.")
+        assert "Which saved reference should I use?" in messages[-1]["content"]
+        return _response(args={"action": "message", "subagent_id": worker_a["subagent_id"],
+                              "message": "The saved reference is 42", "event_id": "answer"})
+
+    async def unexpected_main(*_args):
+        pytest.fail("Peer mail must not start main")
+
+    _models(monkeypatch, offline_model, lambda goals: {})
+    monkeypatch.setattr(runner, "_handle_message_with_agent", unexpected_main)
+    before = list_session_admissions(authority.db, session_id=HOME_SESSION_ID, pending_only=False)
+    execution = asyncio.create_task(asyncio.to_thread(recover_projects, owner, {worker_a["subagent_id"]}))
+    try:
+        row = await async_wait_until(lambda: db._read_one(
+            "SELECT message_id FROM delegation_mail WHERE event_key='question'"), what="peer question")
+        event = await async_wait_until(lambda: _pending_event(db, row[0]), what="peer notification")
+        assert await runner._deliver_async_delegation_group([event, event]) is True
+        assert await runner._deliver_completion_notification(_format_gateway_process_notification(event), event) is None
+        [result] = await asyncio.wait_for(execution, timeout=15)
+        assert result["summary"] == "Reference received."
+        await async_wait_until(lambda: db._read_one(
+            "SELECT 1 FROM delegated_project_messages WHERE subagent_id=? AND state='completed'", (worker_b["subagent_id"],)),
+            what="idle recipient completes one turn")
+    finally:
+        reply_sent.set()
+        await asyncio.gather(execution, return_exceptions=True)
+    for event_key, recipient in (("question", worker_b), ("answer", worker_a)):
+        [receipt] = db._read_all("SELECT target_session_id,delivered_at FROM delegation_mail WHERE event_key=?", (event_key,))
+        assert receipt["target_session_id"] == recipient["session_id"] and receipt["delivered_at"]
+    assert set(calls) == {worker_a["session_id"], worker_b["session_id"]}
+    with ProjectStore(owner) as store:
+        assert store.message(sent)["state"] == "completed"
+    assert db._read_one("SELECT COUNT(*) FROM delegated_project_messages WHERE subagent_id=?",
+                        (worker_b["subagent_id"],))[0] == 1
+    assert db._read_one("SELECT state FROM delegated_project_messages WHERE message_id=?", (busy["message_id"],))[0] == "running"
+    assert list_session_admissions(authority.db, session_id=HOME_SESSION_ID, pending_only=False) == before
+
+
 def _bind_timer(actor, project_id):
     from tools.delegate_external_wait import dispatch
 
@@ -290,6 +396,46 @@ def _bind_timer(actor, project_id):
     }))
     assert wait["success"], wait
     return wait["job_id"]
+
+
+@pytest.mark.parametrize("blocked", [False, True])
+def test_archive_keeps_the_executor_until_its_child_goal_is_closed(main_home, blocked):
+    from tools.delegate_project_goal import close_goal
+    from tools.delegate_projects import project_action
+
+    _, db = main_home
+    parent = _actor(db)
+    root = _open(parent, "Complete the assignment")
+    with ProjectStore(parent) as store:
+        coordinator = store.create("coordinator", "Coordinate the assignment", "")
+    owner = _child_actor(db, coordinator, root)
+    stage = _open(owner, "Complete the assigned stage")
+    with ProjectStore(owner) as store:
+        worker = store.create("worker", "Execute the stage", "")
+        worker_id = worker["subagent_id"]
+        accepted = store.enqueue(worker, "Continue the stage", {"goal_project_id": stage})
+        if blocked:
+            _goal(owner, "block", project_id=stage, blocker="Waiting for stand access",
+                  unblock="The stand owner grants access")
+        error = f"{stage}.*{'blocked' if blocked else 'ready'}"
+        with pytest.raises(ValueError, match=error):
+            project_action(owner, "archive", subagent_id=worker_id)
+        saved = store.get(worker_id)
+        assert not saved["archived"] and not saved["paused"] and saved["session_id"] == worker["session_id"]
+        assert store.message(accepted)["state"] == "pending"
+        if blocked:
+            assert store.claim(worker) is None
+            _goal(owner, "resume", project_id=stage)
+        work = store.claim(worker)
+        assert work["message_id"] == accepted
+        assert store.settle(worker, work, {"status": "completed", "summary": "Verified the requested result."})
+        close_goal(store, stage, "done", [accepted])
+        assert project_action(owner, "archive", subagent_id=worker_id)["status"] == "archived"
+
+        another_stage = _open(owner, "A separate stage", slot=2)
+        with pytest.raises(ValueError, match="Project is archived"):
+            store.enqueue(worker, "Do the next stage", {"goal_project_id": another_stage})
+        assert _snapshot(owner, another_stage).get("executor_id") is None
 
 
 def test_child_control_and_pending_inputs_are_scoped_by_parent_and_executor(main_home):
@@ -346,6 +492,81 @@ def test_child_control_and_pending_inputs_are_scoped_by_parent_and_executor(main
     assert _snapshot(owner, child)["status"] == "cancelled"
     assert _snapshot(owner, finishing)["status"] == "done"
     assert _snapshot(other, neighbor)["status"] == "ready"
+
+
+@pytest.mark.parametrize("in_active_turn", [False, True])
+def test_child_wake_keeps_its_identity_until_recipient_finishes(main_home, in_active_turn):
+    from agent.delegation_mail import deliver
+    from hermes_runtime.adapters.goal_turn import recover
+    from tools.delegate_mail_store import MailStore
+    from tools.delegate_mail_work import ensure_mail_input, stage_mail_input
+    from tools.delegate_project_goal import mutate_goal
+    from tools.delegate_project_store import _transaction
+
+    _, db = main_home
+    main = _actor(db)
+    root = _open(main, APPOINTMENT)
+    with ProjectStore(main) as store:
+        coordinator = store.create("coordinator", "Coordinate", "")
+    owner = _child_actor(db, coordinator, root)
+    owner._delegate_depth = 1
+    db.create_session(owner.session_id, source="delegate", parent_session_id=HOME_SESSION_ID,
+                      model_config={"_delegate_from": HOME_SESSION_ID})
+    child = _open(owner, "Confirm the available slot")
+    wake_id = f"{child}:1"
+    step = "Inspect the appointment calendar for the verified request"
+    with ProjectStore(owner) as store:
+        worker = store.create("worker", "Check for a slot", "")
+        actor = SimpleNamespace(_session_db=db, session_id=worker["session_id"], valid_tool_names=["delegate_task"],
+                                _project_input_goal_id=child, _persistent_project_id=worker["subagent_id"])
+        db.create_session(actor.session_id, source="delegate", parent_session_id=owner.session_id,
+                          model_config={"_delegate_from": owner.session_id})
+        initial = store.enqueue(worker, "Book the appointment", {"goal_project_id": child})
+        assert store.settle(worker, store.claim(worker), {"status": "completed", "summary": UNAVAILABLE})
+        def set_ready(goal):
+            goal.update(status="ready", wake_sequence=1, wake_id=wake_id, wake_step=step, wake_revision=goal["revision"],
+                        step_revision=goal["revision"], next_step=step)
+            return goal
+
+        mutate_goal(store, child, set_ready)
+        if in_active_turn:
+            store.enqueue(worker, "Continue checking the calendar", {"goal_project_id": child})
+            message = store.claim(worker)
+        recover()
+        if in_active_turn:
+            actor._delegation_id = message["message_id"]
+
+            def flush(rows):
+                row = rows[-1]
+                db.append_message(actor.session_id, "user", row["content"], platform_message_id=row["message_id"],
+                                  display_kind=row["display_kind"], display_metadata=row["display_metadata"])
+
+            actor._flush_messages_to_session_db = flush
+            assert deliver(actor, [{"role": "tool", "content": "Calendar checked"}])
+        else:
+            ensure_mail_input(owner, store, worker)
+            message = store.claim(worker)
+            content, metadata = stage_mail_input(actor, message, [])
+            db.append_message(actor.session_id, "user", content, platform_message_id=message["message_id"],
+                              display_kind="agent_message", display_metadata=metadata)
+        with MailStore(actor) as mail:
+            mail.acknowledge_recorded()
+        assert db._read_one("SELECT delivered_at FROM delegation_mail WHERE event_key=?", ("child-goal:" + wake_id,))[0]
+        for _ in range(4):
+            recover()
+        state = _snapshot(owner, child)
+        assert (state["wake_id"], state["wake_sequence"], state["attempts_without_progress"]) == (wake_id, 1, 0)
+        assert store.claim(worker) is None
+        with _transaction() as conn:
+            conn.execute("UPDATE delegated_project_messages SET owner_started_at=-1 WHERE message_id=?", (message["message_id"],))
+        recover()
+        resumed = store.claim(worker)
+        assert resumed["recovering"] and resumed["message_id"] == message["message_id"] != initial
+        assert store.settle(worker, resumed, {"status": "completed", "summary": UNAVAILABLE})
+        for _ in range(4):
+            recover()
+        assert _snapshot(owner, child)["status"] == "pending"
+        assert db._read_one("SELECT COUNT(*) FROM delegation_mail WHERE event_key LIKE ?", ("child-goal:" + child + ":%",))[0] == 1
 
 
 @pytest.mark.parametrize("claimed", [False, True])

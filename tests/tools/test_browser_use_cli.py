@@ -74,6 +74,83 @@ def _fake_cli(tmp_path, body):
     return str(script)
 
 
+def test_managed_kubernetes_exec_and_cleanup_use_own_sandbox(monkeypatch, tmp_path):
+    from tools import browser_kubernetes_exec, browser_tab_runtime
+    from tools.bot_desktop import runtime
+
+    home = tmp_path / "env_internal_profile"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setattr(bu_cli, "_managed_kubernetes_browser", lambda: True)
+    monkeypatch.setattr(bu_cli, "_base_subprocess_env", lambda: {})
+    monkeypatch.setattr(bu_cli, "_find_cli", lambda: ["/opt/hermes/browser-cli"])
+    monkeypatch.setattr(bu_cli, "_reach_sandbox_cdp", lambda _endpoint: "http://127.0.0.1:16000")
+    monkeypatch.setattr(runtime, "_owned_sandbox_env", lambda *, passive: "own-sandbox")
+    monkeypatch.setattr(bt_session, "run_fenced", lambda _session, callback: callback())
+    monkeypatch.setattr(browser_tab_runtime, "_contexts", {})
+    monkeypatch.setattr(browser_tab_runtime, "_completed_tasks", set())
+    calls = []
+
+    def unexpected_host_spawn(*args):
+        pytest.fail("Managed browser code must not be executed on the Hermes host")
+
+    class Sandbox:
+        state = "/tmp/fixture-browser"
+        workspace = "/workspace/browser-exec/own"
+
+        def __init__(self, environment, cdp, task):
+            assert environment == "own-sandbox" and task == "own-session"
+            assert cdp.startswith("ws://127.0.0.1:47000/")
+
+        def driver_processes(self):
+            return {42: 12.0}
+
+        def run(self, cmd, code, env, timeout):
+            calls.append(code)
+            assert str(home) not in code
+            assert "lease_reader=_hermes_read_lease" in code
+            return subprocess.CompletedProcess(cmd, 0, "sandbox output", "")
+
+    monkeypatch.setattr(bu_cli, "_run_cli_killing_process_group", unexpected_host_spawn)
+    monkeypatch.setattr(browser_kubernetes_exec, "BrowserKubernetesExec", Sandbox)
+    result = json.loads(bu_cli.browser_exec("print('sandbox output')", task_id="own-session"))
+    assert result["workspace"] == Sandbox.workspace and result["success"]
+    assert len(calls) == 1 and "print('sandbox output')" in calls[0]
+    browser_tab_runtime.finish_native_tabs(object(), "own-session", completed=True,
+                                           interrupted=False, failed=False)
+    assert len(calls) == 2 and "cleanup=True" in calls[1]
+
+
+def test_kubernetes_browser_command_exports_only_sandbox_values(monkeypatch):
+    from tools import browser_kubernetes_exec
+    from tools.environments.kubernetes import KubernetesEnvironment
+
+    environment = KubernetesEnvironment.__new__(KubernetesEnvironment)
+    environment.kubernetes_identity = {"uid": "own-pod"}
+    calls = []
+
+    def prefix(*, interactive, require_current, expected_uid):
+        assert interactive and require_current and expected_uid == "own-pod"
+        return ["/usr/local/bin/kubectl", "exec", "-i", "sandbox-0", "--"]
+
+    def run(argv, code, environ, timeout):
+        calls.append((argv, code))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(environment, "exec_prefix", prefix)
+    monkeypatch.setattr(browser_kubernetes_exec, "_bundle", lambda: (b"fixture", "a" * 64))
+    monkeypatch.setattr(browser_kubernetes_exec.BrowserKubernetesExec, "_install", lambda _self: None)
+    monkeypatch.setattr(bu_cli, "_run_cli_killing_process_group", run)
+    sandbox = browser_kubernetes_exec.BrowserKubernetesExec(environment, "http://127.0.0.1:8123", "own-turn")
+    sandbox.run([], "print('sandbox')", {"BH_HOME": "/host/profile", "AUTH_TOKEN": "fixture-secret"}, 10)
+    argv, code = calls[0]
+    assert "/usr/bin/env" in argv and "-i" in argv
+    assert "BU_CDP_URL=http://127.0.0.1:8123" in argv
+    assert "BH_AGENT_WORKSPACE=" + sandbox.workspace in argv
+    assert not any("/host/profile" in item or "fixture-secret" in item for item in argv)
+    assert code == "print('sandbox')"
+
+
 class TestModeDetection:
     def test_default_on_when_cli_available(self, monkeypatch):
         """Backend unset: Browser Use mode is the default when the CLI runs."""

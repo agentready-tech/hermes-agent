@@ -75,7 +75,8 @@ def publish_recovery_wakeups():
     for row in rows:
         sid, mid = row['subagent_id'], row['message_id']
         origin = json.loads(row['origin_json'])
-        if sid in live_projects or not origin.get('wake'):
+        mail_root = origin.get('project_mail_root')
+        if sid in live_projects or not (origin.get('wake') or mail_root):
             continue
         if not project_input_goal_id(row):
             origin.pop('goal_project_id', None)
@@ -85,7 +86,7 @@ def publish_recovery_wakeups():
         summary = (f"Project {row['project_key']}, persistent subagent {sid}, has accepted work or a saved result awaiting delivery ({mid}). "
                    "Its old execution process is gone. Resume the saved project queue and inspect the existing "
                    "history/results before repeating external actions. Do not create another project child.")
-        if publish_wakeup(identity, row['parent_session_id'], origin, summary):
+        if publish_wakeup(identity, mail_root or row['parent_session_id'], origin, summary):
             count += 1
     return count
 

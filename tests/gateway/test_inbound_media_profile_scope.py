@@ -23,7 +23,7 @@ from tools.credential_files import from_agent_visible_cache_path, get_cache_dire
 
 @pytest.fixture
 def two_homes(tmp_path, monkeypatch):
-    """Launch home A (HERMES_HOME, local backend) and routed profile B (docker backend)."""
+    """Launch home A (HERMES_HOME, local backend) and routed profile B (sandbox backend)."""
     a = tmp_path / ".hermes"
     b = a / "profiles" / "b"
     b.mkdir(parents=True)
@@ -45,8 +45,10 @@ def _adapter_cached(home: Path, kind: str, name: str) -> str:
     return str(path)
 
 
-def test_routed_turn_rehomes_adapter_cached_attachments_a_b_a(two_homes):
+@pytest.mark.parametrize("backend", ["docker", "kubernetes"])
+def test_routed_turn_rehomes_adapter_cached_attachments_a_b_a(two_homes, backend):
     a, b = two_homes
+    (b / "config.yaml").write_text(yaml.safe_dump({"terminal": {"backend": backend}}), encoding="utf-8")
     doc, img = _adapter_cached(a, "documents", "doc_0123456789ab_report.pdf"), _adapter_cached(a, "images", "img_1.jpg")
     event = MessageEvent(text=f"[document 'report.pdf' saved at: {doc}]", message_type=MessageType.DOCUMENT,
                          source=None, media_urls=[doc, img], media_types=["application/pdf", "image/jpeg"])

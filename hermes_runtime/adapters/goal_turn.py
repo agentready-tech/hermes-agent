@@ -290,7 +290,8 @@ def _native_completion(store, segment, identity):
             return False
         worker_id = message["subagent_id"]
         store.get(worker_id)
-        if json.loads(message["result_json"]).get("goal_continuing"):
+        result = json.loads(message["result_json"])
+        if result.get("goal_continuing"):
             segment.stale_inputs += 1
             return True
         origin = json.loads(message["origin_json"])
@@ -298,6 +299,8 @@ def _native_completion(store, segment, identity):
         try:
             if not _record_result(store, segment, project_id, identity, "worker report", message["result_json"]):
                 segment.stale_inputs += 1
+            elif result.get("goal_attention") and (result.get("summary") or result.get("error")):
+                segment.notify = True
         except ValueError:
             return False
         return True
@@ -492,12 +495,11 @@ def _goal_judgments(goals) -> dict[str, _GoalJudgment]:
 
 
 def _working(store, project_id):
-    if store.db._read_one(
-        """SELECT 1 FROM delegated_projects WHERE json_extract(workspace_json,'$.goal_state.parent_goal_id')=?
-           AND archived=0 AND json_extract(workspace_json,'$.goal_state.status') NOT IN ('done','cancelled','inactive')
-           LIMIT 1""", (project_id,),
-    ):
-        return True
+    from tools.delegate_child_goals import child_working
+
+    with store.db._read_ctx() as conn:
+        if child_working(conn, project_id):
+            return True
     return bool(store.db._read_one(
         """SELECT 1 FROM delegated_project_messages m JOIN delegated_projects p USING(subagent_id)
            WHERE p.paused=0 AND p.archived=0 AND m.state IN ('pending', 'running')
@@ -677,7 +679,8 @@ def _recover_ready(store, project_id, goal):
     else:
         consumed = wake_id and _consumed_wake(store, wake_id)
     if not wake_id or consumed:
-        goal = _write_transition(store, project_id, goal, consumed=wake_id, interrupted=bool(consumed))
+        goal = _write_transition(store, project_id, goal, consumed=wake_id,
+                                 interrupted=bool(consumed and not goal.get("parent_goal_id")))
     _publish(project_id, goal)
 
 
@@ -747,6 +750,19 @@ def finish_segment(agent, response, *, verify=True):
     return response
 
 
+def _stalled_on_blocked_child(store, project_id, goal):
+    # A blocked child could leave a verified parent step saved without a wake.
+    revision = goal["revision"]
+    if (goal.get("wake_id") or not goal["next_step"] or goal.get("step_revision") != revision
+            or goal["checked_revision"] != revision):
+        return False
+    return bool(store.db._read_one(
+        """SELECT 1 FROM delegated_projects WHERE json_extract(workspace_json,'$.goal_state.parent_goal_id')=?
+           AND archived=0 AND json_extract(workspace_json,'$.goal_state.status')='blocked' LIMIT 1""",
+        (project_id,),
+    )) and not _working(store, project_id)
+
+
 def _recover_saved_goal(store, project_id, goal):
     if goal["status"] == "closing":
         current = close_goal(store, project_id, goal["outcome"], goal["final_evidence"])
@@ -755,21 +771,28 @@ def _recover_saved_goal(store, project_id, goal):
     elif goal["status"] == "ready":
         _recover_ready(store, project_id, goal)
     elif (goal["status"] == "waiting" and not _waiting(store, project_id, until_deadline=True)
-          or goal["status"] == "awaiting_operation" and not _awaiting_operation(store, goal)):
+          or goal["status"] == "awaiting_operation" and not _awaiting_operation(store, goal)
+          or goal["status"] == "running" and _stalled_on_blocked_child(store, project_id, goal)):
         current = _write_transition(store, project_id, goal)
         _publish(project_id, current)
-    elif goal.get("parent_goal_id") and goal["status"] in {"done", "blocked"}:
+    # An explicit escalation is returned by the orchestrator's own saved
+    # delegation result. Requeueing its own blocked stage can report it twice.
+    elif goal.get("parent_goal_id") and goal["status"] in {"done", "blocked"} and not goal.get("escalation_input_id"):
         _publish(project_id, goal)
 
 
 def recover():
-    """Use the existing main inbox recovery pass for interrupted Goal transitions."""
+    """Reconcile interrupted Goal transitions for the idle owning profile."""
     from types import SimpleNamespace
+    from hermes_runtime.adapters.hermes import enabled
     from hermes_runtime.adapters.state import current_home_session_id
+    from hermes_runtime.adapters.turns import home_turn_active
     from hermes_runtime.standalone.events import recover_wait_reply
     from hermes_state import SessionDB
     from tools.delegate_child_goals import recovery_owner
 
+    if not enabled() or home_turn_active():
+        return
     home = current_home_session_id()
     with SessionDB() as db:
         rows = db._read_all(
@@ -780,10 +803,13 @@ def recover():
                )
                SELECT subagent_id, state, wait FROM goals
                WHERE json_extract(state, '$.status') IN ('ready','closing','waiting','awaiting_operation')
+                  OR (json_extract(state, '$.status')='running'
+                      AND json_extract(state, '$.step_revision')=json_extract(state, '$.revision'))
                   OR (json_type(wait, '$.pending_reply')='object' AND json_extract(wait, '$.state')='BOUND'
                       AND json_extract(state, '$.status') NOT IN ('closing','done','cancelled','inactive','blocked'))
                   OR (json_extract(state, '$.parent_goal_id') IS NOT NULL
                       AND json_extract(state, '$.status') IN ('done','blocked')
+                      AND json_extract(state, '$.escalation_input_id') IS NULL
                       AND NOT EXISTS (SELECT 1 FROM delegation_mail WHERE event_key='child-goal:' || subagent_id ||
                           CASE WHEN json_extract(state, '$.status')='done' THEN ':done'
                                ELSE ':blocked:' || json_extract(state, '$.wake_sequence') || ':' ||

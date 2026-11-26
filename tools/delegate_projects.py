@@ -78,7 +78,8 @@ def _publish_completed(store, project, message, result):
     if not row:
         _persist_dispatch({**event, "status": event["status"]})
     _persist_completion(event, result)
-    process_registry.completion_queue.put(event)
+    if not result.get("goal_continuing"):
+        process_registry.completion_queue.put(event)
 
 
 def _build_child(parent, store, project, message):
