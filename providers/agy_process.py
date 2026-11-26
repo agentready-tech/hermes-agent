@@ -70,7 +70,7 @@ def close_child(child):
 
 
 def _drain(child, selector, deadline, cancelled, diagnostics, input_data, prefix):
-    remaining = prefix
+    remaining = memoryview(prefix)
     sending_prefix = bool(prefix)
     while True:
         if cancelled():
@@ -88,7 +88,7 @@ def _drain(child, selector, deadline, cancelled, diagnostics, input_data, prefix
                     key.fileobj.close()
                     continue
                 if not remaining:
-                    remaining = input_data() or b""
+                    remaining = memoryview(input_data() or b"")
                     if not remaining:
                         # Avoid spinning on a writable pipe while the human reads.
                         time.sleep(0.02)

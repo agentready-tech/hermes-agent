@@ -13,7 +13,7 @@ import subprocess
 from hermes_constants import get_default_hermes_root, named_profile_is_live
 from hermes_platform.resolver import locate_command
 from hermes_runtime.standalone.agy_pod_process import GENERATION, request_frame
-from hermes_runtime.standalone.agy_runtime import LOGIN_COMMAND, StagedStore, print_command
+from hermes_runtime.standalone.agy_runtime import LOGIN_COMMAND, StagedStore
 from providers.agy_policy import AgyError
 from tools.environments.base import EnvironmentConnectionError
 from tools.environments.kubernetes_lifecycle import SandboxLifecycle
@@ -200,19 +200,19 @@ class PodAuthority:
                 self.save(state)
                 self.control(row["slot"], "clear", generation)
 
-    def spawn_staged(self, home, stage, operation, argv):
+    def spawn_staged(self, home, stage, operation, request):
         with self.locked(home) as state:
             row = self.staged(state, stage)
             if not row or operation not in {"login", "probe"}:
                 raise AgyError("unavailable")
-            return self.launch(row, operation, argv)
+            return self.launch(row, operation, request)
 
-    def spawn(self, home, generation, operation, argv):
+    def spawn(self, home, generation, operation, request):
         with self.locked(home) as state:
             row = self.current(state.get("active"))
             if not row or operation != "inference" or row["generation"] != generation:
                 raise AgyError("auth_required")
-            return self.launch(row, operation, argv)
+            return self.launch(row, operation, request)
 
     def lifecycle(self, slot):
         return SandboxLifecycle(self.home, self.kubectl, self.namespace, IDLE_SECONDS, workload=f"agy-{slot}")
@@ -228,11 +228,11 @@ class PodAuthority:
         except EnvironmentConnectionError:
             raise AgyError("unavailable") from None
 
-    def launch(self, row, operation, argv):
-        if operation == "login" and argv == LOGIN_COMMAND:
+    def launch(self, row, operation, request):
+        if operation == "login" and request == LOGIN_COMMAND:
             payload = request_frame("login")
-        elif operation in {"probe", "inference"} and argv and argv == print_command(argv[-1]):
-            payload = request_frame("print", argv[-1])
+        elif operation in {"probe", "inference"} and isinstance(request, str):
+            payload = request_frame("print", request)
         else:
             raise AgyError("unavailable")
         slot = row["slot"]

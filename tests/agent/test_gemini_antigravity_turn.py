@@ -42,16 +42,16 @@ def native(tmp_path, monkeypatch):
     monkeypatch.setattr(model_tools, "get_tool_definitions", lambda *_, **__: TOOLS)
 
     class NativeAuthority(Authority):
-        def spawn(self, owner, generation, operation, argv):
+        def spawn(self, owner, generation, operation, payload):
             mode, response = next(self.steps)
             assert (owner, generation, operation) == (home, "fixture-generation", "inference")
-            prompt = json.loads(argv[-1]); rows = prompt["messages"]
+            prompt = json.loads(payload); rows = prompt["messages"]
             if self.processes:
                 with SessionDB(db_path) as reader:
                     persisted = reader.get_messages(session)
                     assert persisted[-1]["role"] == "tool"
                     assert persisted[-1]["tool_call_id"] == rows[-1]["tool_call_id"] == calls[-1]
-            child = spawn(tmp_path, mode, response, argv[-1])
+            child = spawn(tmp_path, mode, response, payload if mode == "canonical-followup" else "")
             self.processes.append(child)
             return child
 

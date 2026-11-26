@@ -6,6 +6,8 @@ CAPABILITY = "gemini-antigravity-v1"
 BINARY = "/opt/hermes/inert/antigravity/agy"
 SETTINGS = "/opt/hermes/inert/antigravity/settings.json"
 LOCAL_ENDPOINT = "agy://gemini-antigravity"
+PROMPT_LIMIT = 1024 * 1024
+PRINT_DONE = b"\0"
 
 _MESSAGES = {
     "unavailable": "Gemini Antigravity is unavailable on this runtime.",

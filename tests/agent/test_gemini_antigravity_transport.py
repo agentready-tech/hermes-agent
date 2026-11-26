@@ -1,5 +1,6 @@
 """Run the product Antigravity adapter against deterministic POSIX children only."""
 from importlib import import_module
+from pathlib import Path
 import signal
 import subprocess
 import sys
@@ -10,7 +11,7 @@ import pytest
 from hermes_runtime.standalone import agy_runtime
 from hermes_runtime.standalone.agy_pod_process import request_frame
 from providers import agy_process
-from providers.agy_policy import AgyError, BINARY, MODEL, PROVIDER, SETTINGS
+from providers.agy_policy import AgyError, MODEL, PROMPT_LIMIT, PROVIDER
 from providers.agy_process import communicate
 from tests.agent.agy_fixture import spawn
 
@@ -31,13 +32,10 @@ class Authority:
     def active(self, home):
         return "fixture-generation" if home == self.home and not self.withdrawals else None
 
-    def spawn(self, home, generation, operation, argv):
+    def spawn(self, home, generation, operation, prompt):
         assert self.active(home) == generation == "fixture-generation" and operation == "inference"
-        assert argv[:-1] == (BINARY, "--model", MODEL, "--output-format", "stream-json",
-                            "--disable-slash-commands", "--settings", SETTINGS, "--log-file", "/dev/null",
-                            "--print-timeout", "120s", "-p")
         mode, response = next(self.steps)
-        child = spawn(home, mode, response, argv[-1])
+        child = spawn(home, mode, response, prompt)
         self.processes.append(child)
         return child
 
@@ -108,7 +106,7 @@ def test_response_shape_and_same_catalog_schema(tmp_path, monkeypatch, response)
 def test_reject_input_without_spawn_and_do_not_offer_remote_ref(tmp_path, monkeypatch):
     authority, provider = client(tmp_path, monkeypatch)
     for kwargs in ({"response_format": {}}, {"messages": [{"role": "user", "content": [{"type": "image_url"}]}]},
-                   {"messages": [{"role": "user", "content": "x" * (96 * 1024)}]}):
+                   {"messages": [{"role": "user", "content": "x" * PROMPT_LIMIT}]}):
         with pytest.raises(AgyError):
             provider.create(**({"model": MODEL, "messages": MESSAGES} | kwargs))
     assert authority.processes == []
@@ -171,6 +169,46 @@ def test_framed_login_sends_one_code_while_the_remote_lease_stays_open():
     assert rc == 0 and not diagnostics and received == b"code received\n"
 
 
+def test_large_print_input_reaches_cli_and_closes_only_after_result():
+    cli = r"""
+import json
+import sys
+
+row = json.loads(sys.stdin.buffer.readline())
+assert row == {"event": "user", "message": {"content": "x" * 135_000 + "-last-bytes"}}
+print(json.dumps({"event": "init", "conversation_id": "fixture", "init": {
+    "cwd": "/fixture", "tools": [], "permission_mode": "strict",
+}}), flush=True)
+print(json.dumps({"event": "result", "result": {
+    "status": "SUCCESS", "conversation_id": "fixture", "response": '{"type":"final","answer":"long prompt read"}',
+}}), flush=True)
+assert sys.stdin.buffer.read() == b""
+"""
+    worker = f"""
+import os
+import subprocess
+import sys
+from hermes_runtime.standalone.agy_pod_process import read_command, supervise
+from hermes_runtime.standalone.agy_runtime import PRINT_COMMAND
+
+incoming = sys.stdin.fileno()
+argv, print_input = read_command(incoming)
+assert argv == PRINT_COMMAND and "--input-format" in argv and "-p" not in argv
+child = subprocess.Popen([sys.executable, "-I", "-c", {cli!r}], stdin=subprocess.PIPE, start_new_session=True)
+os.set_blocking(child.stdin.fileno(), False)
+os.set_blocking(incoming, False)
+sys.exit(supervise(child, incoming, timeout=10, print_input=print_input))
+"""
+    child = subprocess.Popen([sys.executable, "-c", worker], cwd=Path(__file__).resolve().parents[2],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             start_new_session=True)
+    child.agy_request_frame = request_frame("print", "x" * 135_000 + "-last-bytes")
+    parser = AGY.Stream()
+    status, stderr = agy_runtime.communicate_print(child, parser, cancelled=lambda: False)
+    assert parser.finish(status) == {"type": "final", "answer": "long prompt read"}
+    assert not stderr and child.stdin.closed and child.stdout.closed and child.stderr.closed
+
+
 def test_production_not_discovered_and_exits_before_other_routes(tmp_path, monkeypatch):
     from agent.agent_runtime_helpers import create_openai_client
     from agent.auxiliary_client import resolve_provider_client
@@ -208,21 +246,19 @@ def test_fixed_launch_environment_is_not_inherited(tmp_path, monkeypatch):
 
 
 def test_generation_withdrawn_after_child_finishes_before_response(tmp_path, monkeypatch):
-    import importlib
     from providers.agy_policy import AgyError
     from hermes_runtime.standalone import agy_runtime
 
-    adapter = importlib.import_module("plugins.model-providers.gemini-antigravity")
     authority = Authority(tmp_path, [("ok", '{"type":"final","answer":"not published"}')])
     monkeypatch.setattr(agy_runtime, "admit", lambda *_: authority)
-    real_communicate = adapter.communicate
+    real_communicate = agy_runtime.communicate_print
 
     def finish_then_withdraw(*args, **kwargs):
         outcome = real_communicate(*args, **kwargs)
         monkeypatch.setattr(authority, "active", lambda _home: None)
         return outcome
 
-    monkeypatch.setattr(adapter, "communicate", finish_then_withdraw)
+    monkeypatch.setattr(agy_runtime, "communicate_print", finish_then_withdraw)
     client = agy_runtime.profile_for(tmp_path).create_client(cancelled=lambda: False)
     with pytest.raises(AgyError) as error:
         client.create(model=MODEL, messages=[{"role": "user", "content": "Inert"}])

@@ -8,9 +8,8 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 from referencing import Registry
 
-from providers.agy_policy import AgyError, MODEL
+from providers.agy_policy import AgyError, MODEL, PROMPT_LIMIT
 
-PROMPT_LIMIT = 96 * 1024
 LINE_LIMIT = 256 * 1024
 STDOUT_LIMIT = 4 * 1024 * 1024
 RESPONSE_LIMIT = 128 * 1024

@@ -10,7 +10,6 @@ from types import SimpleNamespace
 from agent.redact import redact_for_egress
 from hermes_runtime.standalone import agy_runtime
 from providers.agy_policy import AgyError, LOCAL_ENDPOINT, MODEL, PROVIDER
-from providers.agy_process import communicate
 from providers.base import ProviderProfile
 
 from .protocol import Stream, encode, prepare, validate_result
@@ -82,7 +81,7 @@ class Client:
         try:
             with config_write_lock(self.home / "config.yaml") if self.selection is not None else nullcontext():
                 self.require_current()
-                child = authority.spawn(self.home, self.generation, "inference", agy_runtime.print_command(prompt))
+                child = authority.spawn(self.home, self.generation, "inference", prompt)
             row = _read_response(child, cancelled=self._cancelled)
             return validate_result(row, validators)
         except AgyError as error:
@@ -97,7 +96,7 @@ def _read_response(child: Popen[bytes], *, cancelled: Callable[[], bool]) -> dic
     parser = Stream()
     stderr = bytearray()
     try:
-        status, _ = communicate(child, parser.feed, timeout=125, cancelled=cancelled, diagnostics=stderr)
+        status, _ = agy_runtime.communicate_print(child, parser, cancelled=cancelled, diagnostics=stderr)
         row = parser.finish(status)
         # A soft refusal may write only to stderr and still report SUCCESS.
         if stderr:

@@ -46,17 +46,17 @@ class FixtureAuthority:
         (home.parent / self.pending.namespace).mkdir()
         return self.pending
 
-    def spawn_staged(self, home, stage, op, argv):
+    def spawn_staged(self, home, stage, op, request):
         assert home == self.home and op in {"login", "probe"}
         if stage != self.pending or (op == "probe" and self.mismatch):
             raise AgyError("unavailable")  # Refuse before starting even the inert child.
         root = home.parent / stage.namespace
         if op == "login":
-            assert argv == agy_runtime.LOGIN_COMMAND
+            assert request == agy_runtime.LOGIN_COMMAND
             mode = "store-login" if self.mode == "login" else self.mode
             child = spawn(root, mode, FIXTURE_URL, login=True)
         else:
-            assert argv[-2:] == ("-p", 'Reply with exactly this JSON: {"type":"final","answer":"AGE11_READY"}')
+            assert request == 'Reply with exactly this JSON: {"type":"final","answer":"AGE11_READY"}'
             response = '{"type":"final","answer":"AGE11_READY"}'
             if self.probe_mode == "wrong-answer":
                 response = '{"type":"final","answer":"unrelated fixture"}'
@@ -64,9 +64,9 @@ class FixtureAuthority:
         self.children.append((op, stage.generation, child))
         return child
 
-    def spawn(self, home, generation, op, argv):
+    def spawn(self, home, generation, op, request):
         assert home == self.home and op == "inference" and generation == self.active(home)
-        assert argv[-2] == "-p" and json.loads(argv[-1])["version"] == 1
+        assert json.loads(request)["version"] == 1
         if self.mode == "expired-fixture":
             raise AgyError("auth_expired")
         child = spawn(home, "ok", '{"type":"final","answer":"fixed fixture reply"}')
