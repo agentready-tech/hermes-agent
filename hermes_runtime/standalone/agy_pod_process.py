@@ -53,10 +53,14 @@ def read_command(fd):
     operation, prompt = data["operation"], data["prompt"]
     if operation == "login" and prompt is None:
         return LOGIN_COMMAND, None
-    if operation != "print" or not isinstance(prompt, str) or not prompt or "\x00" in prompt:
+    if operation not in ("print", "acp") or not isinstance(prompt, str) or not prompt or "\x00" in prompt:
         raise AgyError("protocol")
     if len(prompt.encode("utf-8")) > PROMPT_LIMIT:
         raise AgyError("input_too_large")
+    if operation == "acp":
+        from hermes_runtime.standalone.agy_acp_worker import ACP_COMMAND
+
+        return ACP_COMMAND, prompt
     message = {"event": "user", "message": {"content": prompt}}
     return PRINT_COMMAND, json.dumps(message, ensure_ascii=False).encode("utf-8") + b"\n"
 
@@ -123,6 +127,11 @@ def run(store, scratch, incoming):
     workdir = scratch / "work"
     home.mkdir(mode=0o700)
     workdir.mkdir(mode=0o700)
+    acp = isinstance(print_input, str)
+    if acp:
+        from hermes_runtime.standalone import agy_acp_worker
+
+        agy_acp_worker.acp_settings(home)
     environment = child_environment(home)
     environment["TMPDIR"] = str(workdir)
     source = Path(__file__).resolve().parents[2]
@@ -134,7 +143,10 @@ def run(store, scratch, incoming):
         child = subprocess.Popen([sys.executable, "-I", "-c", invocation, str(source),
                                   str(home), str(workdir), *argv],
                                  cwd=workdir, env=environment, start_new_session=True,
-                                 stdin=subprocess.PIPE)
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE if acp else None,
+                                 stderr=subprocess.PIPE if acp else None)
+        if acp:
+            return agy_acp_worker.run(child, incoming, print_input, workdir)
         os.set_blocking(child.stdin.fileno(), False)
         return supervise(child, incoming, timeout=900 if print_input is None else 120, print_input=print_input)
 

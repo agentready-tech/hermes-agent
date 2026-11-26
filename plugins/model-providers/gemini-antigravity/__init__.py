@@ -2,17 +2,21 @@
 
 import logging
 import re
+import time
+from contextlib import nullcontext, suppress
 from collections.abc import Callable
-from subprocess import Popen
+from subprocess import Popen, SubprocessError
 from threading import Event
 from types import SimpleNamespace
 
+from agent.agy_turn import acp_scope
 from agent.redact import redact_for_egress
 from hermes_runtime.standalone import agy_runtime
+from providers.agy_acp_wire import Peer, encode as encode_wire
 from providers.agy_policy import AgyError, LOCAL_ENDPOINT, MODEL, PROVIDER
 from providers.base import ProviderProfile
 
-from .protocol import Stream, encode, prepare, validate_result
+from .protocol import Stream, _message, _tool_catalog, encode, prepare, validate_result
 
 logger = logging.getLogger(__name__)
 _PRIVATE_DIAGNOSTIC = re.compile(
@@ -44,6 +48,8 @@ class Client:
     def close(self):
         self.closed.set()
 
+    cancel = close
+
     def for_request(self):
         self.require_current()
         child = Client(self.home, self.authority, self.generation, self._cancelled)
@@ -56,10 +62,13 @@ class Client:
     def create(self, *, model, messages, tools=None, stream=False, response_format=None, **kwargs):
         if model != MODEL or response_format is not None or kwargs.get("modalities") not in (None, ["text"]):
             raise AgyError("unsupported_input")
-        prompt, validators = prepare(messages, tools)
         if self._cancelled():
             raise AgyError("cancelled")
-        result = self._request(prompt, validators)
+        if getattr(self.authority, "acp", False):
+            result = self._request_acp(messages, tools)
+        else:
+            prompt, validators = prepare(messages, tools)
+            result = self._request(prompt, validators)
         self.require_current()
         return _completion(result, stream)
 
@@ -74,7 +83,6 @@ class Client:
         return authority
 
     def _request(self, prompt, validators):
-        from contextlib import nullcontext
         from hermes_cli.config import config_write_lock
 
         authority = self.authority
@@ -90,6 +98,103 @@ class Client:
             raise
         except OSError:
             raise AgyError("transport") from None
+
+    def _request_acp(self, messages, tools):
+        from hermes_cli.config import config_write_lock
+
+        scope = acp_scope.get()
+        if scope is None or not scope.lock.acquire(blocking=False):
+            raise AgyError("unavailable")
+        cancelled = lambda: self._cancelled() or scope.cancelled.is_set()
+        owner = (self.home, self.authority, self.generation, self.selection)
+        try:
+            if cancelled():
+                raise AgyError("cancelled")
+            session = scope.session
+            if session is None:
+                prompt, validators = prepare(messages, tools, acp=True)
+                with config_write_lock(self.home / "config.yaml") if self.selection is not None else nullcontext():
+                    self.require_current()
+                    child = self.authority.spawn(self.home, self.generation, "inference", prompt)
+                session = scope.session = AcpTurn(owner, child)
+            else:
+                if session.owner != owner:
+                    raise AgyError("unavailable")
+                self.require_current()
+                _, validators = _tool_catalog(tools)
+                session.resume(messages)
+            row = session.receive(cancelled, validators)
+            if row["type"] == "final":
+                session.close()
+                scope.session = None
+            return row
+        except (AgyError, OSError) as error:
+            if scope.session is not None:
+                scope.session.close()
+                scope.session = None
+            if isinstance(error, OSError):
+                raise AgyError("transport") from None
+            if error.code in {"auth_expired", "containment"}:
+                self.authority.withdraw(self.home, self.generation, error.code)
+            raise
+        finally:
+            scope.lock.release()
+            if scope.cancelled.is_set():
+                scope.close_if_idle()
+
+
+class AcpTurn:
+    """A native MCP request is answered by the next canonical Hermes tool result."""
+
+    def __init__(self, owner, child):
+        self.owner = owner
+        self.peer = Peer(child)
+        self.peer.send(child.agy_request_frame)
+        self.pending = None
+
+    def close(self):
+        with suppress(OSError, SubprocessError):
+            self.peer.close()
+
+    def resume(self, messages):
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
+            if message.get("role") == "tool" and message.get("tool_call_id") == self.pending:
+                try:
+                    result = _message(message)
+                    after = [_message(row) for row in messages[index + 1:]]
+                except (KeyError, ValueError, TypeError):
+                    raise AgyError("unsupported_input") from None
+                if any(row["role"] not in {"system", "developer", "user"} for row in after):
+                    raise AgyError("protocol")
+                self.peer.send(encode_wire({"type": "tool_result", "id": self.pending,
+                                            "content": result["content"], "after": after}))
+                self.pending = None
+                return
+        raise AgyError("protocol")
+
+    def receive(self, cancelled, validators):
+        deadline = time.monotonic() + 120
+        row = {}
+        try:
+            row = self.peer.receive(lambda: deadline, cancelled)
+            if row.get("type") == "error":
+                reason = row.get("reason")
+                if reason not in ("transport", "protocol", "auth_expired", "containment"):
+                    reason = "protocol"
+                raise AgyError(reason)
+            result = validate_result(row, validators)
+            if result["type"] == "tool_call":
+                self.pending = result["id"]
+            return result
+        except AgyError as error:
+            if error.code != "cancelled":
+                logger.warning(
+                    "Gemini Antigravity ACP failed (stage=%r, reason=%s, detail=%r, stderr=%r, exec_stderr=%r)",
+                    _log_text(row.get("stage")), error.code, _log_text(row.get("detail")), _log_text(row.get("stderr")),
+                    _log_text(self.peer.stderr.decode(errors="replace")),
+                )
+            raise
 
 
 def _read_response(child: Popen[bytes], *, cancelled: Callable[[], bool]) -> dict[str, object]:

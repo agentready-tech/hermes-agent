@@ -1,6 +1,9 @@
 """Native Hermes dispatch, append, replay and reopen for the inert AGE-11 provider."""
 
 import json
+from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -30,12 +33,14 @@ def native(tmp_path, monkeypatch):
     session = "inert-native-session"
     calls = []
     home = get_hermes_home()
+    after_dispatch = lambda _args: None
     def echo(args, **_kwargs):
         with SessionDB(db_path) as reader:
             rows = reader.get_messages(session)
             assert rows[-1]["role"] == "assistant"
-            assert rows[-1]["tool_calls"][0]["id"] == args["text"]
+            assert json.loads(rows[-1]["tool_calls"][0]["function"]["arguments"]) == args
         calls.append(args["text"])
+        after_dispatch(args)
         return json.dumps(args)
 
     registry.register("fixture_echo", "fixture_echo", {"name": "fixture_echo", "parameters": SCHEMA}, echo)
@@ -55,17 +60,56 @@ def native(tmp_path, monkeypatch):
             self.processes.append(child)
             return child
 
-    def start(*steps, active_db=db):
+    def start(*steps, active_db=db, acp=False):
         authority = NativeAuthority(home, steps)
+        if acp:
+            from hermes_runtime.standalone.agy_pod_process import request_frame
+
+            def spawn_acp(owner, generation, operation, payload):
+                assert (owner, generation, operation) == (home, "fixture-generation", "inference")
+                script = Path(__file__).with_name("agy_acp_fixture.py")
+                child = subprocess.Popen([sys.executable, "-I", str(script), str(tmp_path)], stdin=subprocess.PIPE,
+                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+                child.agy_request_frame = request_frame("acp", payload)
+                authority.processes.append(child)
+                return child
+
+            authority.acp = True
+            authority.spawn = spawn_acp
         monkeypatch.setattr(agy_runtime, "admit", lambda *_: authority)
         agent = AIAgent(provider=PROVIDER, model=MODEL, quiet_mode=True, session_id=session,
                         session_db=active_db, skip_context_files=True, skip_memory=True,
                         max_iterations=4, enabled_toolsets=["fixture_echo"])
         agent.valid_tool_names = ["fixture_echo"]
+        if acp:
+            def steer(args):
+                if args["text"] == "first":
+                    assert agent.steer("поправка пользователя")
+
+            nonlocal after_dispatch
+            after_dispatch = steer
         return agent, authority
 
     yield start, calls, db, db_path, session
     db.close()
+
+
+def test_acp_keeps_one_worker_for_both_durable_tool_calls_and_steer(native):
+    start, calls, db, _, session = native
+    agent, authority = start(acp=True)
+    try:
+        result = agent.run_conversation("Use both fixture echoes")
+        assert result["final_response"] == "Проверено ACP ☃", result.get("error")
+        assert calls == ["first", "second"]
+        child, = authority.processes
+        assert child.poll() is not None
+        rows = db.get_messages(session)
+        ids = [row["tool_calls"][0]["id"] for row in rows if row.get("tool_calls")]
+        assert len(set(ids)) == 2
+        assert [row["tool_call_id"] for row in rows if row["role"] == "tool"] == ids
+        assert any(row["role"] == "user" and "поправка пользователя" in row["content"] for row in rows)
+    finally:
+        agent.close()
 
 
 @pytest.mark.parametrize(("source_prefix", "stored_prefix"), [("echo-", "echo-"), ("call_", "agy-")])

@@ -81,14 +81,14 @@ def authority_for(home):
         profile, namespace, job = owned_profile(home)
         executable, *_ = locate_command("kubectl").command
         prefix = [executable, "--namespace", namespace]
-        return pod_authority(profile, namespace, executable, read_slots(prefix, stage, job))
+        return pod_authority(profile, namespace, executable, read_slots(prefix, stage, job), acp=stage == "test")
     except (OSError, TypeError, ValueError, KeyError):
         raise AgyError("unavailable") from None
 
 
 @lru_cache(maxsize=128)
-def pod_authority(home, namespace, kubectl, slots):
-    return PodAuthority(home, namespace, kubectl, slots)
+def pod_authority(home, namespace, kubectl, slots, *, acp=False):
+    return PodAuthority(home, namespace, kubectl, slots, acp=acp)
 
 
 def stop_profile_agy_if_idle():
@@ -103,7 +103,8 @@ def stop_profile_agy_if_idle():
 
 
 class PodAuthority:
-    def __init__(self, home, namespace, kubectl, slots):
+    def __init__(self, home, namespace, kubectl, slots, *, acp=False):
+        self.acp = acp
         self.home, self.namespace, self.kubectl = home, namespace, kubectl
         self.slots = dict(zip(SLOTS, slots))
         self.root = home.parent.parent / "agy-bindings" / home.name
@@ -232,7 +233,8 @@ class PodAuthority:
         if operation == "login" and request == LOGIN_COMMAND:
             payload = request_frame("login")
         elif operation in {"probe", "inference"} and isinstance(request, str):
-            payload = request_frame("print", request)
+            command = "acp" if operation == "inference" and self.acp else "print"
+            payload = request_frame(command, request)
         else:
             raise AgyError("unavailable")
         slot = row["slot"]

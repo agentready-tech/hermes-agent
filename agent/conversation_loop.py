@@ -1748,6 +1748,7 @@ def run_conversation(
     ``{turn_id, current_turn_user_idx}`` pair is stamped beside the exact ``messages`` it
     addresses, after every history rewrite including post-turn micro-compaction.
     """
+    from agent.agy_turn import acp_turn_scope
     from agent.turn_context import export_current_turn_boundary
     from agent.voice_turn_route import end_voice_turn_route
     from tools.vision_tools_history_budget import native_turn_images
@@ -1756,7 +1757,7 @@ def run_conversation(
     agent._turn_user_intervened = False
     # Images attached natively to this user turn stay visible to vision_analyze for the turn, so
     # it does not embed the same pixels a second time into the same request (#76411).
-    with native_turn_images(user_message):
+    with native_turn_images(user_message), acp_turn_scope():
         try:
             result = _run_conversation_turn(
                 agent,

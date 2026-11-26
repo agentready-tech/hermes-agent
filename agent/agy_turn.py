@@ -1,7 +1,45 @@
 """Guard the existing native dispatch, never execute from the provider adapter."""
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+from threading import Event, Lock
+
 from agent.message_sanitization import coalesce_tool_call_id
 from providers.agy_policy import AgyError
+
+
+class AcpScope:
+    """The request thread shares this handle with its owning conversation turn."""
+
+    def __init__(self):
+        self.lock = Lock()
+        self.cancelled = Event()
+        self.session = None
+
+    def close_if_idle(self):
+        if not self.lock.acquire(blocking=False):
+            return
+        try:
+            if self.session is not None:
+                session, self.session = self.session, None
+                session.close()
+        finally:
+            self.lock.release()
+
+
+acp_scope: ContextVar[AcpScope | None] = ContextVar("agy_acp_scope", default=None)
+
+
+@contextmanager
+def acp_turn_scope():
+    scope = AcpScope()
+    token = acp_scope.set(scope)
+    try:
+        yield
+    finally:
+        acp_scope.reset(token)
+        scope.cancelled.set()
+        scope.close_if_idle()
 
 
 def _history_ids(rows):

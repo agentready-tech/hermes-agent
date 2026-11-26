@@ -300,11 +300,14 @@ def _message(row):
     return result
 
 
-def prepare(messages, tools):
+def prepare(messages, tools, *, acp=False):
     catalog, validators = _tool_catalog(tools)
     try:
         history = [_message(row) for row in messages]
-        packed = encode({"version": 1, "instructions": INSTRUCTIONS, "messages": history, "tools": catalog})
+        request = {"messages": history, "tools": catalog}
+        if not acp:
+            request.update({"version": 1, "instructions": INSTRUCTIONS})
+        packed = encode(request)
     except (KeyError, TypeError, ValueError, RecursionError):
         raise AgyError("unsupported_input") from None
     if len(packed) > PROMPT_LIMIT:
