@@ -96,7 +96,7 @@ def find_home_tip(connection):
 
 
 def ensure_home_head():
-    with sqlite3.connect(state_db_path()) as connection:
+    with closing(sqlite3.connect(state_db_path())) as connection:
         connection.execute(
             """CREATE TABLE IF NOT EXISTS agentready_session_heads (
                    logical_session_id TEXT PRIMARY KEY,
@@ -130,7 +130,7 @@ def ensure_home_head():
 
 def current_home_session_id():
     try:
-        with sqlite3.connect(state_db_path()) as connection:
+        with closing(sqlite3.connect(state_db_path())) as connection:
             row = connection.execute(
                 "SELECT current_session_id FROM agentready_session_heads WHERE logical_session_id = ?",
                 (HOME_SESSION_ID,),
@@ -172,7 +172,7 @@ def belongs_to_home_lineage(session_id):
     if value == HOME_SESSION_ID:
         return True
     try:
-        with sqlite3.connect(state_db_path()) as connection:
+        with closing(sqlite3.connect(state_db_path())) as connection:
             row = connection.execute(
                 f"""WITH RECURSIVE lineage(id, visited) AS (
                        SELECT id, ',' || id || ',' FROM sessions WHERE id = ?
