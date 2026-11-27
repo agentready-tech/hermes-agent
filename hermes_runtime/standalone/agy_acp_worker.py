@@ -1,5 +1,6 @@
 """Run a single native ACP prompt and relay MCP calls over the owning exec pipe."""
 
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -228,8 +229,8 @@ def run(child, incoming, payload, workdir):
         elif set(request) == {"messages", "tools", "model"}:
             bridge = Bridge(request["tools"])
             session = Session(peer, incoming, bridge)
-            with serve(bridge) as endpoint:
-                answer = session.prompt(request["messages"], request["model"], workdir, [endpoint])
+            with serve(bridge) if request["tools"] else nullcontext() as endpoint:
+                answer = session.prompt(request["messages"], request["model"], workdir, [endpoint] if endpoint else [])
             row = {"type": "final", "answer": answer}
         else:
             raise AgyError("protocol")

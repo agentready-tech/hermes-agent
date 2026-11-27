@@ -19,12 +19,13 @@ logger = logging.getLogger("agent.conversation_loop")
 
 def run_preflight_gate(
     agent: Any, *, request_pressure_tokens: Any, _moa_prepared_request: Any,
+    api_messages: Any, tools_for_api: Any,
     pending_moa_prepared_request: Any, messages: Any, system_message: Any, user_message: Any,
     active_system_prompt: Any, conversation_history: Any, api_call_count: Any,
     compression_attempts: Any, max_compression_attempts: Any, effective_task_id: Any,
     final_response: Any, failed: Any, _turn_exit_reason: Any, _compression_timeout_exhausted: Any,
     _preflight_compression_blocked: Any, _provider_overflow_recovery_pending: Any,
-    _last_preflight_pressure: Any,
+    _last_preflight_pressure: tuple[int, int | None] | None,
 ) -> PreflightGateVerdict:
     """Run the pre-API guard chain in the original order. ``_last_preflight_pressure`` is
     consumed here (set to None) and re-armed only by a compression pass, so a blocked
@@ -62,6 +63,11 @@ def run_preflight_gate(
     # failure cooldown, then should_compress().
     _compressor = agent.context_compressor
     _preflight_threshold = int(getattr(_compressor, "threshold_tokens", 0) or 0)
+    client = getattr(agent, "client", None)
+    measure = getattr(type(client), "preflight_input_size", None)
+    input_size = (measure(client, model=agent.model, messages=api_messages, tools=tools_for_api)
+                  if measure and agent.compression_enabled else None)
+    transport_overflow = input_size is not None and input_size[0] > input_size[1]
     _provider_overflow_preflight = _provider_overflow_recovery_pending and (
         _preflight_threshold <= 0 or request_pressure_tokens >= _preflight_threshold
     )
@@ -71,29 +77,33 @@ def run_preflight_gate(
         v._provider_overflow_recovery_pending = False
     # Compare fully assembled requests, not raw ``messages`` (which omit
     # api_content, plugin injections, prefills, MoA context, ephemeral system text).
+    prior_tokens, prior_bytes = _last_preflight_pressure or (None, None)
+    if transport_overflow:
+        pressure, threshold = input_size
+        previous_pressure, unit = prior_bytes, "bytes"
+    else:
+        pressure, threshold = request_pressure_tokens, _preflight_threshold
+        previous_pressure, unit = prior_tokens, "tokens"
     if (
-        _last_preflight_pressure is not None
-        and request_pressure_tokens >= _preflight_threshold
+        previous_pressure is not None and pressure >= threshold
         and not _compression_warrants_another_preflight_pass(
-            _last_preflight_pressure, request_pressure_tokens, _preflight_threshold
+            previous_pressure, pressure, threshold,
         )
     ):
         # Stop proactive retries this turn without consuming the shared overflow-
         # recovery budget; the provider's error handler may still compact.
         v._preflight_compression_blocked = True
         logger.warning(
-            "Pre-API compression made insufficient progress: ~%s -> "
-            "~%s request tokens; skipping additional preflight passes",
-            f"{_last_preflight_pressure:,}",
-            f"{request_pressure_tokens:,}",
+            "Pre-API compression made insufficient progress: %s -> %s request %s; skipping additional passes",
+            f"{previous_pressure:,}", f"{pressure:,}", unit,
         )
     return run_preflight_compression(
         agent, v, compressor=_compressor, request_pressure_tokens=request_pressure_tokens,
-        provider_overflow_preflight=_provider_overflow_preflight,
+        provider_overflow_preflight=_provider_overflow_preflight, input_size=input_size,
         # An anchored figure is real usage + delta: never deferred. Only a whole-context rough
         # estimate waits for the provider's count.
         defer_preflight=(
-            (lambda _t: False) if getattr(agent, "_request_pressure_anchored", False)
+            (lambda _t: False) if transport_overflow or getattr(agent, "_request_pressure_anchored", False)
             else getattr(_compressor, "should_defer_preflight_to_real_usage", lambda _t: False)
         ),
         moa_prepared_request=_moa_prepared_request, system_message=system_message,

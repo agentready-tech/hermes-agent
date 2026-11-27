@@ -3,9 +3,11 @@
 from contextlib import contextmanager
 from contextvars import ContextVar
 from threading import Event, Lock
+from typing import Any
 
 from agent.message_sanitization import coalesce_tool_call_id
-from providers.agy_policy import AgyError
+from hermes_constants import get_hermes_home
+from providers.agy_policy import AgyError, PROVIDER, is_agy
 
 
 class AcpScope:
@@ -40,6 +42,53 @@ def acp_turn_scope():
         acp_scope.reset(token)
         scope.cancelled.set()
         scope.close_if_idle()
+
+
+_compaction_route: ContextVar[tuple[Any, str] | None] = ContextVar("agy_compaction_route", default=None)
+
+
+@contextmanager
+def compaction_client_scope(agent):
+    if not is_agy(getattr(agent, "provider", None)):
+        yield
+        return
+    token = _compaction_route.set((agent.client, agent.model))
+    try:
+        yield
+    finally:
+        _compaction_route.reset(token)
+
+
+def summarize_for_compaction(model: str, messages: list, route_info: dict[str, str] | None):
+    from agent.auxiliary_client import (
+        _aux_interrupt_cancel_requested,
+        _notify_aux_dispatch,
+        _notify_aux_provider_response,
+        _relay_sync_completion,
+        _validate_llm_response,
+    )
+
+    route = _compaction_route.get()
+    if route is None or route[1] != model or route[0].home != get_hermes_home():
+        raise AgyError("unavailable")
+    client, _ = route
+    if route_info is not None:
+        route_info.update(provider=PROVIDER, model=model)
+
+    def complete(request):
+        # A live chat ACP session may still be awaiting a tool result.
+        with acp_turn_scope():
+            request_client = client.for_request(cancelled=_aux_interrupt_cancel_requested)
+            _notify_aux_dispatch()
+            result = request_client.create(model=model, messages=request["messages"])
+            _notify_aux_provider_response()
+            return result
+
+    response = _relay_sync_completion(
+        client, {"model": model, "messages": messages}, provider=PROVIDER,
+        api_mode="chat_completions", create=complete,
+    )
+    return _validate_llm_response(response, "compression", provider=PROVIDER)
 
 
 def _history_ids(rows):

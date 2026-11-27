@@ -9,7 +9,7 @@ import pytest
 
 from hermes_runtime.standalone import agy_runtime
 from hermes_state import SessionDB
-from providers.agy_policy import MODEL, PROVIDER
+from providers.agy_policy import MODEL, PROMPT_LIMIT, PROVIDER
 from tests.agent.test_gemini_antigravity_transport import Authority, SCHEMA, TOOLS
 
 pytestmark = pytest.mark.platforms("posix")
@@ -95,6 +95,51 @@ def test_acp_keeps_one_worker_for_both_durable_tool_calls_and_steer(native, mode
         assert len(set(ids)) == 2
         assert [row["tool_call_id"] for row in rows if row["role"] == "tool"] == ids
         assert any(row["role"] == "user" and "поправка пользователя" in row["content"] for row in rows)
+    finally:
+        agent.close()
+
+
+def test_acp_compacts_large_history_through_the_selected_model(native, monkeypatch):
+    from agent.model_metadata import estimate_messages_tokens_rough
+
+    start, calls, db, _, session = native
+    model = "gemini-4-neon"
+    agent, authority = start(acp=True, model=model)
+    requests = []
+    spawn = authority.spawn
+
+    def record_request(home, generation, operation, payload):
+        requests.append(json.loads(payload))
+        return spawn(home, generation, operation, payload)
+
+    monkeypatch.setattr(authority, "spawn", record_request)
+    agent.context_compressor.update_model(
+        model, 4_000_000, agent.base_url, agent.api_key, provider=PROVIDER, api_mode=agent.api_mode,
+    )
+    previous_result = "Original archived decision. " + "🧪" * (PROMPT_LIMIT // 4)
+    try:
+        db.create_session(session, "cli", model=model)
+        for index in range(18):
+            db.append_message(session, "user", f"Review milestone {index}.")
+            db.append_message(session, "assistant", previous_result if index == 3 else f"Reviewed {index}.")
+        history = db.get_messages_as_conversation(session)
+        assert estimate_messages_tokens_rough(history) < agent.context_compressor.threshold_tokens
+
+        result = agent.run_conversation("Continue with the follow-up.", conversation_history=history)
+
+        assert result["final_response"] == "Проверено ACP ☃", result.get("error")
+        summary, chat = requests
+        assert summary["model"] == chat["model"] == model
+        assert summary["tools"] == [] and chat["tools"]
+        summary_input = summary["messages"][0]["content"]
+        assert "Original archived decision." in summary_input
+        assert "TURNS TO SUMMARIZE" in summary_input
+        assert any("archived checklist marker" in row["content"] for row in chat["messages"])
+        assert chat["messages"][-1]["content"] == "Continue with the follow-up."
+        assert calls == ["first", "second"]
+        assert all(child.poll() is not None for child in authority.processes)
+        assert any(row["content"] == previous_result for row in db.get_messages(session, include_compacted=True))
+        assert any("archived checklist marker" in row["content"] for row in db.get_messages_as_conversation(session))
     finally:
         agent.close()
 

@@ -305,6 +305,8 @@ def _close_transcript_tail(agent, messages, final_response, interrupted, _recove
 def _micro_compact_after_turn(agent, messages, final_response, logger, task_id) -> None:
     """Post-turn micro-compaction: absorb the oldest uncompacted exchange into the
     rolling summary before persist, amortizing compression across turns."""
+    from agent.agy_turn import compaction_client_scope
+
     try:
         _compressor = getattr(agent, "context_compressor", None)
         # Strict `is True` + callable gates: plugin context engines and MagicMock
@@ -322,9 +324,10 @@ def _micro_compact_after_turn(agent, messages, final_response, logger, task_id) 
         ):
             _before = len(messages)
             # A rotating compaction earlier in this turn may have moved the agent to a child session.
-            _compacted = _compressor._micro_compact(
-                messages, turn_session_id=getattr(agent, "_inflight_turn_session_id", None),
-            )
+            with compaction_client_scope(agent):
+                _compacted = _compressor._micro_compact(
+                    messages, turn_session_id=getattr(agent, "_inflight_turn_session_id", None),
+                )
             # Defrag rewrites the newest MICRO marker in place and pops _db_persisted;
             # the compressor flags us to invalidate the flush-scan cursor, else the
             # rewritten row is identity-skipped (stale).

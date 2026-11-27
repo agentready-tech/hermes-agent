@@ -1,5 +1,6 @@
 """Run the product Antigravity adapter against deterministic POSIX children only."""
 from importlib import import_module
+import json
 import signal
 import subprocess
 import sys
@@ -8,8 +9,9 @@ from types import SimpleNamespace
 import pytest
 
 from hermes_runtime.standalone import agy_runtime
-from agent.agy_turn import acp_turn_scope
+from agent.agy_turn import acp_turn_scope, compaction_client_scope
 from hermes_runtime.standalone.agy_slot import request_frame
+from hermes_runtime.workspace.transport import profile_scope
 from providers import agy_process
 from providers.agy_policy import AgyError, MODEL, PROMPT_LIMIT, PROVIDER
 from providers.agy_process import communicate
@@ -69,6 +71,47 @@ def test_provider_error_keeps_redacted_acp_diagnostics(tmp_path, monkeypatch, ca
         assert sensitive not in caplog.text
     proc, = authority.processes
     assert proc.returncode is not None and proc.stdout.closed and proc.stderr.closed
+
+
+def test_compaction_keeps_its_profile_and_leaves_a_pending_tool_round_open(tmp_path, monkeypatch):
+    from agent.auxiliary_client import call_llm
+
+    left_home, right_home = tmp_path / "left", tmp_path / "right"
+    left_home.mkdir()
+    right_home.mkdir()
+    tool = {"type": "tool_call", "id": "echo-1", "name": "fixture_echo", "arguments": {"text": "left"}}
+    left = Authority(left_home, (("ok", json.dumps(tool)), ("canonical-followup", "left")))
+    right = Authority(right_home, (("ok", '{"type":"final","answer":"Right profile summary."}'),))
+    authorities = {left_home: left, right_home: right}
+    monkeypatch.setattr(agy_runtime, "admit", lambda home, _: authorities[home])
+    left_client = agy_runtime.profile_for(left_home).create_client(cancelled=lambda: False)
+    right_client = agy_runtime.profile_for(right_home).create_client(cancelled=lambda: False)
+    left_agent = SimpleNamespace(provider=PROVIDER, model=MODEL, client=left_client)
+    right_agent = SimpleNamespace(provider=PROVIDER, model="gemini-4-neon", client=right_client)
+    route = {"provider": PROVIDER, "model": right_agent.model}
+    route_info = {}
+
+    with profile_scope(left_home), acp_turn_scope(), compaction_client_scope(left_agent):
+        proposed = left_client.create(model=MODEL, messages=MESSAGES, tools=TOOLS).choices[0].message
+        pending, = proposed.tool_calls
+        child, = left.processes
+        with profile_scope(right_home):
+            with pytest.raises(AgyError) as failure:
+                call_llm(task="compression", main_runtime={"provider": PROVIDER, "model": MODEL}, messages=MESSAGES)
+            assert failure.value.code == "unavailable"
+            with compaction_client_scope(right_agent):
+                summary = call_llm(task="compression", main_runtime=route, messages=MESSAGES, route_info=route_info)
+        assert summary.choices[0].message.content == "Right profile summary."
+        assert route_info["model"] == right_agent.model and route_info["provider"] == PROVIDER
+        assert child.poll() is None
+        result = left_client.create(model=MODEL, tools=TOOLS, messages=[
+            *MESSAGES, proposed.model_dump(),
+            {"role": "tool", "tool_call_id": pending.id, "content": '{"text": "left"}'},
+        ])
+
+    assert result.choices[0].message.content == "Проверено ☃"
+    assert left.processes == [child] and child.poll() is not None
+    assert len(right.processes) == 1 and right.processes[0].poll() is not None
 
 
 @pytest.mark.parametrize(("mode", "code"), [

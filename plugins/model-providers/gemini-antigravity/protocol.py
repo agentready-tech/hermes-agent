@@ -156,13 +156,18 @@ def _message(row):
     return result
 
 
-def prepare(messages, tools, *, model):
+def pack_prompt(messages, tools, *, model):
     catalog, validators = _tool_catalog(tools)
     try:
         history = [_message(row) for row in messages]
         packed = encode({"messages": history, "tools": catalog, "model": model})
     except (KeyError, TypeError, ValueError, RecursionError):
         raise AgyError("unsupported_input") from None
+    return packed, validators
+
+
+def prepare(messages, tools, *, model):
+    packed, validators = pack_prompt(messages, tools, model=model)
     if len(packed) > PROMPT_LIMIT:
         raise AgyError("input_too_large")
     return packed.decode("utf-8"), validators

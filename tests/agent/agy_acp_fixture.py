@@ -29,7 +29,8 @@ def agent(model):
                 ]}]}, {"id": "thought_level", "currentValue": "high"}]
     send({"id": request["id"], "result": {"sessionId": "fixture", "configOptions": options}})
     endpoints = request["params"]["mcpServers"]
-    if not endpoints:
+    if model in {"probe", "models"}:
+        assert not endpoints
         if model == "probe":
             prompt = receive("session/prompt")
             text = prompt["params"]["prompt"][0]["text"]
@@ -38,10 +39,7 @@ def agent(model):
                 "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "AGE11_READY"},
             }}})
             send({"id": prompt["id"], "result": {"stopReason": "end_turn"}})
-        else:
-            assert model == "models"
         return
-    endpoint, = endpoints
     if model == "gemini-3.8-flash-low":
         for option, value in zip(options, ("gemini-3.8-flash", "low"), strict=True):
             request = receive("session/set_config_option")
@@ -51,6 +49,15 @@ def agent(model):
     else:
         assert model == "gemini-4-neon"
     prompt = receive("session/prompt")
+    if not endpoints:
+        assert "TURNS TO SUMMARIZE" in prompt["params"]["prompt"][0]["text"]
+        send({"method": "session/update", "params": {"sessionId": "fixture", "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": "## Goal\nKeep the archived checklist marker."},
+        }}})
+        send({"id": prompt["id"], "result": {"stopReason": "end_turn"}})
+        return
+    endpoint, = endpoints
 
     def mcp(method, request_id, params=None, *, stream=False):
         payload = json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params or {}}).encode()

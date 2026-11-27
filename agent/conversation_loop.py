@@ -1440,7 +1440,7 @@ class _LoopState:
     truncated_tool_call_retries: int = 0
     truncated_response_parts: list[tuple[str, bool]] = field(default_factory=list)
     compression_attempts: int = 0
-    _last_preflight_pressure: Optional[int] = None
+    _last_preflight_pressure: tuple[int, int | None] | None = None
     # A provider overflow outweighs the rough-estimate calibration that defers preflight after
     # compaction: stays armed until the rebuilt request is below the threshold.
     _provider_overflow_recovery_pending: bool = False

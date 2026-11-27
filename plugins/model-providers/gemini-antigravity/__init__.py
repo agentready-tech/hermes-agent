@@ -12,10 +12,10 @@ from agent.agy_turn import acp_scope
 from agent.redact import redact_for_egress
 from hermes_runtime.standalone import agy_runtime
 from providers.agy_acp_wire import Peer, encode as encode_wire
-from providers.agy_policy import AgyError, LOCAL_ENDPOINT, PROVIDER, require_model
+from providers.agy_policy import AgyError, LOCAL_ENDPOINT, PROMPT_LIMIT, PROVIDER, require_model
 from providers.base import ProviderProfile
 
-from .protocol import _message, _tool_catalog, encode, prepare, validate_result
+from .protocol import _message, _tool_catalog, encode, pack_prompt, prepare, validate_result
 
 logger = logging.getLogger(__name__)
 _PRIVATE_DIAGNOSTIC = re.compile(
@@ -49,11 +49,23 @@ class Client:
 
     cancel = close
 
-    def for_request(self):
+    def for_request(self, *, cancelled=None):
         self.require_current()
-        child = Client(self.home, self.authority, self.generation, self._cancelled)
+        # A summary follows its compaction fence instead of the chat turn's soft interrupt.
+        cancel_check = self._cancelled if cancelled is None else lambda: self.closed.is_set() or cancelled()
+        child = Client(self.home, self.authority, self.generation, cancel_check)
         child.selection = self.selection
         return child
+
+    def preflight_input_size(self, *, model, messages, tools):
+        scope = acp_scope.get()
+        if scope is None or scope.session is not None:
+            return None  # An open session receives only the pending tool result.
+        try:
+            packed, _ = pack_prompt(messages, tools, model=model)
+        except AgyError:
+            return None  # The normal request path reports unsupported input.
+        return len(packed), PROMPT_LIMIT
 
     def _cancelled(self):
         return self.closed.is_set() or self.cancelled()
