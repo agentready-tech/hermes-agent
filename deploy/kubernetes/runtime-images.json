@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.26.8",
+  "defaultRuntimeVersion": "2026.11.27.1",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -5398,6 +5398,44 @@
         "qaCandidateRunId": 45798599310
       },
       "description": "Run managed browser code inside the employee Kubernetes sandbox while retaining the attachment and cold-start fixes. Verified the live browser with the exact PR candidate on QA and the published image on the production worker.",
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml"
+    },
+    "2026.11.27.1": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:3ac88bf7557a24bb5676a5247363f381619b8910f5849396c00bd6c1a09fd0f3",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.27.1",
+      "configDigest": "sha256:856de58c5f790598ecfebdbd28e097f30bd2b934b9a2a17b80ababafe3f9713f",
+      "platform": "linux/amd64",
+      "sourceRevision": "cffd2e0f5b6bfad12ca94501bf9b0110565ce24f",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:3ac88bf7557a24bb5676a5247363f381619b8910f5849396c00bd6c1a09fd0f3",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.27.1",
+        "digest": "sha256:3ac88bf7557a24bb5676a5247363f381619b8910f5849396c00bd6c1a09fd0f3",
+        "configDigest": "sha256:856de58c5f790598ecfebdbd28e097f30bd2b934b9a2a17b80ababafe3f9713f",
+        "sourceRevision": "cffd2e0f5b6bfad12ca94501bf9b0110565ce24f",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 45973895968,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": true,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:62181030d4bbc560005dc628d88eca0d562e2b4976165265d527d4552a281acd",
+        "deployRunId": 45974820052,
+        "recoveredFromRun": 45970693260
+      },
+      "validation": {
+        "runtimeReady": true,
+        "futureDefaultConfigured": true,
+        "productionScenario": "Slotegrator Kubernetes terminal on the production image with stdout descriptor 1100. Echo and NetBird status returned output. A disposable WAL database kept 3 descriptors across 600 home-session reads."
+      },
+      "description": "Close managed profile database connections and keep terminal stdout readable at high file descriptor numbers.",
       "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
       "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml"
     }
