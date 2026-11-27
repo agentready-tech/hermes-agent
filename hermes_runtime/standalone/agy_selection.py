@@ -38,7 +38,7 @@ class Selection:
             raise AgyError("unavailable")
         if self.provider == PROVIDER:
             authority = agy_runtime.admit(self.home, "inference")
-            require_model(self.model, acp=getattr(authority, "acp", False))
+            require_model(self.model)
             if authority.active(self.home) != self.generation:
                 raise AgyError("auth_required")
 

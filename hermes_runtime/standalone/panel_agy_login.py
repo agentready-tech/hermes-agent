@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from agent.memory_provider import spawn_context_thread
 from hermes_runtime.standalone import agy_runtime
-from providers.agy_policy import AgyError, CAPABILITY, MODEL
+from providers.agy_policy import AgyError, CAPABILITY
 from providers.agy_process import communicate
 
 logger = logging.getLogger(__name__)
@@ -175,7 +175,7 @@ class GeminiSubscriptions:
         generation = authority.active(self.home)
         if generation is None:
             raise AgyError("auth_required")
-        catalog = authority.models(self.home, generation) if getattr(authority, "acp", False) else ((MODEL, MODEL),)
+        catalog = authority.models(self.home, generation)
         return authority, generation, catalog
 
     def handle(self, method, params, viewer):

@@ -27,7 +27,7 @@ def confine(home, workdir):
     abi = libc.syscall(_CREATE_RULESET, 0, 0, 1)
     if abi < 1:
         raise AgyError("unavailable")
-    # The Pod mounts one credential store and a read-only root, even on ABI 1.
+    # The mount namespace supplies a private, restricted root even on ABI 1.
     mask = (1 << (13 + (abi >= 2) + (abi >= 3) + (abi >= 5))) - 1
     attributes = ctypes.c_uint64(mask)
     ruleset = libc.syscall(_CREATE_RULESET, ctypes.byref(attributes), ctypes.sizeof(attributes), 0)
@@ -61,12 +61,3 @@ def allow(libc, ruleset, path, modes):
             raise AgyError("unavailable")
     finally:
         os.close(descriptor)
-
-
-if __name__ == "__main__":
-    home, workdir, *argv = sys.argv[1:]
-    try:
-        confine(home, workdir)
-        os.execv(BINARY, argv)
-    except (OSError, AgyError):
-        raise SystemExit(125) from None

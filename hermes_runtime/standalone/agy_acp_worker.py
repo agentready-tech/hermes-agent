@@ -8,6 +8,7 @@ from select import select
 import sys
 import time
 
+from hermes_runtime.standalone.agy_runtime import PROBE_PROMPT
 from hermes_runtime.standalone.agy_acp_mcp import Bridge, SERVER_NAME, TOOL_TIMEOUT, serve
 from providers.agy_acp_wire import Lines, Peer, decode, encode
 from providers.agy_policy import ACP_FLASH, AgyError, BINARY, MODEL, PROMPT_LIMIT, SETTINGS, require_model, valid_model_id
@@ -25,7 +26,7 @@ INSTRUCTIONS = (
 
 
 def acp_settings(home: Path):
-    """Keep the pinned print policy except for the session's authenticated MCP endpoint."""
+    """Keep the pinned tool policy except for the session's authenticated MCP endpoint."""
     policy = json.loads(Path(SETTINGS).read_bytes())
     policy["permissions"]["deny"].remove("mcp(*)")
     directory = home / ".gemini" / "antigravity-cli"
@@ -188,15 +189,16 @@ class Session:
             models.setdefault(MODEL, f"{models[ACP_FLASH]} · Low")
         return [{"id": name, "label": label} for name, label in list(models.items())[:200]]
 
-    def prompt(self, messages, model, workdir, endpoint):
-        require_model(model, acp=True)
-        options = self.open(workdir, [endpoint])
-        target = ACP_FLASH if model == MODEL else model
-        if target not in model_catalog(options):
-            raise AgyError("unsupported_model")
-        options = self.configure(options, "model", target)
-        if model == MODEL:
-            self.configure(options, "thought_level", "low")
+    def prompt(self, messages, model, workdir, endpoints):
+        options = self.open(workdir, endpoints)
+        if model is not None:
+            require_model(model)
+            target = ACP_FLASH if model == MODEL else model
+            if target not in model_catalog(options):
+                raise AgyError("unsupported_model")
+            options = self.configure(options, "model", target)
+            if model == MODEL:
+                self.configure(options, "thought_level", "low")
         self.bridge.accepting.set()
         prompt = INSTRUCTIONS + "\n\n" + encode({"messages": messages}).decode()
         result = self.request("session/prompt",
@@ -219,11 +221,15 @@ def run(child, incoming, payload, workdir):
         if request == {"type": "models"}:
             session = Session(peer, incoming, Bridge([]))
             row = {"type": "models", "models": session.models(workdir)}
+        elif request == {"type": "probe"}:
+            session = Session(peer, incoming, Bridge([]))
+            answer = session.prompt([{"role": "user", "content": PROBE_PROMPT}], None, workdir, [])
+            row = {"type": "final", "answer": answer}
         elif set(request) == {"messages", "tools", "model"}:
             bridge = Bridge(request["tools"])
             session = Session(peer, incoming, bridge)
             with serve(bridge) as endpoint:
-                answer = session.prompt(request["messages"], request["model"], workdir, endpoint)
+                answer = session.prompt(request["messages"], request["model"], workdir, [endpoint])
             row = {"type": "final", "answer": answer}
         else:
             raise AgyError("protocol")

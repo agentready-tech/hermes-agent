@@ -10,7 +10,6 @@ import pytest
 from hermes_runtime.standalone import agy_runtime
 from hermes_state import SessionDB
 from providers.agy_policy import MODEL, PROVIDER
-from tests.agent.agy_fixture import spawn
 from tests.agent.test_gemini_antigravity_transport import Authority, SCHEMA, TOOLS
 
 pytestmark = pytest.mark.platforms("posix")
@@ -46,24 +45,10 @@ def native(tmp_path, monkeypatch):
     registry.register("fixture_echo", "fixture_echo", {"name": "fixture_echo", "parameters": SCHEMA}, echo)
     monkeypatch.setattr(model_tools, "get_tool_definitions", lambda *_, **__: TOOLS)
 
-    class NativeAuthority(Authority):
-        def spawn(self, owner, generation, operation, payload):
-            mode, response = next(self.steps)
-            assert (owner, generation, operation) == (home, "fixture-generation", "inference")
-            prompt = json.loads(payload); rows = prompt["messages"]
-            if self.processes:
-                with SessionDB(db_path) as reader:
-                    persisted = reader.get_messages(session)
-                    assert persisted[-1]["role"] == "tool"
-                    assert persisted[-1]["tool_call_id"] == rows[-1]["tool_call_id"] == calls[-1]
-            child = spawn(tmp_path, mode, response, payload if mode == "canonical-followup" else "")
-            self.processes.append(child)
-            return child
-
     def start(*steps, active_db=db, acp=False, model=MODEL):
-        authority = NativeAuthority(home, steps)
+        authority = Authority(home, steps)
         if acp:
-            from hermes_runtime.standalone.agy_pod_process import request_frame
+            from hermes_runtime.standalone.agy_slot import request_frame
 
             def spawn_acp(owner, generation, operation, payload):
                 assert (owner, generation, operation) == (home, "fixture-generation", "inference")
@@ -76,7 +61,6 @@ def native(tmp_path, monkeypatch):
                 authority.processes.append(child)
                 return child
 
-            authority.acp = True
             authority.spawn = spawn_acp
         monkeypatch.setattr(agy_runtime, "admit", lambda *_: authority)
         agent = AIAgent(provider=PROVIDER, model=model, quiet_mode=True, session_id=session,
@@ -116,7 +100,7 @@ def test_acp_keeps_one_worker_for_both_durable_tool_calls_and_steer(native, mode
 
 
 @pytest.mark.parametrize(("source_prefix", "stored_prefix"), [("echo-", "echo-"), ("call_", "agy-")])
-def test_two_echoes_replayed_in_three_children_and_reopened_history(native, source_prefix, stored_prefix):
+def test_two_echoes_in_one_acp_turn_and_reopened_history(native, source_prefix, stored_prefix):
     start, calls, db, path, session = native
     first, second = f"{stored_prefix}1", f"{stored_prefix}2"
     agent, auth = start(proposal(f"{source_prefix}1", first), proposal(f"{source_prefix}2", second),
@@ -125,7 +109,7 @@ def test_two_echoes_replayed_in_three_children_and_reopened_history(native, sour
         result = agent.run_conversation("Echo two inert values")
         assert result["final_response"] == "Проверено ☃", result.get("error")
         assert calls == [first, second]
-        assert len({child.pid for child in auth.processes}) == 3
+        assert len(auth.processes) == 1
     finally:
         agent.close()
     db.close()
@@ -148,7 +132,7 @@ def test_duplicate_id_is_not_renamed_or_dispatched(native, source, duplicate, st
     try:
         result = agent.run_conversation("Repeat only through the fixture")
         assert result.get("failure_reason") == "duplicate_tool_call", result
-        assert calls == [stored] and len(auth.processes) == 2
+        assert calls == [stored] and len(auth.processes) == 1
         assert sum(bool(row.get("tool_calls")) for row in db.get_messages(session)) == 1
     finally:
         agent.close()
@@ -202,7 +186,7 @@ def test_native_stream_failure_is_terminal_and_redacted(native, monkeypatch, cap
     start, calls, _, _, _ = native
     agent, auth = start(("nonzero", '{"type":"final","answer":"never publish fixture marker"}'))
     def forbidden(*_args, **_kwargs):
-        pytest.fail("switched provider on an ambiguous print outcome")
+        pytest.fail("switched provider on an ambiguous ACP outcome")
     monkeypatch.setattr(agent, "_try_activate_fallback", forbidden)
     try:
         result = agent.run_conversation("Benign failure fixture")

@@ -4,8 +4,7 @@ import logging
 import re
 import time
 from contextlib import nullcontext, suppress
-from collections.abc import Callable
-from subprocess import Popen, SubprocessError
+from subprocess import SubprocessError
 from threading import Event
 from types import SimpleNamespace
 
@@ -16,7 +15,7 @@ from providers.agy_acp_wire import Peer, encode as encode_wire
 from providers.agy_policy import AgyError, LOCAL_ENDPOINT, PROVIDER, require_model
 from providers.base import ProviderProfile
 
-from .protocol import Stream, _message, _tool_catalog, encode, prepare, validate_result
+from .protocol import _message, _tool_catalog, encode, prepare, validate_result
 
 logger = logging.getLogger(__name__)
 _PRIVATE_DIAGNOSTIC = re.compile(
@@ -60,17 +59,12 @@ class Client:
         return self.closed.is_set() or self.cancelled()
 
     def create(self, *, model, messages, tools=None, stream=False, response_format=None, **kwargs):
-        acp = getattr(self.authority, "acp", False)
-        require_model(model, acp=acp)
+        require_model(model)
         if response_format is not None or kwargs.get("modalities") not in (None, ["text"]):
             raise AgyError("unsupported_input")
         if self._cancelled():
             raise AgyError("cancelled")
-        if acp:
-            result = self._request_acp(model, messages, tools)
-        else:
-            prompt, validators = prepare(messages, tools)
-            result = self._request(prompt, validators)
+        result = self._request_acp(model, messages, tools)
         self.require_current()
         return _completion(result, model, stream)
 
@@ -83,23 +77,6 @@ class Client:
         if self.selection is not None:
             self.selection.require_saved()
         return authority
-
-    def _request(self, prompt, validators):
-        from hermes_cli.config import config_write_lock
-
-        authority = self.authority
-        try:
-            with config_write_lock(self.home / "config.yaml") if self.selection is not None else nullcontext():
-                self.require_current()
-                child = authority.spawn(self.home, self.generation, "inference", prompt)
-            row = _read_response(child, cancelled=self._cancelled)
-            return validate_result(row, validators)
-        except AgyError as error:
-            if error.code in {"auth_expired", "containment"}:
-                authority.withdraw(self.home, self.generation, error.code)
-            raise
-        except OSError:
-            raise AgyError("transport") from None
 
     def _request_acp(self, model, messages, tools):
         from hermes_cli.config import config_write_lock
@@ -114,7 +91,7 @@ class Client:
                 raise AgyError("cancelled")
             session = scope.session
             if session is None:
-                prompt, validators = prepare(messages, tools, acp_model=model)
+                prompt, validators = prepare(messages, tools, model=model)
                 with config_write_lock(self.home / "config.yaml") if self.selection is not None else nullcontext():
                     self.require_current()
                     child = self.authority.spawn(self.home, self.generation, "inference", prompt)
@@ -197,26 +174,6 @@ class AcpTurn:
                     _log_text(self.peer.stderr.decode(errors="replace")),
                 )
             raise
-
-
-def _read_response(child: Popen[bytes], *, cancelled: Callable[[], bool]) -> dict[str, object]:
-    parser = Stream()
-    stderr = bytearray()
-    try:
-        status, _ = agy_runtime.communicate_print(child, parser, cancelled=cancelled, diagnostics=stderr)
-        row = parser.finish(status)
-        # A soft refusal may write only to stderr and still report SUCCESS.
-        if stderr:
-            raise AgyError("containment")
-        return row
-    except AgyError as error:
-        if error.code != "cancelled":
-            detail = parser.result.get("error") if parser.result is not None else None
-            logger.warning(
-                "Gemini Antigravity request failed (reason=%s, exit_code=%s, result.error=%r, stderr=%r)",
-                error.code, child.returncode, _log_text(detail), _log_text(stderr.decode("utf-8", errors="replace")),
-            )
-        raise
 
 
 def _log_text(value: object) -> str:

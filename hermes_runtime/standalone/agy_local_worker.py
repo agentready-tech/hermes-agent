@@ -13,7 +13,7 @@ from tempfile import TemporaryDirectory
 
 from hermes_runtime.standalone.agy_confine import confine
 from hermes_runtime.standalone.agy_local_egress import loopback_endpoint, namespace_relay, outbound_relay
-from hermes_runtime.standalone.agy_pod_process import operate
+from hermes_runtime.standalone.agy_slot import operate
 from providers.agy_policy import AgyError, BINARY
 
 SLOT_UID = 65534

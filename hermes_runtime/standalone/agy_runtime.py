@@ -5,34 +5,16 @@ from importlib import import_module
 from pathlib import Path
 
 from hermes_constants import get_hermes_home
-from providers.agy_policy import AgyError, BINARY, LOCAL_ENDPOINT, MODEL, PRINT_DONE, PROVIDER, SETTINGS, require_model
+from providers.agy_policy import AgyError, BINARY, LOCAL_ENDPOINT, MODEL, PROVIDER, require_model
 
 
 def admit(home, operation):
-    """Only an operator-provisioned profile Pod can launch Antigravity."""
-    from hermes_runtime.standalone.agy_pod_authority import authority_for
+    """Only an operator-provisioned profile can launch Antigravity."""
+    from hermes_runtime.standalone.agy_local_authority import authority_for
 
     if operation not in {"catalog", "login", "inference", "disconnect"}:
         raise AgyError("unavailable")
     return authority_for(home)
-
-
-PRINT_COMMAND = (
-    BINARY, "--model", MODEL, "--input-format", "stream-json", "--output-format", "stream-json",
-    "--disable-slash-commands", "--settings", SETTINGS, "--log-file", "/dev/null", "--print-timeout", "120s",
-)
-
-
-def communicate_print(child, parser, *, cancelled, diagnostics=None):
-    from providers.agy_process import communicate
-
-    def acknowledge_result():
-        return PRINT_DONE if parser.result is not None else b""
-
-    # Keep the lease pipe open while the worker closes only the CLI's input.
-    acknowledgement = acknowledge_result if getattr(child, "agy_request_frame", None) else None
-    return communicate(child, parser.feed, timeout=125, cancelled=cancelled,
-                       input_data=acknowledgement, diagnostics=diagnostics)
 
 
 def child_environment(scratch):
@@ -46,8 +28,8 @@ def child_environment(scratch):
 
 # Any qualified launcher must isolate the CLI's own auth diagnostics in scratch.
 LOGIN_COMMAND = (BINARY, "acp", "--login")
-_PROBE_ANSWER = "AGE11_READY"
-_PROBE_PROMPT = f'Reply with exactly this JSON: {{"type":"final","answer":"{_PROBE_ANSWER}"}}'
+PROBE_ANSWER = "AGE11_READY"
+PROBE_PROMPT = f"Reply with exactly {PROBE_ANSWER} as plain text, with no tools."
 
 
 @dataclass(frozen=True)
@@ -55,8 +37,8 @@ class StagedStore:
     """Opaque non-credential binding minted by the host for one staged generation."""
 
     generation: str
-    namespace: str
-    policy: str
+    profile: Path
+    slot: str
 
 
 def require_authority(authority, home, operation):
@@ -72,23 +54,24 @@ def start_login(authority, home, stage):
 
 
 def verify_staged(authority, home, stage, login_pid, cancelled):
-    """A fixed print on the staged store proves usability, not an account claim."""
+    """Require a real ACP answer from the staged keyring before promotion."""
     from providers.agy_process import close_child
 
     if cancelled():
         raise AgyError("cancelled")
-    parser = import_module("plugins.model-providers.gemini-antigravity.protocol").Stream()
     owner = require_authority(authority, home, "login")
-    child = owner.spawn_staged(home, stage, "probe", _PROBE_PROMPT)
+    child = owner.spawn_staged(home, stage, "probe", None)
     if child.pid <= 0 or child.pid == login_pid:
         close_child(child)
         raise AgyError("unavailable")
-    status, diagnostics = communicate_print(child, parser, cancelled=cancelled)
-    result = parser.finish(status)
-    if diagnostics:
-        raise AgyError("containment")
-    if result != {"type": "final", "answer": _PROBE_ANSWER}:
-        raise AgyError("protocol")
+    module = import_module("plugins.model-providers.gemini-antigravity")
+    session = module.AcpTurn(stage, child)
+    try:
+        result = session.receive(cancelled, {})
+        if result["type"] != "final" or result["answer"].strip() != PROBE_ANSWER:
+            raise AgyError("protocol")
+    finally:
+        session.close()
 
 
 def profile_for(home):
@@ -104,9 +87,9 @@ def profile_for(home):
 
 
 def runtime(target_model):
-    profile = profile_for(get_hermes_home())
+    profile_for(get_hermes_home())
     model = target_model or MODEL
-    require_model(model, acp=getattr(profile.authority, "acp", False))
+    require_model(model)
     return {"provider": PROVIDER, "requested_provider": PROVIDER, "model": model,
             "base_url": LOCAL_ENDPOINT, "api_mode": "chat_completions", "api_key": "local-process",
             "source": "external-process"}

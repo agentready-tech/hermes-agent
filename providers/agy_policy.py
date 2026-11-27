@@ -10,7 +10,6 @@ BINARY = "/opt/hermes/inert/antigravity/agy"
 SETTINGS = "/opt/hermes/inert/antigravity/settings.json"
 LOCAL_ENDPOINT = "agy://gemini-antigravity"
 PROMPT_LIMIT = 1024 * 1024
-PRINT_DONE = b"\0"
 
 _MESSAGES = {
     "unavailable": "Gemini Antigravity is unavailable on this runtime.",
@@ -41,6 +40,6 @@ def valid_model_id(value):
     return isinstance(value, str) and re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,159}", value) is not None
 
 
-def require_model(value, *, acp):
-    if value != MODEL and (not acp or not valid_model_id(value)):
+def require_model(value):
+    if not valid_model_id(value):
         raise AgyError("unsupported_model")

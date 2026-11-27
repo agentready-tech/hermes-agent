@@ -30,7 +30,16 @@ def agent(model):
     send({"id": request["id"], "result": {"sessionId": "fixture", "configOptions": options}})
     endpoints = request["params"]["mcpServers"]
     if not endpoints:
-        assert model == "models"
+        if model == "probe":
+            prompt = receive("session/prompt")
+            text = prompt["params"]["prompt"][0]["text"]
+            assert "Reply with exactly AGE11_READY" in text
+            send({"method": "session/update", "params": {"sessionId": "fixture", "update": {
+                "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "AGE11_READY"},
+            }}})
+            send({"id": prompt["id"], "result": {"stopReason": "end_turn"}})
+        else:
+            assert model == "models"
         return
     endpoint, = endpoints
     if model == "gemini-3.8-flash-low":
@@ -83,7 +92,7 @@ def agent(model):
 def worker(workdir, model):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from hermes_runtime.standalone.agy_acp_worker import run
-    from hermes_runtime.standalone.agy_pod_process import read_command
+    from hermes_runtime.standalone.agy_slot import read_command
 
     incoming = sys.stdin.fileno()
     _, payload = read_command(incoming)

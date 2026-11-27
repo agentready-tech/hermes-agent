@@ -12,7 +12,7 @@ from hermes_runtime.standalone.agy_runtime import StagedStore
 from hermes_runtime.standalone.panel_agy_login import Attempt, GeminiSubscriptions
 from hermes_runtime.standalone.panel_subscriptions import Subscriptions
 from providers.agy_policy import AgyError, MODEL, PROVIDER
-from tests.agent.agy_fixture import spawn
+from tests.agent.agy_fixture import spawn, spawn_acp
 from tests.waiting import wait_until
 
 pytestmark = pytest.mark.platforms("posix")
@@ -42,34 +42,44 @@ class FixtureAuthority:
     def stage(self, home):
         assert home == self.home
         generation = f"{home.name}-{len(self.children)}"
-        self.pending = StagedStore(generation, f"{home.name}-fixture-store-{generation}", "policy-fixture")
-        (home.parent / self.pending.namespace).mkdir()
+        self.pending = StagedStore(generation, home, "a")
+        self.staged_root(self.pending).mkdir()
         return self.pending
+
+    def staged_root(self, stage):
+        return self.home.parent / f"{self.home.name}-fixture-store-{stage.generation}"
+
+    def models(self, home, generation):
+        assert home == self.home and generation == self.active(home)
+        return ((MODEL, MODEL),)
 
     def spawn_staged(self, home, stage, op, request):
         assert home == self.home and op in {"login", "probe"}
         if stage != self.pending or (op == "probe" and self.mismatch):
             raise AgyError("unavailable")  # Refuse before starting even the inert child.
-        root = home.parent / stage.namespace
+        root = self.staged_root(stage)
         if op == "login":
             assert request == agy_runtime.LOGIN_COMMAND
             mode = "store-login" if self.mode == "login" else self.mode
             child = spawn(root, mode, FIXTURE_URL, login=True)
         else:
-            assert request == 'Reply with exactly this JSON: {"type":"final","answer":"AGE11_READY"}'
+            assert request is None
+            probe = '{"type":"probe"}'
             response = '{"type":"final","answer":"AGE11_READY"}'
-            if self.probe_mode == "wrong-answer":
+            mode = self.probe_mode
+            if mode == "wrong-answer":
                 response = '{"type":"final","answer":"unrelated fixture"}'
-            child = spawn(root, "store-probe:" + self.probe_mode, response)
+                mode = "ok"
+            child = spawn_acp(root, [(mode, response)], probe, require_store=True)
         self.children.append((op, stage.generation, child))
         return child
 
     def spawn(self, home, generation, op, request):
         assert home == self.home and op == "inference" and generation == self.active(home)
-        assert json.loads(request)["version"] == 1
+        assert json.loads(request)["model"]
         if self.mode == "expired-fixture":
             raise AgyError("auth_expired")
-        child = spawn(home, "ok", '{"type":"final","answer":"fixed fixture reply"}')
+        child = spawn_acp(home, [("ok", '{"type":"final","answer":"fixed fixture reply"}')], request)
         self.children.append((op, generation, child))
         return child
 
@@ -171,7 +181,9 @@ def test_two_fixture_owners_login_same_pipe_then_probe_expire_and_disconnect(tmp
     old_b = store_b.binding.read_bytes()
     store_a.mode = "expired-fixture"
     client = agy_runtime.profile_for(a.home).create_client(cancelled=lambda: False)
-    with pytest.raises(AgyError) as expired:
+    from agent.agy_turn import acp_turn_scope
+
+    with acp_turn_scope(), pytest.raises(AgyError) as expired:
         client.create(model=MODEL, messages=[{"role": "user", "content": "fixed fixture"}])
     assert expired.value.code == "auth_expired" and not a.gemini.card()["connected"]
     assert store_b.binding.read_bytes() == old_b
@@ -190,7 +202,6 @@ def test_panel_lists_and_saves_only_models_from_the_connected_acp_profile(tmp_pa
 
     a, b, store_a, store_b = setup(tmp_path, monkeypatch)
     for store in (store_a, store_b):
-        store.acp = True
         store.binding.write_text(json.dumps({"generation": f"{store.home.name}-fixture"}))
 
     def model_catalog(home, generation):
@@ -213,7 +224,7 @@ def test_panel_lists_and_saves_only_models_from_the_connected_acp_profile(tmp_pa
 
 
 @pytest.mark.parametrize("failure", [
-    "foreign-store", "error", "partial", "nonzero", "soft-deny", "wrong-permission-mode", "wrong-answer", "invalid-grant",
+    "foreign-store", "error", "partial", "nonzero", "containment", "wrong-answer", "invalid-grant",
 ])
 def test_failed_staged_probe_or_invalid_grant_cannot_replace_binding(tmp_path, monkeypatch, caplog, failure):
     a, _, store, _ = setup(tmp_path, monkeypatch)
@@ -286,22 +297,18 @@ def test_fixed_staged_launch_cannot_bypass_production_admission(tmp_path):
 
 
 def test_cancel_after_staged_probe_exit_prevents_promotion(tmp_path, monkeypatch):
-    from providers import agy_process
-
     a, b, store, store_b = setup(tmp_path, monkeypatch)
     sid = begin(a)
     attempt = a.gemini.attempt
-    real_communicate = agy_process.communicate
+    real_verify = agy_runtime.verify_staged
     probe_drained = Event()
 
-    def hold_probe(child, *args, **kwargs):
-        result = real_communicate(child, *args, **kwargs)
-        if store.children[-1] == ("probe", attempt.stage.generation, child):
-            probe_drained.set()
-            assert attempt.cancelled.wait(2)
-        return result
+    def hold_probe(*args, **kwargs):
+        real_verify(*args, **kwargs)
+        probe_drained.set()
+        assert attempt.cancelled.wait(2)
 
-    monkeypatch.setattr(agy_process, "communicate", hold_probe)
+    monkeypatch.setattr(agy_runtime, "verify_staged", hold_probe)
     rpc(a, "login.code", sessionId=sid, code="fixture-only")
     assert probe_drained.wait(3)
     cancel = Thread(target=a.gemini.retire)

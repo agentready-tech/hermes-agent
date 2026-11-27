@@ -1,6 +1,5 @@
 """Run the product Antigravity adapter against deterministic POSIX children only."""
 from importlib import import_module
-from pathlib import Path
 import signal
 import subprocess
 import sys
@@ -9,11 +8,12 @@ from types import SimpleNamespace
 import pytest
 
 from hermes_runtime.standalone import agy_runtime
-from hermes_runtime.standalone.agy_pod_process import request_frame
+from agent.agy_turn import acp_turn_scope
+from hermes_runtime.standalone.agy_slot import request_frame
 from providers import agy_process
 from providers.agy_policy import AgyError, MODEL, PROMPT_LIMIT, PROVIDER
 from providers.agy_process import communicate
-from tests.agent.agy_fixture import spawn
+from tests.agent.agy_fixture import spawn, spawn_acp
 
 pytestmark = pytest.mark.platforms("posix")
 
@@ -26,7 +26,7 @@ MESSAGES = [{"role": "user", "content": "echo ☃"}]
 
 class Authority:
     def __init__(self, home, steps):
-        self.home, self.steps = home, iter(steps)
+        self.home, self.steps = home, steps
         self.processes, self.withdrawals = [], []
 
     def active(self, home):
@@ -34,8 +34,7 @@ class Authority:
 
     def spawn(self, home, generation, operation, prompt):
         assert self.active(home) == generation == "fixture-generation" and operation == "inference"
-        mode, response = next(self.steps)
-        child = spawn(home, mode, response, prompt)
+        child = spawn_acp(home, self.steps, prompt)
         self.processes.append(child)
         return child
 
@@ -49,57 +48,56 @@ def client(tmp_path, monkeypatch, *steps):
     return authority, agy_runtime.profile_for(tmp_path).create_client(cancelled=lambda: False)
 
 
-def test_one_complete_chunk_only_after_process_eof(tmp_path, monkeypatch):
+def test_final_chunk_and_worker_cleanup(tmp_path, monkeypatch):
     authority, provider = client(tmp_path, monkeypatch, ("ok", '{"type":"final","answer":"Ответ ☃ "}'))
-    chunks = list(provider.create(model=MODEL, messages=MESSAGES, stream=True))
+    with acp_turn_scope():
+        chunks = list(provider.create(model=MODEL, messages=MESSAGES, stream=True))
     assert len(chunks) == 1 and chunks[0].choices[0].delta.content == "Ответ ☃ "
     proc, = authority.processes
-    assert proc.returncode == 0 and proc.stdout.closed and proc.stderr.closed
+    assert proc.returncode is not None and proc.stdout.closed and proc.stderr.closed
 
 
-def test_provider_error_drains_terminal_result_and_stderr(tmp_path, monkeypatch, caplog):
+def test_provider_error_keeps_redacted_acp_diagnostics(tmp_path, monkeypatch, caplog):
     authority, provider = client(tmp_path, monkeypatch, ("error-diagnostics", ""))
-    with pytest.raises(AgyError) as failure:
+    with acp_turn_scope(), pytest.raises(AgyError) as failure:
         provider.create(model=MODEL, messages=MESSAGES)
     assert failure.value.code == "transport" and not authority.withdrawals
     assert "deadline" not in str(failure.value) and "connection reset" not in str(failure.value)
-    assert "result.error='Provider deadline exceeded" in caplog.text
+    assert "detail='Provider deadline exceeded" in caplog.text
     assert "stderr='Upstream connection reset" in caplog.text
     for sensitive in ("fixture-oauth-code", "fixture-access-token", "qa.fixture@example.test"):
         assert sensitive not in caplog.text
     proc, = authority.processes
-    assert proc.returncode == 42 and proc.stdout.closed and proc.stderr.closed
+    assert proc.returncode is not None and proc.stdout.closed and proc.stderr.closed
 
 
-@pytest.mark.parametrize(("mode", "code"), [("repeat", "protocol"), ("partial", "protocol"), ("large", "protocol"),
-    ("native", "containment"), ("error", "transport"), ("nonzero", "transport"), ("stderr", "transport"),
-    ("out-of-order", "protocol"), ("outer-dupe", "protocol"), ("identity", "protocol"), ("no-final", "protocol"),
-    ("soft-deny", "containment"), ("wrong-permission-mode", "containment"), ("error-message", "transport")])
+@pytest.mark.parametrize(("mode", "code"), [
+    ("partial", "transport"), ("containment", "containment"), ("error", "transport"), ("nonzero", "transport"),
+])
 def test_rejects_ambiguous_or_unsafe_subprocess(tmp_path, monkeypatch, mode, code):
     authority, provider = client(tmp_path, monkeypatch, (mode, '{"type":"final","answer":"unpublished"}'))
-    with pytest.raises(AgyError) as failure:
+    with acp_turn_scope(), pytest.raises(AgyError) as failure:
         provider.create(model=MODEL, messages=MESSAGES)
     assert failure.value.code == code and "unpublished" not in str(failure.value)
     assert len(authority.processes) == 1 and authority.processes[0].returncode is not None
     if code == "containment":
         assert authority.withdrawals == [(tmp_path, "fixture-generation", code)]
-        with pytest.raises(AgyError, match="Connect"):
+        with acp_turn_scope(), pytest.raises(AgyError, match="Connect"):
             provider.create(model=MODEL, messages=MESSAGES)
     else:
         assert not authority.withdrawals
 
 
 @pytest.mark.parametrize("response", ['{"type":"final","answer":"x","answer":"y"}',
-    '{"type":"final","answer":"x"} trailing', '{"type":"final","answer":"\\ud800"}',
+    '{"type":"final","answer":"x"} trailing',
     '{"type":"tool_call","id":"step","name":"unknown","arguments":{"text":"x"}}',
     '{"type":"tool_call","id":"step","name":"fixture_echo","arguments":{"text":5}}',
-    '{"type":"tool_call","id":"step","name":"fixture_echo","arguments":{"text":1e999}}',
     '{"type":"tool_call","id":"step","name":"fixture_echo","arguments":{"text":"x","extra":true}}',
     '{"type":"tool_call","id":"call_","name":"fixture_echo","arguments":{"text":"x"}}',
     '{"type":"tool_call","id":"fc_1","name":"fixture_echo","arguments":{"text":"x"}}'])
 def test_response_shape_and_same_catalog_schema(tmp_path, monkeypatch, response):
     _, provider = client(tmp_path, monkeypatch, ("ok", response))
-    with pytest.raises(AgyError) as failure:
+    with acp_turn_scope(), pytest.raises(AgyError) as failure:
         provider.create(model=MODEL, messages=MESSAGES, tools=TOOLS)
     assert failure.value.code == "protocol"
 
@@ -108,11 +106,11 @@ def test_reject_input_without_spawn_and_do_not_offer_remote_ref(tmp_path, monkey
     authority, provider = client(tmp_path, monkeypatch)
     for kwargs in ({"response_format": {}}, {"messages": [{"role": "user", "content": [{"type": "image_url"}]}]},
                    {"messages": [{"role": "user", "content": "x" * PROMPT_LIMIT}]}):
-        with pytest.raises(AgyError):
+        with acp_turn_scope(), pytest.raises(AgyError):
             provider.create(**({"model": MODEL, "messages": MESSAGES} | kwargs))
     assert authority.processes == []
     prompt, validators = AGY.prepare(MESSAGES, [{"type": "function", "function": {"name": "fixture_echo",
-                                       "parameters": {"$ref": "https://fixture.invalid/schema"}}}])
+                                       "parameters": {"$ref": "https://fixture.invalid/schema"}}}], model=MODEL)
     assert not validators and "fixture_echo" not in prompt
 
 
@@ -155,7 +153,7 @@ def test_stop_reaps_leader_when_process_group_disappears(monkeypatch, term_error
     assert child.returncode == 0
 
 
-def test_framed_login_sends_one_code_while_the_remote_lease_stays_open():
+def test_framed_login_sends_one_code_while_the_worker_lease_stays_open():
     remote = (
         "import select, sys; pipe = sys.stdin.buffer; pipe.read(int(pipe.read(8))); "
         "assert pipe.readline() == b'fixture-code\\n'; "
@@ -170,44 +168,14 @@ def test_framed_login_sends_one_code_while_the_remote_lease_stays_open():
     assert rc == 0 and not diagnostics and received == b"code received\n"
 
 
-def test_large_print_input_reaches_cli_and_closes_only_after_result():
-    cli = r"""
-import json
-import sys
-
-row = json.loads(sys.stdin.buffer.readline())
-assert row == {"event": "user", "message": {"content": "x" * 135_000 + "-last-bytes"}}
-print(json.dumps({"event": "init", "conversation_id": "fixture", "init": {
-    "cwd": "/fixture", "tools": [], "permission_mode": "strict",
-}}), flush=True)
-print(json.dumps({"event": "result", "result": {
-    "status": "SUCCESS", "conversation_id": "fixture", "response": '{"type":"final","answer":"long prompt read"}',
-}}), flush=True)
-assert sys.stdin.buffer.read() == b""
-"""
-    worker = f"""
-import os
-import subprocess
-import sys
-from hermes_runtime.standalone.agy_pod_process import read_command, supervise
-from hermes_runtime.standalone.agy_runtime import PRINT_COMMAND
-
-incoming = sys.stdin.fileno()
-argv, print_input = read_command(incoming)
-assert argv == PRINT_COMMAND and "--input-format" in argv and "-p" not in argv
-child = subprocess.Popen([sys.executable, "-I", "-c", {cli!r}], stdin=subprocess.PIPE, start_new_session=True)
-os.set_blocking(child.stdin.fileno(), False)
-os.set_blocking(incoming, False)
-sys.exit(supervise(child, incoming, timeout=10, print_input=print_input))
-"""
-    child = subprocess.Popen([sys.executable, "-c", worker], cwd=Path(__file__).resolve().parents[2],
-                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             start_new_session=True)
-    child.agy_request_frame = request_frame("print", "x" * 135_000 + "-last-bytes")
-    parser = AGY.Stream()
-    status, stderr = agy_runtime.communicate_print(child, parser, cancelled=lambda: False)
-    assert parser.finish(status) == {"type": "final", "answer": "long prompt read"}
-    assert not stderr and child.stdin.closed and child.stdout.closed and child.stderr.closed
+def test_large_acp_frame_reaches_the_worker(tmp_path, monkeypatch):
+    authority, provider = client(tmp_path, monkeypatch, ("ok", '{"type":"final","answer":"long prompt read"}'))
+    messages = [{"role": "user", "content": "x" * 135_000 + "-last-bytes"}]
+    with acp_turn_scope():
+        response = provider.create(model=MODEL, messages=messages)
+    assert response.choices[0].message.content == "long prompt read"
+    child, = authority.processes
+    assert child.stdin.closed and child.stdout.closed and child.stderr.closed
 
 
 def test_production_not_discovered_and_exits_before_other_routes(tmp_path, monkeypatch):
@@ -252,16 +220,16 @@ def test_generation_withdrawn_after_child_finishes_before_response(tmp_path, mon
 
     authority = Authority(tmp_path, [("ok", '{"type":"final","answer":"not published"}')])
     monkeypatch.setattr(agy_runtime, "admit", lambda *_: authority)
-    real_communicate = agy_runtime.communicate_print
+    real_receive = AGY.AcpTurn.receive
 
-    def finish_then_withdraw(*args, **kwargs):
-        outcome = real_communicate(*args, **kwargs)
+    def finish_then_withdraw(turn, *args, **kwargs):
+        outcome = real_receive(turn, *args, **kwargs)
         monkeypatch.setattr(authority, "active", lambda _home: None)
         return outcome
 
-    monkeypatch.setattr(agy_runtime, "communicate_print", finish_then_withdraw)
+    monkeypatch.setattr(AGY.AcpTurn, "receive", finish_then_withdraw)
     client = agy_runtime.profile_for(tmp_path).create_client(cancelled=lambda: False)
-    with pytest.raises(AgyError) as error:
+    with acp_turn_scope(), pytest.raises(AgyError) as error:
         client.create(model=MODEL, messages=[{"role": "user", "content": "Inert"}])
     assert error.value.code == "auth_required"
-    assert len(authority.processes) == 1 and authority.processes[0].returncode == 0
+    assert len(authority.processes) == 1 and authority.processes[0].returncode is not None
