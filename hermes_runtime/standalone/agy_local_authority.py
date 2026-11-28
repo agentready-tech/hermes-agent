@@ -44,7 +44,7 @@ def owned_profile(home):
 
 def authority_for(home):
     try:
-        if SA_NAMESPACE.read_text().strip() != "agentsee-provisioning-test" or not LOCAL_CONFIG.is_file():
+        if SA_NAMESPACE.read_text().strip() not in {"agentsee-runtime", "agentsee-provisioning-test"} or not LOCAL_CONFIG.is_file():
             raise AgyError("unavailable")
         authority = local_authority(owned_profile(home))
         authority.profile_store()
