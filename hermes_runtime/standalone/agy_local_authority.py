@@ -22,7 +22,6 @@ from providers.agy_process import close_child
 from utils import atomic_json_write
 
 SLOTS = ("a", "b")
-SA_NAMESPACE = Path("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
 
 
 def owned_profile(home):
@@ -44,7 +43,7 @@ def owned_profile(home):
 
 def authority_for(home):
     try:
-        if SA_NAMESPACE.read_text().strip() not in {"agentsee-runtime", "agentsee-provisioning-test"} or not LOCAL_CONFIG.is_file():
+        if not LOCAL_CONFIG.is_file():
             raise AgyError("unavailable")
         authority = local_authority(owned_profile(home))
         authority.profile_store()

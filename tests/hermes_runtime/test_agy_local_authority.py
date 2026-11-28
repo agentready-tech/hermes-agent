@@ -88,6 +88,21 @@ def test_staged_cancel_cannot_change_the_active_or_foreign_profile(provisioned, 
     assert not owner.promote(home, next_login)
 
 
+def test_shared_runtime_store_admission_uses_the_mounted_config(provisioned, tmp_path, monkeypatch):
+    owner, _ = provisioned("a")
+    (owner.home / "config.yaml").write_text("{}")
+    claim = owner.home / "owner.json"
+    claim.write_text(json.dumps({"environmentId": owner.home.name, "jobId": "job_" + "a" * 32}))
+    claim.chmod(0o600)
+    config = tmp_path / "config.json"
+    monkeypatch.setattr(agy_local_authority, "get_default_hermes_root", lambda: tmp_path)
+    monkeypatch.setattr(agy_local_authority, "LOCAL_CONFIG", config)
+    with pytest.raises(AgyError):
+        agy_local_authority.authority_for(owner.home)
+    config.write_text('{"hosts":{}}')
+    assert agy_local_authority.authority_for(owner.home).home == owner.home
+
+
 def test_legacy_binding_survives_without_statefulset_and_cannot_cross_profiles(provisioned):
     owner, parent = provisioned("a")
     other, _ = provisioned("b")
