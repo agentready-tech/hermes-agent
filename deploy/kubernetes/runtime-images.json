@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultRuntimeVersion": "2026.11.27.1",
+  "defaultRuntimeVersion": "2026.11.28.1",
   "versions": {
     "af0266796d58-mail-replies": {
       "image": "ghcr.io/agentready-tech/agentsee-hermes-kubernetes@sha256:e2abde50c28c20919210f766546a0857f4620f077a476433ee14d558718da7ef",
@@ -5436,6 +5436,43 @@
         "productionScenario": "Slotegrator Kubernetes terminal on the production image with stdout descriptor 1100. Echo and NetBird status returned output. A disposable WAL database kept 3 descriptors across 600 home-session reads."
       },
       "description": "Close managed profile database connections and keep terminal stdout readable at high file descriptor numbers.",
+      "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
+      "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml"
+    },
+    "2026.11.28.1": {
+      "image": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:a1e9bfd28b4742888c893a494e937207c51cce80aa7a242754d77b9750b14c98",
+      "tag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.28.1",
+      "configDigest": "sha256:b528af3b9c5c84787c27cf48f5101f1b644cd2f1bfc7c28fc9dc583b90eb3d59",
+      "platform": "linux/amd64",
+      "sourceRevision": "94e3427fd78134fc66d5825be64ce83de6f92bc0",
+      "runtimePolicy": "shared-per-worker",
+      "distribution": {
+        "registryImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:a1e9bfd28b4742888c893a494e937207c51cce80aa7a242754d77b9750b14c98",
+        "registryTag": "ghcr.io/agentready-tech/agentsee-hermes-runtime:2026.11.28.1",
+        "digest": "sha256:a1e9bfd28b4742888c893a494e937207c51cce80aa7a242754d77b9750b14c98",
+        "configDigest": "sha256:b528af3b9c5c84787c27cf48f5101f1b644cd2f1bfc7c28fc9dc583b90eb3d59",
+        "sourceRevision": "94e3427fd78134fc66d5825be64ce83de6f92bc0",
+        "sourceRepository": "agentready-tech/hermes-agent",
+        "packagePublisherRepository": "agentready-tech/AgentReady",
+        "private": true,
+        "packageVisibility": "private",
+        "pullVerified": true,
+        "runtimePolicy": "shared-per-worker",
+        "fullSourceBuild": true,
+        "workflowRunId": 46130222249,
+        "workflowAttempt": 1,
+        "delivery": "kubernetes-native-ghcr-pull",
+        "ordinaryRolloutReadiness": true,
+        "productionTestsPerformed": true,
+        "previousRuntimeImage": "ghcr.io/agentready-tech/agentsee-hermes-runtime@sha256:3ac88bf7557a24bb5676a5247363f381619b8910f5849396c00bd6c1a09fd0f3",
+        "deployRunId": 46131255829
+      },
+      "validation": {
+        "runtimeReady": true,
+        "futureDefaultConfigured": true,
+        "productionScenario": "Gemini Antigravity card available for 4 enrolled production profiles. The running image prepared and cleared a disposable private OAuth slot through the same Linux launcher as QA."
+      },
+      "description": "Offer Gemini subscriptions through profile-bound Antigravity ACP in the shared Hermes runtime.",
       "sandboxImage": "ghcr.io/agentready-tech/agentsee-sandbox@sha256:d2fcb117ec8673d601a01804941ce3b34974d91a12f4434129e45a48145bc6a2",
       "publisherRecipe": "agentready-tech/AgentReady:.github/workflows/agentsee-hermes-release.yml"
     }
