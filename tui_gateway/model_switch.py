@@ -308,7 +308,7 @@ def _commit_agent_switch(sid: str, session: dict, agent, result, current_model: 
 def _apply_model_switch(
     sid: str, session: dict, raw_input: str, *, confirm_expensive_model: bool = False,
     pin_session_override: bool = True, parsed_flags: Any | None = None,
-    persist_override: bool | None = None, count_switch: bool = True) -> dict:
+    persist_override: bool | None = None, count_switch: bool = True, selection_ticket=None) -> dict:
     """``count_switch=False``: an internal swap (config adoption, MoA one-shot and its restore), not a
     user's /model pick, so it stays out of the shared-metrics switch count."""
     from hermes_cli.model_switch import switch_model
@@ -352,8 +352,17 @@ def _apply_model_switch(
             "model": profile_model, "provider": profile_provider}
     try:
         if agent:
-            # Provenance must exist before this transaction persists the switched runtime.
-            _commit_agent_switch(sid, session, agent, result, current_model, restore_snapshot)
+            # A config writer may have run during resolution; fence the actual mutation.
+            from hermes_runtime.standalone.agy_selection import commit_selection
+            with commit_selection(selection_ticket, session.get("session_key"), result):
+                _commit_agent_switch(sid, session, agent, result, current_model, restore_snapshot)
+                if selection_ticket:
+                    selection_ticket.require_runtime(agent)
+                    from providers.agy_policy import PROVIDER
+                    if selection_ticket.provider == PROVIDER:
+                        agent.client.selection = selection_ticket
+                    session.pop("model_override", None)
+                    session.pop("composer_override_profile", None)
     except Exception:
         if records_composer_override:
             if had_composer_profile:
@@ -454,10 +463,23 @@ def _sync_agent_model_with_config(sid: str, session: dict) -> None:
     if agent is None:
         return
     target = _config_model_target()
+    from providers.agy_policy import AgyError, is_agy
+    reserved = is_agy(target[1])
+    ticket = None
+    if reserved or session.get("session_key") == "agentready_home":
+        from hermes_runtime.standalone.agy_selection import capture_native_selection
+        ticket = capture_native_selection(session.get("session_key"), target)
+        if (ticket is not None and ticket.provider != "gemini-antigravity"
+                and session.get("panel_transition_revision") == ticket.revision):
+            # One-shot return already adopted: a later explicit /model is authoritative.
+            ticket = None
+    if reserved:
+        from hermes_runtime.standalone.agy_runtime import runtime
+        runtime(target[0])  # Even a seen or overridden config must not fall through on refusal.
     if not target[0]:
         return
     seen = session.get("config_model_seen")
-    if target == seen:
+    if target == seen and not reserved and ticket is None:
         return
     superseded_pin = None
     if session.get("model_override"):
@@ -466,7 +488,7 @@ def _sync_agent_model_with_config(sid: str, session: dict) -> None:
             str(composer_profile.get("model") or "").strip(),
             str(composer_profile.get("provider") or "").strip(),
         ) if isinstance(composer_profile, dict) else None
-        if pinned_profile is None or pinned_profile == target:
+        if not reserved and ticket is None and (pinned_profile is None or pinned_profile == target):
             return
         # A later profile edit supersedes the canonical chat's explicit pick. Clearing both fields lets
         # the normal config-sync path switch now and prevents the old composer pick resurfacing on rebuild.
@@ -487,8 +509,14 @@ def _sync_agent_model_with_config(sid: str, session: dict) -> None:
         # how `hermes --tui -m` once leaked into config.yaml).
         _apply_model_switch(
             sid, session, raw, confirm_expensive_model=True, pin_session_override=False,
-            persist_override=False, count_switch=False)
+            persist_override=False, count_switch=False, **({"selection_ticket": ticket} if ticket else {}))
+        if ticket is not None and ticket.provider != "gemini-antigravity":
+            session["panel_transition_revision"] = ticket.revision
     except Exception as e:
+        if reserved or ticket:
+            if isinstance(e, AgyError):
+                raise
+            raise AgyError("unavailable") from None
         logger.warning("Configured model %s could not be adopted for session %s: %s", model, sid, e)
         from gateway.warning_notifications import render_notification
         render_notification(

@@ -5412,12 +5412,10 @@ def resolve_provider_client(
     api_mode: str | None = None, main_runtime: Optional[dict[str, Any]] = None, is_vision: bool = False,
     task: Optional[str] = None,
 ) -> tuple[Optional[Any], Optional[str]]:
-    """Central router: return a configured client (auth, base URL, API format) for a provider + optional model.
-    The client always exposes ``.chat.completions.create()``; Codex/Responses providers get an adapter.
-    ``provider``: built-in name, ``custom:<name>``, "custom" (OPENAI_BASE_URL + OPENAI_API_KEY) or "auto"
-    (full auto-detection chain). ``model=None`` → provider's default aux model. ``raw_codex`` → bare OpenAI
-    client for ``responses.stream()`` callers. ``api_mode`` forces "codex_responses"/"chat_completions"/
-    "anthropic_messages" instead of auto-detect. Returns (client, resolved_model) or (None, None)."""
+    """Resolve an auxiliary client and model, or ``(None, None)`` when unavailable."""
+    from providers.agy_policy import is_agy
+    if is_agy(provider):
+        return None, None
     _validate_proxy_env_urls()
     # Keep the pre-alias name so a custom_providers entry named like a built-in alias
     # (e.g. "kimi" → "kimi-coding") is still reachable via the named-custom branch.
@@ -8171,11 +8169,11 @@ def _call_llm_impl(
     extra_headers: Optional[dict[str, str]] = None, api_mode: str | None = None, stream: bool = False,
     stream_options: dict | None = None, route_info: Optional[dict[str, str]] = None,
 ) -> Any:
-    """Centralized synchronous LLM call: resolve provider/model, auth, kwargs, fallbacks.
-    task: aux task whose provider:model comes from config (ignored if provider set); api_mode
-    overrides task config; timeout=None reads auxiliary.{task}.timeout; extra_headers override
-    client defaults. stream=True returns the raw SDK stream (caller consumes/falls back)
-    instead of a validated response. RuntimeError if no provider is configured."""
+    """Resolve and invoke a sync auxiliary route; streaming callers own validation and recovery."""
+    from providers.agy_policy import is_agy
+    if task == "compression" and is_agy((main_runtime or {}).get("provider")):
+        from agent.agy_turn import summarize_for_compaction
+        return summarize_for_compaction(main_runtime["model"], messages, route_info)
     req, retry_kwargs, candidate_kwargs = _plan_aux_call(
         task, async_mode=False, provider=provider, model=model, base_url=base_url,
         api_key=api_key, main_runtime=main_runtime, messages=messages,

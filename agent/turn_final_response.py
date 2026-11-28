@@ -53,6 +53,35 @@ class FinalResponseVerdict:
     result: Optional[dict[str, Any]] = None
 
 
+def _promote_reasoning_answer(agent, assistant_message, finish_reason, api_call_count, messages):
+    _content = assistant_message.content
+    _promoted = None
+    if (
+        finish_reason == "stop"
+        and not assistant_message.tool_calls
+        and (_content is None or (isinstance(_content, str) and not _content.strip()))
+        and not any(
+            isinstance(d, dict) and (
+                (d.get("type") in ("thinking", "redacted_thinking") and (d.get("signature") or d.get("data")))
+                or str(d.get("type") or "").endswith(".native_assistant")
+            )
+            for d in getattr(assistant_message, "reasoning_details", None) or ()
+        )
+        and answer_in_reasoning_capability(agent)
+    ):
+        _promoted = agent._extract_reasoning(assistant_message) or None
+        if _promoted:
+            # WARNING, not INFO: a model that keeps ending turns this way is stalled
+            # (planning monologue, zero tool calls) while the turn reports "complete".
+            logger.warning(
+                "Reasoning-only clean stop (%d chars) — returning the reasoning as the final "
+                "response (model=%s provider=%s api_calls=%d tool_turns=%d)",
+                len(_promoted), agent.model, agent.provider, api_call_count,
+                sum(1 for m in messages if isinstance(m, dict) and m.get("role") == "assistant" and m.get("tool_calls")),
+            )
+    return _promoted
+
+
 def finish_text_response(
     agent: Any, *, assistant_message: Any, response: Any, finish_reason: Any, messages: Any,
     api_messages: Any, conversation_history: Any, api_call_count: Any, user_message: Any,
@@ -97,38 +126,16 @@ def finish_text_response(
     # Anthropic thinking (signed ``thinking`` block, or a plugin's ``*.native_assistant`` carrier
     # of native Claude turns) is a summary written by a separate model, never the answer: it
     # takes the empty-response continuation below instead.
-    _content = assistant_message.content
-    _promoted = None
-    if (
-        finish_reason == "stop"
-        and not assistant_message.tool_calls
-        and (_content is None or (isinstance(_content, str) and not _content.strip()))
-        and not any(
-            isinstance(d, dict) and (
-                (d.get("type") in ("thinking", "redacted_thinking") and (d.get("signature") or d.get("data")))
-                or str(d.get("type") or "").endswith(".native_assistant")
-            )
-            for d in getattr(assistant_message, "reasoning_details", None) or ()
-        )
-        and answer_in_reasoning_capability(agent)
-    ):
-        _promoted = agent._extract_reasoning(assistant_message) or None
-        if _promoted:
-            # WARNING, not INFO: a model that keeps ending turns this way is stalled
-            # (planning monologue, zero tool calls) while the turn reports "complete".
-            logger.warning(
-                "Reasoning-only clean stop (%d chars) — returning the reasoning as the final "
-                "response (model=%s provider=%s api_calls=%d tool_turns=%d)",
-                len(_promoted), agent.model, agent.provider, api_call_count,
-                sum(1 for m in messages if isinstance(m, dict) and m.get("role") == "assistant" and m.get("tool_calls")),
-            )
+    _promoted = _promote_reasoning_answer(agent, assistant_message, finish_reason, api_call_count, messages)
     final_response = _promoted or assistant_message.content or ""
+    from providers.agy_policy import is_agy
+    structured_final = is_agy(getattr(agent, "provider", None)) and finish_reason == "stop"
     # Unmute: _mute_post_response from a housekeeping tool turn must not silence
     # empty-response warnings on the final response path.
     agent._mute_post_response = False
 
     # Think-block-only / empty content: recovery path.
-    if not agent._has_content_after_think_block(final_response):
+    if not structured_final and not agent._has_content_after_think_block(final_response):
         _ev = recover_empty_response(
             agent, assistant_message, response, finish_reason, final_response=final_response,
             messages=messages, api_messages=api_messages, conversation_history=conversation_history,
@@ -169,7 +176,7 @@ def finish_text_response(
         tool_results_this_turn, trailing_continue_intent,
     )
 
-    _ack_mode = intent_ack_continuation_mode(agent)
+    _ack_mode = "off" if structured_final else intent_ack_continuation_mode(agent)
     # Said-continue-but-stopped guard: no tool calls but the short reply TAILS with an
     # announced next action. Reuses the SAME bounded continuation counter (max 2 per turn).
     # Promoted reasoning gets the broader first-person-plan tail detector: with tools offered
@@ -178,7 +185,7 @@ def finish_text_response(
     # "complete" (#111761). Same cap, so a model that never acts still ends after 2 nudges.
     _stall_text = agent._strip_think_blocks(final_response or "")
     _stall_continue_intent = (
-        bool(getattr(agent, "_stall_guards", True))
+        not structured_final and bool(getattr(agent, "_stall_guards", True))
         and agent.valid_tool_names
         and codex_ack_continuations < 2
         and (
@@ -260,7 +267,8 @@ def finish_text_response(
                 _frag.pop("_length_continuation_fragment", None)
                 _frag.pop("_length_continuation_nudge", None)
 
-    final_response = agent._strip_think_blocks(final_response).strip()
+    if not structured_final:
+        final_response = agent._strip_think_blocks(final_response).strip()
 
     # A provider may end a degenerate loop normally with finish_reason="stop" instead of
     # exhausting its output cap (#100716). Check every completed visible text response before

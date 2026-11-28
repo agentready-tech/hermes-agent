@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Tuple
 
 from agent.file_safety import HOME_CREDENTIAL_DIRS
 from hermes_cli.archive_safe import archive_root_dirs, make_targz, normalize_archive_parts, safe_extract_targz
-from hermes_cli.home_data_layout import PM_RUNTIME_ROOT_DIRS
+from hermes_cli.home_data_layout import PM_RUNTIME_ROOT_DIRS, subscription_binding_entries
 from hermes_cli.profiles_remove import _rmtree_make_writable, _rmtree_with_retry, wait_profile_unowned
 from hermes_constants import (
     LOCAL_RUNTIME_ROOT_DIRS, PROFILE_ID_RE, clear_named_profile_deleted, mark_named_profile_deleted,
@@ -102,11 +102,6 @@ _PLACEHOLDER_ENV = (
 
 
 def _non_exportable_entries(directory: str, contents: list) -> set:
-    """Entries under *directory* that must never be copied out of a profile: bytecode caches,
-    ``*.sock``/``*.tmp`` names, and anything that is not a regular file, directory, or symlink.
-    :func:`shutil.copytree` cannot copy special files, so a single live Unix socket without a
-    ``.sock`` name (or a FIFO, or a device node) would abort the whole export or clone with
-    ``[Errno 6] No such device or address``. Symlinks survive — copytree recreates them."""
     ignored: set = set()
     for entry in contents:
         if entry == "__pycache__" or entry.endswith((".sock", ".tmp", ".pyc", ".pyo")):
@@ -138,6 +133,7 @@ def _clone_all_copytree_ignore(source_dir: Path):
             # Fail open — better to over-copy than silently drop user data.
             at_root = False
         ignored = _non_exportable_entries(directory, names)
+        ignored.update(subscription_binding_entries(source_dir, directory, names))
         if at_root:
             ignored.update(root_exclude & set(names))
         return ignored
@@ -2153,6 +2149,7 @@ def _default_export_ignore(root_dir: Path):
         ignored = _non_exportable_entries(directory, contents)
         ignored.update({"package.json", "package-lock.json"} & set(contents))
         ignored.update(_export_credential_entries(directory, contents))
+        ignored.update(subscription_binding_entries(root_dir, directory, contents))
         if Path(directory) == root_dir:
             ignored.update(entry for entry in contents if entry not in _DEFAULT_EXPORT_INCLUDE_ROOT)
         return ignored
@@ -2237,6 +2234,7 @@ def export_profile(name: str, output_path: str, extra_files: Optional[dict[str, 
         ignored.update(_export_credential_entries(directory, contents))
         rel = Path(directory).relative_to(profile_dir).parts
         ignored.update(e for e in contents if profile_path_is_private((*rel, e)))
+        ignored.update(subscription_binding_entries(profile_dir, directory, contents))
         if Path(directory) == profile_dir:
             ignored |= PM_RUNTIME_ROOT_DIRS & set(contents)
         return ignored
@@ -2288,6 +2286,8 @@ def import_profile(archive_path: str, name: Optional[str] = None) -> Path:
         extracted = staging_root / archive_root
         if not extracted.is_dir():
             raise ValueError(f"Profile archive root is missing or invalid: {archive_root}")
+        from hermes_cli.profile_distribution import discard_imported_subscription_binding
+        discard_imported_subscription_binding(extracted)
         final_source = extracted
         if archive_root != canon:
             final_source = staging_root / canon

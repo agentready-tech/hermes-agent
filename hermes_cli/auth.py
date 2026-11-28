@@ -2356,36 +2356,36 @@ def _update_config_for_provider(
         auth_store["active_provider"] = provider_id
         _save_auth_store(auth_store)
 
+    from hermes_cli.config import config_write_lock
+
     config_path = get_config_path()
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    require_readable_config_before_write(config_path)
-    config = read_raw_config()
-    current_model = config.get("model")
-    if isinstance(current_model, dict):
-        model_cfg = dict(current_model)
-    else:
-        model_cfg = {"default": current_model.strip()} if _nonempty_str(current_model) else {}
-    model_cfg["provider"] = provider_id
-    if inference_base_url and inference_base_url.strip():
-        model_cfg["base_url"] = inference_base_url.rstrip("/")
-    else:
-        model_cfg.pop("base_url", None)  # clear stale base_url when switching providers
+    with config_write_lock(config_path):
+        config = require_readable_config_before_write(config_path)
+        current_model = config.get("model")
+        if isinstance(current_model, dict):
+            model_cfg = dict(current_model)
+        else:
+            model_cfg = {"default": current_model.strip()} if _nonempty_str(current_model) else {}
+        model_cfg["provider"] = provider_id
+        if inference_base_url and inference_base_url.strip():
+            model_cfg["base_url"] = inference_base_url.rstrip("/")
+        else:
+            model_cfg.pop("base_url", None)  # clear stale base_url when switching providers
 
-    # Built-in providers resolve credentials from env/auth state, not inline model.api_key left
-    # over from a previous custom provider.
-    from hermes_cli.config import clear_model_endpoint_credentials
-    clear_model_endpoint_credentials(model_cfg)
+        # Drop inline credentials from the old route.
+        from hermes_cli.config import clear_model_endpoint_credentials
+        clear_model_endpoint_credentials(model_cfg)
 
-    # An OpenRouter-formatted default like "anthropic/claude-opus-4.6" fails on direct-API
-    # providers.
-    if default_model:
-        cur_default = model_cfg.get("default", "")
-        if not cur_default or "/" in cur_default:
-            model_cfg["default"] = default_model
-    elif clear_default:
-        model_cfg.pop("default", None)
-    config["model"] = model_cfg
-    atomic_config_replace(config_path, config)
+        # An OpenRouter-formatted default like "anthropic/claude-opus-4.6" fails on direct-API
+        # providers.
+        if default_model:
+            cur_default = model_cfg.get("default", "")
+            if not cur_default or "/" in cur_default:
+                model_cfg["default"] = default_model
+        elif clear_default:
+            model_cfg.pop("default", None)
+        config["model"] = model_cfg
+        atomic_config_replace(config_path, config)
     return config_path
 
 

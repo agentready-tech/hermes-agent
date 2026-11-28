@@ -210,7 +210,9 @@ def _flush_session_db_after_tool_progress(agent, messages: list, *, stage: str) 
     _maybe_inject_run_budget_wrapup(agent, messages)
     _maybe_inject_iteration_budget_warning(agent, messages)
     try:
-        persisted = agent._flush_messages_to_session_db(messages) is not False
+        outcome = agent._flush_messages_to_session_db(messages)
+        from providers.agy_policy import is_agy
+        persisted = outcome is True if is_agy(getattr(agent, "provider", None)) else outcome is not False
         if not persisted:
             agent._incremental_persistence_failed = True
             # The flush recorded any classified cause; default to 'unknown' only if nothing more specific exists.
@@ -756,7 +758,13 @@ def _dispatch_authorized_once(
     from agent.terminal_approval_batch import prepare_current_terminal
     prepare_current_terminal(ref)
     _advance_start_order(lambda: _begin_tool_execution(agent, ref, display_index))
-    return _run_with_activity_heartbeat(agent, ref.name, lambda: execute(ref.args))
+    def dispatch():
+        # The approval/middleware wait is over; check on the thread that invokes the tool.
+        from agent.agy_turn import require_current_tool_authority
+        require_current_tool_authority(agent)
+        return execute(ref.args)
+
+    return _run_with_activity_heartbeat(agent, ref.name, dispatch)
 
 
 def _run_agent_tool_execution_middleware(
@@ -1574,7 +1582,8 @@ def _run_sequential_call(
         )
         raise
     except Exception as tool_error:
-        if dispatch.error_result is None:
+        from providers.agy_policy import AgyError
+        if isinstance(tool_error, AgyError) or dispatch.error_result is None:
             raise
         function_result = dispatch.error_result(tool_error)
         logger.error(dispatch.error_log, ref.name, tool_error, exc_info=True)

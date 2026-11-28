@@ -519,7 +519,9 @@ def _get_model_config() -> dict[str, Any]:
             cfg["provider"] = cfg_provider
         _default = cfg_model
     base_url = (cfg.get("base_url") or "").strip()
-    if not str(_default or "").strip() and base_url and base_url_hostname(base_url) in ("localhost", "127.0.0.1"):
+    from providers.agy_policy import is_agy
+    if (not is_agy(cfg.get("provider")) and not str(_default or "").strip()
+            and base_url and base_url_hostname(base_url) in ("localhost", "127.0.0.1")):
         detected = _auto_detect_local_model(base_url)
         if detected:
             cfg["default"] = detected
@@ -1054,6 +1056,12 @@ def resolve_runtime_provider(*, requested: Optional[str] = None, explicit_api_ke
     target_model overrides model_cfg["default"] when computing provider-specific api_mode (e.g.
     OpenCode Zen/Go where different models route through different API surfaces)."""
     requested_provider = resolve_requested_provider(requested)
+    from providers.agy_policy import AgyError, PROVIDER, is_agy
+    if is_agy(requested_provider):
+        if requested_provider != PROVIDER or explicit_base_url or explicit_api_key:
+            raise AgyError("unavailable")
+        from hermes_runtime.standalone.agy_runtime import runtime
+        return runtime(target_model)
     _raise_if_provider_disabled(requested_provider)
     # Same alias expansion the auxiliary client applies, so ``provider: openai`` means one thing on
     # every path (background review, curator, MoA slots, delegation) instead of "Unknown provider".

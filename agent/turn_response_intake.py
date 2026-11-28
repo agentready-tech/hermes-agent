@@ -159,7 +159,8 @@ def normalize_model_response(
 
     # Incomplete <REASONING_SCRATCHPAD> (opened, never closed): the model ran out of
     # output tokens mid-reasoning — retry up to 2 times, then save as partial.
-    if has_incomplete_scratchpad(content or ""):
+    from providers.agy_policy import is_agy
+    if not is_agy(getattr(agent, "provider", None)) and has_incomplete_scratchpad(content or ""):
         agent._incomplete_scratchpad_retries += 1
         agent._buffer_vprint("⚠️  Incomplete <REASONING_SCRATCHPAD> detected (opened but never closed)")
         if agent._incomplete_scratchpad_retries <= 2:

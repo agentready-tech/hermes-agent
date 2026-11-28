@@ -27,7 +27,7 @@ from hermes_state_holders import read_only_db_uri
 from agent.provider_media import GENERATED_SUBDIR
 from hermes_cli.archive_safe import normalize_archive_parts
 from hermes_cli.backup_sqlite import _close_quietly, _safe_copy_db
-from hermes_cli.home_data_layout import PM_RUNTIME_ROOT_DIRS, profile_root_entry
+from hermes_cli.home_data_layout import PM_RUNTIME_ROOT_DIRS, is_subscription_binding, profile_root_entry
 from hermes_cli.sizefmt import format_bytes as _format_size
 
 from hermes_cli.backup_restore import (
@@ -110,7 +110,8 @@ _KEPT_CACHE_SUBDIRS = {
 def _in_excluded_root_dir(rel_path: Path) -> bool:
     """True when *rel_path* is inside a regenerable tree at a profile-home root."""
     root_entry = profile_root_entry(rel_path.parts)
-    if root_entry in _EXCLUDED_ROOT_DIRS or root_entry in _EXCLUDED_BACKUP_ROOT_DIRS:
+    if (root_entry in _EXCLUDED_ROOT_DIRS or root_entry in _EXCLUDED_BACKUP_ROOT_DIRS
+            or is_subscription_binding(rel_path.parts, full_home=True)):
         return True
     parts = rel_path.parts
     if len(parts) >= 3 and parts[0] == "profiles":
@@ -314,7 +315,7 @@ def _is_link_path(path: Path) -> bool:
 def _should_exclude(rel_path: Path) -> bool:
     """Return True if *rel_path* (relative to hermes root) should be skipped."""
     parts = rel_path.parts
-    if _in_excluded_root_dir(rel_path):
+    if _in_excluded_root_dir(rel_path) or profile_root_entry(parts) == "config.yaml.lock":
         return True
     # ``hermes-agent`` only matches at the root level; nested same-named dirs are preserved.
     if any(p in _EXCLUDED_DIRS and (p != "hermes-agent" or p == parts[0]) for p in parts):
@@ -712,8 +713,13 @@ def _import_skipped(rel: str) -> bool:
         parts = tuple(normalize_archive_parts(rel))
     except ValueError:
         return False  # A rejected traversal is still reported by the import itself.
+    return _import_skipped_parts(rel, parts)
+
+
+def _import_skipped_parts(rel: str, parts: tuple[str, ...]) -> bool:
     return (parts[-1] in _IMPORT_SKIP_NAMES or
-            profile_root_entry(parts) in PM_RUNTIME_ROOT_DIRS or
+            is_subscription_binding(parts, full_home=True) or
+            profile_root_entry(parts) in (PM_RUNTIME_ROOT_DIRS | {"config.yaml.lock"}) or
             rel.endswith(_SQLITE_SIDECAR_SUFFIXES))
 
 
@@ -1008,29 +1014,7 @@ def _import_members_exclusive(
             errors.append(f"  {rel}: path traversal blocked")
             continue
 
-        # Never overwrite volatile gateway/process runtime state. These are
-        # namespaced to the machine/container the backup was taken on;
-        # clobbering them (especially gateway_state.json) breaks the gateway
-        # reconciler on the target and disconnects hosted instances from the
-        # Nous portal. Matched by basename so both the root profile and
-        # named profiles (profiles/<name>/gateway_state.json) are covered.
-        if parts[-1] in _IMPORT_SKIP_NAMES:
-            skipped_runtime.append(rel)
-            continue
-
-        # Older archives may contain PM selections pointing at another machine.
-        # Match their home-root paths; a plugin's own facts.json is user data.
-        if profile_root_entry(parts) in PM_RUNTIME_ROOT_DIRS:
-            skipped_runtime.append(rel)
-            continue
-
-        # A ``.db`` member is page-restored into the live file below; a
-        # WAL/SHM/journal member from the archive describes a different
-        # database image, and installing it beside the restored file (over
-        # a live sidecar, via os.replace) would replay a foreign WAL on
-        # the next open. Current backups never ship these
-        # (_EXCLUDED_SUFFIXES); older or hand-built archives might.
-        if rel.endswith(_SQLITE_SIDECAR_SUFFIXES):
+        if _import_skipped_parts(rel, parts):
             skipped_runtime.append(rel)
             continue
 

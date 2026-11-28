@@ -1605,13 +1605,12 @@ def _assistant_reasoning_text(agent, assistant_message) -> Optional[str]:
 
 
 def _assistant_content_for_storage(agent, assistant_message):
-    # Sanitize surrogates (Kimi/GLM via Ollama emit code points that crash json.dumps),
-    # strip inline <think> tags at the storage boundary (they leaked to platforms and
-    # polluted titles), then redact inlined credentials before the message enters
-    # history / state.db / gateway delivery (no-op with HERMES_REDACT_SECRETS off).
+    # Redact credentials after provider-specific text normalization, before state.db or display.
     content = _sanitize_surrogates(flatten_message_text(getattr(assistant_message, "content", None)))
     if isinstance(content, str) and content:
-        content = agent._strip_think_blocks(content).strip()
+        from providers.agy_policy import is_agy
+        if not is_agy(getattr(agent, "provider", None)):
+            content = agent._strip_think_blocks(content).strip()
         if content:
             from agent.redact import redact_sensitive_text
             content = redact_sensitive_text(content)
@@ -3543,20 +3542,19 @@ class _StreamingCall(StreamingWaitMonitor):
         )
 
     def _handle_stream_error(self, e: Exception, attempt: int, max_retries: int) -> bool:
-        """Classify a failed attempt: True = retry; False = stop with
-        ``result["error"]`` set (unless our own interrupt force-closed the
-        socket). Runs inside the ``except`` so ``logger.exception`` works."""
+        """Retry a recoverable network stream, or settle the attempt's error."""
         import httpx as _httpx
-        # Our own interrupt force-close: no retry/fallback/"reconnecting" (the
-        # poll loop raises InterruptedError).
+        from providers.agy_policy import AgyError, is_agy
+
+        # An external one-shot reaches EOF or fails; never re-issue it as an HTTP stream.
+        if is_agy(getattr(self.agent, "provider", None)):
+            self.result["error"] = e if isinstance(e, AgyError) else AgyError("transport")
+            return False
         if self._request_cancelled["value"]:
-            logger.debug("Streaming worker caught %s after request cancellation — exiting without retry.", type(e).__name__)
+            logger.debug("Streaming worker caught %s after cancellation.", type(e).__name__)
             return False
         _is_timeout = isinstance(e, (_httpx.ReadTimeout, _httpx.ConnectTimeout, _httpx.PoolTimeout))
-        # ReadError: abort/reset mid-body (stale-kill shutdown under a parked reader,
-        # ECONNRESET) — the retry loop owns recovery.
-        # anthropic.APIConnectionError: the Anthropic SDK wraps connect/read drops
-        # (incl. stale-kill aborts) in its own type, not httpx's.
+        # Treat aborted reads and Anthropic's wrapped connection errors as network drops.
         _is_conn_err = isinstance(e, (_httpx.ConnectError, _httpx.ReadError, _httpx.RemoteProtocolError, ConnectionError,
                                       *_anthropic_connection_error_types()))
         _is_stream_parse_err = self.agent._is_provider_stream_parse_error(e)

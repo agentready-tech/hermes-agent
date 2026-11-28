@@ -66,6 +66,22 @@ method("config.get", params=ConfigGetParams, result=ConfigGetResult,
 # ── config.set ────────────────────────────────────────────────────────────────────────────────
 
 
+class PanelModelSelection(Params):
+    """Standalone Panel's precondition for applying an already saved model selection."""
+
+    revision: str
+    generation: str
+
+
+class PanelModelSelectionReceipt(PanelModelSelection):
+    """Apply/queue receipt tied to the resumed native session; not an auth grant."""
+
+    session_id: str
+    session_key: str
+    provider: str
+    model: str
+
+
 class ConfigSetParams(ProfileParams):
     """``key`` picks the setter (``_CONFIG_SETTERS``, ``details_mode.<section>``, display toggles);
     ``value`` is the raw word/string the setter normalises (falsy non-strings are reported back in
@@ -76,6 +92,7 @@ class ConfigSetParams(ProfileParams):
     session_id: str | None = None
     scope: str | None = None
     confirm_expensive_model: bool = False
+    panel_selection: PanelModelSelection | None = None
 
 
 class ConfigSetResult(Result):
@@ -91,6 +108,7 @@ class ConfigSetResult(Result):
     confirm_message: str | None = None
     scope: str | None = None
     deferred: bool | None = None
+    panel_selection: PanelModelSelectionReceipt | None = None
     tool_progress: str | None = None
     cwd: str | None = None
     branch: str | None = None

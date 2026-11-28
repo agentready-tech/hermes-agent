@@ -46,6 +46,16 @@ class ToolRoundVerdict:
     result: Optional[dict[str, Any]] = None
 
 
+def _log_proposals(agent, assistant_message, guarded):
+    if not agent.quiet_mode:
+        agent._vprint(f"{agent.log_prefix}🔧 Processing {len(assistant_message.tool_calls)} tool call(s)...")
+    if agent.verbose_logging and not guarded:
+        for tc in assistant_message.tool_calls:
+            raw_args = tc.function.arguments
+            args_preview = raw_args[:200] if isinstance(raw_args, str) else repr(raw_args)[:200]
+            logging.debug("Tool call: %s with args: %s...", tc.function.name, args_preview)
+
+
 def run_tool_round(
     agent: Any, *, assistant_message: Any, finish_reason: Any, messages: Any,
     conversation_history: Any, api_call_count: Any, effective_task_id: Any, user_message: Any,
@@ -68,14 +78,16 @@ def run_tool_round(
             current_turn_user_idx=current_turn_user_idx, result=result,
         )
 
-    if not agent.quiet_mode:
-        agent._vprint(f"{agent.log_prefix}🔧 Processing {len(assistant_message.tool_calls)} tool call(s)...")
+    from providers.agy_policy import is_agy
+    guarded = is_agy(getattr(agent, "provider", None))
+    from agent.agy_turn import require_current_tool_authority, refused_flush, reject_in_round
+    from providers.agy_policy import AgyError
+    if error := reject_in_round(agent, assistant_message.tool_calls, messages, guarded):
+        return _verdict("return", {"final_response": str(error), "messages": messages,
+            "failed": True, "completed": False, "failure_reason": error.code,
+            "failure_retryable": False, "error": str(error)})
 
-    if agent.verbose_logging:
-        for tc in assistant_message.tool_calls:
-            raw_args = tc.function.arguments
-            args_preview = raw_args[:200] if isinstance(raw_args, str) else repr(raw_args)[:200]
-            logging.debug("Tool call: %s with args: %s...", tc.function.name, args_preview)
+    _log_proposals(agent, assistant_message, guarded)
 
     _tvv = validate_tool_calls(
         agent, assistant_message, finish_reason, messages=messages,
@@ -142,7 +154,7 @@ def run_tool_round(
             exc,
         )
 
-    if _tool_turn_persisted is False:
+    if refused_flush(_tool_turn_persisted, guarded):
         # Canonical append failed: never project the row or run tools from process-only
         # state; break rather than retry. No recorded cause means genuinely unknown.
         if getattr(agent, "_last_persistence_error_cause", None) is None:
@@ -163,7 +175,18 @@ def run_tool_round(
         with suppress(Exception):
             agent.stream_delta_callback(None)
 
-    agent._execute_tool_calls(assistant_message, messages, effective_task_id, api_call_count)
+    try:
+        if guarded:
+            require_current_tool_authority(agent)
+        agent._execute_tool_calls(assistant_message, messages, effective_task_id, api_call_count)
+    except AgyError as error:
+        if not guarded:
+            raise
+        # The durable proposal is deliberately left without a success receipt. A reopened
+        # turn must not execute it or retry it with a newer credential generation.
+        return _verdict("return", {"final_response": str(error), "messages": messages,
+            "failed": True, "completed": False, "failure_reason": error.code,
+            "failure_retryable": False, "error": str(error)})
     from hermes_cli.observability.shared_metrics_harness import finish_tool_round
 
     finish_tool_round(agent)

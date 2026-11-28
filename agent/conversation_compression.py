@@ -2047,10 +2047,9 @@ def _aux_inherits_main_route(agent: Any, aux_model: str, aux_base_url: str) -> b
 
 
 def check_compression_model_feasibility(agent: Any) -> None:
-    """Warn at session start if the aux compression context is below the threshold.
-    Called from ``AIAgent.__init__`` (CLI sees it via ``_vprint``); the gateway wires ``status_callback``
-    later, so ``replay_compression_warning`` resends it."""
-    if not agent.compression_enabled:
+    """Check that the summary route can fit the compaction window."""
+    from providers.agy_policy import is_agy
+    if not agent.compression_enabled or is_agy(getattr(agent, "provider", None)):
         return
     try:
         from agent.auxiliary_client import (
@@ -3006,10 +3005,9 @@ def _run_summary_dispatch(
     commit_fence: Optional[CompressionCommitFence], attempt_generation: Any, hard_cancel_event: Any,
 ) -> list:
     """Run the compressor under the fence's progress hook, deadline and interrupt guard."""
-    # Publish progress to the commit fence so hosts extend deadlines while tokens
-    # flow. Any active hook (even no-op) selects the streamed path: the timeout is
-    # inactivity-based and a byte-trickling provider hits the stream total ceiling.
+    from agent.agy_turn import compaction_client_scope
     from agent.auxiliary_client import aux_interrupt_protection, aux_progress_hook, aux_stream_deadline
+    # Streaming summaries extend the commit fence as content arrives.
     _progress_hook = commit_fence.touch_progress if commit_fence is not None else (lambda: None)
     # Return leg: cancel frees the owner but the provider daemon streams on to its
     # own larger ceiling; share the host deadline so orphan streams stop with it.
@@ -3043,7 +3041,7 @@ def _run_summary_dispatch(
         else:
             with (
                 aux_progress_hook(_progress_hook), aux_stream_deadline(_host_stream_deadline),
-                aux_interrupt_protection(cancel_check=_compression_cancel_requested),
+                aux_interrupt_protection(cancel_check=_compression_cancel_requested), compaction_client_scope(agent),
             ):
                 # This attempt is now doing real summary work: publish it as the working attempt so later
                 # no-op entry claims (lock sit-outs, gates, the cancelled-fence skip above) cannot supersede

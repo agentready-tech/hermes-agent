@@ -1978,3 +1978,21 @@ def test_count_skills_publishes_timestamp_after_the_walk(tmp_path, monkeypatch):
     # Entry is fresh: a second call within the TTL must not walk again.
     monkeypatch.setattr(mod, "_walk_skill_count", lambda _d: pytest.fail("re-walked a fresh entry"))
     assert mod._count_skills(tmp_path) == 3
+
+
+
+def test_named_clone_and_tar_roundtrip_filter_only_profile_binding(profile_env, tmp_path):
+    from hermes_cli.profiles import create_profile, export_profile, import_profile
+
+    source = create_profile("fixture-source", no_alias=True, no_skills=True)
+    (source / "subscriptions/agy").mkdir(parents=True)
+    (source / "subscriptions/agy/native-applied.json").write_text('"fixture binding"')
+    keep = "workspace/subscriptions/agy/notes.txt"
+    (source / keep).parent.mkdir(parents=True)
+    (source / keep).write_text("fixture workspace")
+    cloned = create_profile("fixture-clone", clone_from="fixture-source", clone_all=True, no_alias=True)
+    archive = export_profile("fixture-source", str(tmp_path / "fixture-profile.tar.gz"))
+    imported = import_profile(str(archive), name="fixture-import")
+    for published in (cloned, imported):
+        assert not (published / "subscriptions/agy").exists()
+        assert (published / keep).read_text() == "fixture workspace"

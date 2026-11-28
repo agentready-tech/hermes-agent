@@ -441,6 +441,20 @@ class ClientLifecycleMixin:
 
     def _create_request_openai_client(self, *, reason: str, api_kwargs: Optional[dict] = None) -> Any:
         from unittest.mock import Mock
+        from providers.agy_policy import AgyError, is_agy
+        ticket = getattr(self, "_panel_selection", None)
+        if ticket is not None:
+            # The client request is the first point that actually consults the selected route.
+            # Release on every path: a refused publication must not fence later requests.
+            try:
+                ticket.publish_applied(self)
+            finally:
+                self._panel_selection = None
+        if is_agy(self.provider):
+            client = getattr(self, "client", None)
+            if not callable(getattr(client, "for_request", None)):
+                raise AgyError("unavailable")
+            return client.for_request()
         primary_client = self._ensure_primary_openai_client(reason=reason)
         if self.provider == "moa" or isinstance(primary_client, Mock):
             return primary_client

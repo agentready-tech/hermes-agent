@@ -677,7 +677,8 @@ def _prepare_turn_input(sid: str, session: dict, st: _TurnRun, text: Any, images
     # The sudo password callback is thread-local: without re-wiring here, sudo prompts
     # fall through to /dev/tty and hang the headless gateway (re-run is a no-op).
     _wire_callbacks(sid)
-    if not st.one_turn_restore:
+    from providers.agy_policy import is_agy
+    if not st.one_turn_restore or is_agy(_config_model_target()[1]):
         # Skip the config-model sync while a /model --once override is active: the once-model is
         # intentionally not pinned as a session model_override (it must not persist), so without this guard
         # the sync would see "agent model != config model" and clobber the once-override back to the config
@@ -690,6 +691,15 @@ def _prepare_turn_input(sid: str, session: dict, st: _TurnRun, text: Any, images
     _sync_bot_capabilities(sid, session)  # Bot Chat: adopt Settings->Capabilities edits
     _adopt_out_of_band_turns(session)
     st.agent = agent = session["agent"]
+    from hermes_runtime.standalone.agy_selection import capture_native_selection
+    selection = capture_native_selection(session.get("session_key"), _config_model_target())
+    if (selection is not None and selection.provider != "gemini-antigravity"
+            and session.get("panel_transition_revision") == selection.revision):
+        selection = None  # One-shot return already adopted in this dialog.
+    if selection:
+        selection.attach(agent)
+        if selection.provider != "gemini-antigravity":
+            session["panel_transition_revision"] = selection.revision
     # Snapshot after the model sync: a deferred switch's history mutation belongs to this turn.
     with session["history_lock"]:
         st.history = list(session["history"])
@@ -717,6 +727,8 @@ def _prepare_turn_input(sid: str, session: dict, st: _TurnRun, text: Any, images
         if ctx.blocked:
             _emit(
                 "error", sid, {"message": "\n".join(ctx.warnings) or "Context injection refused."})
+            from hermes_runtime.standalone.agy_selection import release_fence
+            release_fence(agent)
             return None
         prompt = ctx.message
     st.prompt_text = prompt if isinstance(prompt, str) else ""
@@ -806,7 +818,11 @@ def _invoke_agent(
     try:
         from agent.notification_presentation import notification_turn, event_presentation_muted
         with notification_turn(agent, muted=event_presentation_muted("message.delta", sid), session_id=sid):
-            st.result = agent.run_conversation(run_message, **st.run_kwargs)
+            try:
+                st.result = agent.run_conversation(run_message, **st.run_kwargs)
+            finally:
+                from hermes_runtime.standalone.agy_selection import release_fence
+                release_fence(agent)
     finally:
         # Stop AND join before anything emits: a tick surviving past message.complete would
         # roll the client's usage back to a stale snapshot (unbounded join: same worst case).

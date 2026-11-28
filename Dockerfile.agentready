@@ -2,6 +2,9 @@
 ARG HERMES_SOURCE_IMAGE
 FROM registry.k8s.io/kubectl:v1.35.8@sha256:1ec2791a3ddd245559e18a887f2dcd25cdfee7a649c5b73ca2715e3d7f6bf6f8 AS kubectl
 FROM docker:28.5.1-dind@sha256:ea9d20492ca1caaaba78e68453433895d256173c79281756e88b745647fcbcfd AS init
+FROM scratch AS inert-agy-archive
+# Verify the official SHA512 and the extracted ELF in the final stage; do not ship the archive.
+ADD https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.17-4823843970351104/linux-x64/cli_linux_x64.tar.gz /agy.tar.gz
 FROM ${HERMES_SOURCE_IMAGE}
 ARG HERMES_GIT_SHA
 ARG AGENTSEE_RELEASE_VERSION
@@ -14,6 +17,9 @@ RUN uv="$(/opt/hermes/.venv/bin/python -c 'from pm import uv_launcher; path = uv
        /usr/local/share/agentsee/sandbox-browser.tar.gz "$uv" /usr/bin/python3
 COPY --from=kubectl /bin/kubectl /usr/local/bin/kubectl
 COPY --from=init /usr/local/bin/docker-init /usr/local/bin/agentsee-init
+RUN apt-get -o Acquire::Retries=3 update \
+    && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y --no-install-recommends dbus-daemon gnome-keyring \
+    && rm -rf /var/lib/apt/lists/*
 ADD --checksum=sha256:79b8aa8594ca03b44569646cca6a7bd36b22616224d8ad7e6f28d75ad43e3659 https://codeload.github.com/NousResearch/hermes-official-plugins/tar.gz/2da429264671788748f69bca7d5a2216c1885b92 /opt/claude-provider.tar.gz
 RUN mkdir -p plugins/model-providers/claude-subscription-directsdk-experimental \
     && tar -xzf /opt/claude-provider.tar.gz --strip-components=2 \
@@ -26,6 +32,9 @@ RUN mkdir -p plugins/model-providers/claude-subscription-directsdk-experimental 
     && /opt/hermes/.venv/bin/python deploy/kubernetes/release_source.py record-plugin /opt/hermes \
     && /opt/hermes/.venv/bin/python deploy/kubernetes/release_source.py verify /opt/hermes
 RUN /opt/hermes/.venv/bin/python -c 'import json,os; from pathlib import Path; p=Path("/etc/hermes/image-provenance.json"); v=json.loads(p.read_text()); v.update(image="agentready-tech/hermes-agent", revision=os.environ["HERMES_GIT_SHA"], version=os.environ["AGENTSEE_RELEASE_VERSION"], capabilities=os.environ["AGENTSEE_RUNTIME_CAPABILITIES"].split(",")); p.write_text(json.dumps(v)+"\n"); p.chmod(0o444)'
+RUN --mount=type=bind,from=inert-agy-archive,source=/agy.tar.gz,target=/run/agy.tar.gz \
+    /opt/hermes/.venv/bin/python deploy/agentready-agy/package_inert_agy.py /run/agy.tar.gz /etc/hermes/image-provenance.json \
+    && /opt/hermes/.venv/bin/python -c 'from importlib.metadata import version; assert version("jsonschema") == "4.26.0"'
 LABEL org.opencontainers.image.source="https://github.com/agentready-tech/hermes-agent" \
       org.opencontainers.image.revision="${HERMES_GIT_SHA}" \
       org.opencontainers.image.version="${AGENTSEE_RELEASE_VERSION}" \

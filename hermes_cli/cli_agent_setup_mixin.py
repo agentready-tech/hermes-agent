@@ -253,7 +253,8 @@ class CLIAgentSetupMixin:
                     explicit_base_url=self._explicit_base_url, target_model=self.model or None)
             except Exception as exc:
                 _primary_exc = exc
-            if _primary_exc is not None:
+            from providers.agy_policy import AgyError
+            if _primary_exc is not None and not isinstance(_primary_exc, AgyError):
                 runtime = self._resolve_fallback_runtime(_primary_exc)
                 if runtime is not None:
                     _primary_exc = None

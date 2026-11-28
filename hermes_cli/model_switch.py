@@ -1747,6 +1747,17 @@ def switch_model(
     step returns a failure :class:`ModelSwitchResult` to stop the chain, or ``None`` to continue.
     ``user_providers`` / ``custom_providers`` are the config.yaml ``providers:`` dict and
     ``custom_providers:`` list."""
+    from providers.agy_policy import AgyError, PROVIDER, is_agy
+    if is_agy(explicit_provider) or (not explicit_provider and is_agy(current_provider)):
+        from hermes_cli.runtime_provider import resolve_runtime_provider
+        model = raw_input.strip()
+        try:
+            runtime = resolve_runtime_provider(requested=explicit_provider or current_provider, target_model=model)
+        except AgyError as error:
+            return ModelSwitchResult(False, error_message=str(error))
+        return ModelSwitchResult(True, new_model=runtime["model"], target_provider=PROVIDER,
+                                 provider_changed=current_provider != PROVIDER, api_key=runtime["api_key"],
+                                 base_url=runtime["base_url"], api_mode=runtime["api_mode"], is_global=is_global)
     st = _Switch(
         raw_input=raw_input, current_provider=current_provider, current_model=current_model,
         current_base_url=current_base_url, current_api_key=current_api_key, is_global=is_global,
@@ -1829,11 +1840,13 @@ def persist_model_selection(result: ModelSwitchResult, config_path: Any = None) 
     user set there (``model_slots``, ``model_fallback``, ...). ``should_clear_context_pin`` can do
     cold-start disk I/O — async callers run this on a worker thread."""
     from pathlib import Path
-    from hermes_cli.config import get_config_path, read_user_config_raw
-    from utils import atomic_roundtrip_yaml_update
+    from hermes_cli.config import (atomic_config_replace, config_write_lock, get_config_path,
+                                   require_readable_config_before_write)
     path = Path(config_path) if config_path else get_config_path()
-    for key, value in model_selection_config_updates(result, read_user_config_raw(path).get("model")).items():
-        atomic_roundtrip_yaml_update(path, f"model.{key}", value)
+    with config_write_lock(path):
+        config = require_readable_config_before_write(path)
+        config["model"] = apply_model_selection(config.get("model"), result)
+        atomic_config_replace(path, config)
     try:  # owner-only: config files contain API keys
         os.chmod(path, 0o600)
     except (OSError, NotImplementedError):

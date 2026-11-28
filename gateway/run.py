@@ -2311,8 +2311,7 @@ def _resolve_runtime_agent_kwargs() -> dict:
     from hermes_cli.runtime_provider import (
         resolve_runtime_with_fallback, format_runtime_provider_error, _get_model_config)
 
-    # Capture primary provider/model from config before the try block so we
-    # can include it in the fallback notice if the primary fails (#74349).
+    # Snapshot the primary route for fallback notices (#74349).
     _model_cfg = _get_model_config()
     _primary_model = (_model_cfg.get("default") or "").strip()
     _primary_provider = (_model_cfg.get("provider") or "").strip()
@@ -2320,12 +2319,13 @@ def _resolve_runtime_agent_kwargs() -> dict:
     try:
         runtime, fallback_entry = resolve_runtime_with_fallback(_load_gateway_config())
     except Exception as exc:
+        from providers.agy_policy import AgyError
+        if isinstance(exc, AgyError):
+            raise
         raise RuntimeError(format_runtime_provider_error(exc)) from exc
 
     if fallback_entry is not None:
-        # The entry's model is the one this agent must send (#112600). Carry the fallback notice so the
-        # gateway can surface a user-visible provider switch (#74349); the caller must pop
-        # ``_fallback_notice`` before forwarding kwargs to AIAgent.
+        # Use the fallback model, and keep the notice out of AIAgent kwargs (#112600, #74349).
         return {**_runtime_agent_kwargs(runtime), "model": fallback_entry["model"],
                 "_fallback_notice": pre_agent_fallback_notice(
                     _primary_provider, _primary_model,
@@ -2451,15 +2451,14 @@ def _resolve_gateway_model_context(
 
 
 def _resolve_runtime_agent_kwargs_for_provider(provider: str, target_model: Optional[str] = None) -> dict:
-    """Resolve runtime credentials for a specific provider (e.g. from channel override).
-
-    ``target_model`` is the model the override will actually send: the ladder's model-keyed rungs
-    (Zen/Go relay + api_mode) must see it rather than config's ``default``, or a Go-only override
-    resolves an api_mode/base_url the sent model cannot use (#112600)."""
+    """Resolve the override's model-specific wire mode, not config's default (#112600)."""
     from hermes_cli.runtime_provider import resolve_runtime_provider, format_runtime_provider_error
     try:
         runtime = resolve_runtime_provider(requested=provider, target_model=target_model or None)
     except Exception as exc:
+        from providers.agy_policy import AgyError
+        if isinstance(exc, AgyError):
+            raise
         raise RuntimeError(format_runtime_provider_error(exc)) from exc
     return {
         **_runtime_agent_kwargs(runtime),
