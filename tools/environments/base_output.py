@@ -343,31 +343,17 @@ def _drain_stdout(proc: ProcessHandle, output: _BoundedOutputCollector, stop: th
     """Drain ``proc.stdout`` into *output* until EOF or shortly after exit.
     ``for line in proc.stdout`` would block on ``readline()`` until EOF, and a backgrounded
     grandchild (``cmd &``, ``setsid cmd & disown``) inherits the pipe's write end — so the
-    tool would hang for the grandchild's lifetime. Instead we ``select()`` with a short poll
+    tool would hang for the grandchild's lifetime. Instead we use ``poll()`` on POSIX
     and stop ~300ms after bash exits even if the pipe has not EOF'd. Raw 4096-byte ``os.read``
     chunks can split a multibyte UTF-8 sequence, so an incremental decoder with
     ``errors="replace"`` buffers partial sequences across chunks. Streams without a real
     integer ``fileno()`` (mocks, in-memory adapters) are iterated to EOF instead — otherwise
-    the thread would die silently and lose all output. ``select()`` does not work on pipe fds
-    on Windows, so :func:`_drain_fd_windows` polls ``PeekNamedPipe`` there instead.
+    the thread would die silently and lose all output. Windows pipes use
+    :func:`_drain_fd_windows` with ``PeekNamedPipe``.
     """
     stream = proc.stdout
     if stream is None:
         return
-    # Non-blocking drain via select(). The old pattern — ``for line in proc.stdout`` — blocks on
-    # ``readline()`` until the pipe reaches EOF. When the user's command backgrounds a process (``cmd &``,
-    # ``setsid cmd & disown``, etc.), that backgrounded grandchild inherits the write-end of our stdout pipe
-    # via ``fork()``. Even after ``bash`` itself exits, the pipe stays open because the grandchild still
-    # holds it — so the drain thread never returns and the tool hangs for the full lifetime of the
-    # grandchild (issue #8340: users reported indefinite hangs when restarting uvicorn with ``setsid ... &
-    # disown``). The fix: select() with a short poll interval, and stop draining shortly after ``bash``
-    # exits even if the pipe hasn't EOF'd yet. Any output the grandchild writes after that point goes to an
-    # orphaned pipe (harmless — the kernel reaps it when our end closes). Decoding: we ``os.read()`` raw
-    # bytes in fixed-size chunks (4096) so a single multibyte UTF-8 character can split across reads. An
-    # incremental decoder buffers partial sequences across chunks, and ``errors="replace"`` mirrors the
-    # baseline ``TextIOWrapper`` (which was constructed with ``encoding="utf-8", errors="replace"`` on
-    # ``Popen``) so binary or mis-encoded output is preserved with U+FFFD substitution rather than
-    # clobbering the whole buffer.
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     try:
         fd = stream.fileno()
@@ -381,7 +367,7 @@ def _drain_stdout(proc: ProcessHandle, output: _BoundedOutputCollector, stop: th
         elif os.name == "nt":
             _drain_fd_windows(proc, fd, output, decoder, stop)
         else:
-            _drain_fd_select(proc, fd, output, decoder, stop)
+            _drain_fd_poll(proc, fd, output, decoder, stop)
     except Exception:
         pass  # closed fd / broken stream: keep what was captured
     finally:
@@ -394,15 +380,18 @@ def _drain_stdout(proc: ProcessHandle, output: _BoundedOutputCollector, stop: th
             pass
 
 
-def _drain_fd_select(proc, fd: int, output: _BoundedOutputCollector, decoder, stop=None) -> None:
-    """POSIX drain: select() poll, stopping ~300ms after bash exits with the pipe idle, or
+def _drain_fd_poll(proc, fd: int, output: _BoundedOutputCollector, decoder, stop=None) -> None:
+    """POSIX drain: stop ~300ms after bash exits with the pipe idle, or
     when *stop* is set (the pipe is being handed to another reader — yield-to-background)."""
+    # Shared gateways can receive pipe descriptors above select()'s FD_SETSIZE.
+    poller = select.poll()
+    poller.register(fd, select.POLLIN)
     idle_after_exit = 0
     while True:
         if stop is not None and stop.is_set():
             return
         try:
-            ready, _, _ = select.select([fd], [], [], 0.1)
+            ready = poller.poll(100)
         except (ValueError, OSError):
             return  # fd already closed
         if ready:

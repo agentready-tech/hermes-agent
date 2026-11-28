@@ -1320,9 +1320,9 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
         blocks until EOF, landing "live" output in one burst at exit. Orphaned-pipe
         guard: a backgrounded grandchild (``node server.js &``) inherits our pipe's write
         end so EOF never arrives while it lives, which would park this thread and never
-        fire ``notify_on_complete``; on POSIX we ``select()`` and stop draining shortly
+        fire ``notify_on_complete``; on POSIX we ``poll()`` and stop draining shortly
         after the direct child exits (mirrors ``environments/base.py::_wait_for_process``).
-        Windows pipes lack select(), so the lazy ``_reconcile_local_exit`` is the net (#68915, #8340).
+        Windows pipes use the lazy ``_reconcile_local_exit`` (#68915, #8340).
         """
         # ``bash -lic`` without a tty writes its startup warnings one write() per line, so the
         # reader can wake between them; strip leading noise from every chunk until the
@@ -1351,26 +1351,25 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
                     return stdout.read(4096) or None
                 raw = raw_read(4096)
                 return decoder.decode(raw) if raw else None
-            # select() needs a real OS fd; mocked streams (tests, adapters) may lack
-            # fileno() and use the blocking read instead.
-            try:
+            try:  # Mocked streams without fileno() use the blocking read.
                 fd = stdout.fileno() if raw_read is not None and not _IS_WINDOWS else None
             except Exception:
                 fd = None
-            if not (isinstance(fd, int) and fd >= 0):
-                fd = None
-            if fd is not None:
-                import select as _select
+            poller = None
+            if isinstance(fd, int) and fd >= 0:
+                from select import POLLIN, poll
+                poller = poll()
+                poller.register(fd, POLLIN)
                 session._reader_selectable = True
             idle_after_exit = 0
             drained_after_request = 0
             while True:
-                if fd is not None:
+                if poller is not None:
                     try:
                         # Once a finish is requested, read only what is already buffered: the exited
                         # child's tail, never an orphaned grandchild's future writes.
-                        wait_s = 0 if session._reader_finish_requested.is_set() else 0.2
-                        ready, _, _ = _select.select([fd], [], [], wait_s)
+                        wait_ms = 0 if session._reader_finish_requested.is_set() else 200
+                        ready = poller.poll(wait_ms)
                     except (ValueError, OSError):
                         break  # fd already closed
                     if not ready:
@@ -1958,7 +1957,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             # finish avoids a competing TextIOWrapper read here racing the
             # reader, publishing an empty owner-stamped result, then closing
             # the pipe before the buffered tail is ingested. It wakes within
-            # the reader's bounded select interval and drains what is buffered.
+            # the reader's bounded poll interval and drains what is buffered.
             session._reader_finish_requested.set()
             # Flipping ``exited`` before that drain lands would hand poll()/wait() a truncated
             # snapshot (and wait() marks it consumed), so give the reader a moment to publish.
